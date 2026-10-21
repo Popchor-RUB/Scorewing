@@ -172,6 +172,167 @@ fn pickups_silence_changing_divisions_tuplets_and_graces() {
 }
 
 #[test]
+fn missing_second_voice_inherits_first_voice_even_with_other_voices() {
+    let first = n("G").xml() + &backup(1) + &n("F").voice("2").xml();
+    let shared = n("A").xml() + &backup(1) + &n("C").voice("3").xml();
+    let explicit_rest = n("B").xml() + &backup(1) + &n("C").voice("2").rest().xml();
+    let original = score(&[("Alt", vec![first, shared, explicit_rest, n("D").xml()])]);
+    for mode in ["chords", "voices"] {
+        let result = parse_score(split_score(&original, mode, None).unwrap()).unwrap();
+        assert_eq!(result.parts[0].source, original.parts[0].source);
+        for (measure, expected) in ["F", "A", "rest", "D"].iter().enumerate() {
+            assert_eq!(pitches(&result.parts[2], measure), [[*expected]]);
+        }
+    }
+}
+
+#[test]
+fn shared_voice_transition_repairs_ties_and_inserts_a_slur_for_changed_pitch() {
+    let start = "<tie type=\"start\"/><notations><tied type=\"start\"/></notations>";
+    let stop = "<tie type=\"stop\"/><notations><tied type=\"stop\"/></notations>";
+    for lower_pitch in ["F", "G"] {
+        let first = n("G").extra(start).xml() + &backup(1) + &n(lower_pitch).voice("2").xml();
+        let original = score(&[("Alt", vec![first, n("G").extra(stop).xml()])]);
+        for mode in ["chords", "voices"] {
+            let result = parse_score(split_score(&original, mode, None).unwrap()).unwrap();
+            assert_eq!(result.parts[0].source, original.parts[0].source);
+            let upper = &result.parts[1];
+            assert_eq!(
+                upper.measures[0].events[0].notes[0]
+                    .get_child("tie")
+                    .unwrap()
+                    .attributes["type"],
+                "start"
+            );
+            assert_eq!(
+                upper.measures[1].events[0].notes[0]
+                    .get_child("tie")
+                    .unwrap()
+                    .attributes["type"],
+                "stop"
+            );
+            let lower = &result.parts[2];
+            assert_eq!(pitches(lower, 0), [[lower_pitch]]);
+            assert_eq!(pitches(lower, 1), [["G"]]);
+            let left = &lower.measures[0].events[0].notes[0];
+            let right = &lower.measures[1].events[0].notes[0];
+            let tag = if lower_pitch == "G" { "tied" } else { "slur" };
+            let left_mark = left.get_child("notations").unwrap().get_child(tag).unwrap();
+            let right_mark = right
+                .get_child("notations")
+                .unwrap()
+                .get_child(tag)
+                .unwrap();
+            assert_eq!(left_mark.attributes["type"], "start");
+            assert_eq!(right_mark.attributes["type"], "stop");
+            if tag == "tied" {
+                assert_eq!(left.get_child("tie").unwrap().attributes["type"], "start");
+                assert_eq!(right.get_child("tie").unwrap().attributes["type"], "stop");
+            }
+            if tag == "slur" {
+                assert_eq!(
+                    left_mark.attributes["number"],
+                    right_mark.attributes["number"]
+                );
+                assert!(left.get_child("tie").is_none());
+                assert!(right.get_child("tie").is_none());
+                assert!(right
+                    .get_child("notations")
+                    .unwrap()
+                    .get_child("tied")
+                    .is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_ties_connect_to_returning_voices_without_slur_number_collisions() {
+    let start = "<tie type=\"start\"/><notations><tied type=\"start\"/><slur type=\"start\" number=\"1\"/></notations>";
+    let stop = "<tie type=\"stop\"/><notations><tied type=\"stop\"/></notations>";
+    let close = "<notations><slur type=\"stop\" number=\"1\"/></notations>";
+    for same_measure in [false, true] {
+        let shared = n("G").extra(start).xml();
+        let divisi = n("G").extra(stop).xml() + &backup(1) + &n("F").voice("2").xml();
+        let measures = if same_measure {
+            vec![shared + &divisi, n("A").extra(close).xml()]
+        } else {
+            vec![shared, divisi, n("A").extra(close).xml()]
+        };
+        let original = score(&[("Alt", measures)]);
+        for mode in ["chords", "voices"] {
+            // The unrelated source slur changes lane assignment on its middle note only.
+            let result = parse_score(split_score(&original, mode, None).unwrap()).unwrap();
+            let lower = &result.parts[2];
+            let left = &lower.measures[0].events[0].notes[0];
+            let right = if same_measure {
+                &lower.measures[0].events[1].notes[0]
+            } else {
+                &lower.measures[1].events[0].notes[0]
+            };
+            let generated = elements(left.get_child("notations").unwrap())
+                .find(|e| e.name == "slur" && e.attributes["number"] != "1")
+                .unwrap();
+            let stop = right
+                .get_child("notations")
+                .unwrap()
+                .get_child("slur")
+                .unwrap();
+            assert_eq!(generated.attributes["type"], "start");
+            assert_eq!(stop.attributes["type"], "stop");
+            assert_eq!(generated.attributes["number"], stop.attributes["number"]);
+            assert!(left.get_child("tie").is_none());
+            assert!(right.get_child("tie").is_none());
+        }
+    }
+}
+
+#[test]
+fn shared_voice_rest_and_untied_transitions_do_not_gain_connections() {
+    let stop = "<tie type=\"stop\"/><notations><tied type=\"stop\"/></notations>";
+    for rest in [false, true] {
+        let lower = if rest { n("F").rest() } else { n("F") }.voice("2").xml();
+        let first = n("G").xml() + &backup(1) + &lower;
+        let shared = if rest { n("G").extra(stop) } else { n("G") }.xml();
+        let original = score(&[("Alt", vec![first, shared])]);
+        for mode in ["chords", "voices"] {
+            let result = parse_score(split_score(&original, mode, None).unwrap()).unwrap();
+            assert!(!descendants(&result.parts[2].source)
+                .iter()
+                .any(|e| ["tie", "tied", "slur"].contains(&e.name.as_str())));
+        }
+    }
+}
+
+#[test]
+fn shared_chord_ties_connect_matching_pitches_in_voice_mode() {
+    let start = "<tie type=\"start\"/><notations><tied type=\"start\"/></notations>";
+    let stop = "<tie type=\"stop\"/><notations><tied type=\"stop\"/></notations>";
+    let first = n("C").extra(start).xml()
+        + &n("E").chord().extra(start).xml()
+        + &backup(1)
+        + &n("C").voice("2").xml()
+        + &n("E").voice("2").chord().xml();
+    let second = n("C").extra(stop).xml() + &n("E").chord().extra(stop).xml();
+    let result =
+        parse_score(split_score(&score(&[("Alt", vec![first, second])]), "voices", None).unwrap())
+            .unwrap();
+    for (measure, kind) in [(0, "start"), (1, "stop")] {
+        for note in &result.parts[2].measures[measure].events[0].notes {
+            assert_eq!(note.get_child("tie").unwrap().attributes["type"], kind);
+            assert_eq!(
+                note.get_child("notations")
+                    .unwrap()
+                    .get_child("tied")
+                    .unwrap()
+                    .attributes["type"],
+                kind
+            );
+        }
+    }
+}
+
+#[test]
 fn relationships_preserved_or_ambiguity_rejected() {
     let start = "<tie type=\"start\"/><notations><tied type=\"start\"/></notations>";
     let stop = "<tie type=\"stop\"/><notations><tied type=\"stop\"/></notations>";

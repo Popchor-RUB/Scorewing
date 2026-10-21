@@ -32,7 +32,7 @@ mxml merge input.mxl -o merged.mxl --pair 'Soprano+Alto' --pair '3+4'
 
 Selectors are one-based positions or exact part names. Use positions when names repeat. Merge groups cannot overlap; the order inside each group determines voice order. Unselected parts remain unchanged. Omitting `--part` splits every eligible part, preserving the previous CLI default.
 
-Split scans the entire score, retains original staves, and adds numbered derived staves only when needed. Chord mode separates tones; voices mode keeps chords within explicit voices. Ambiguous ties/slurs and incompatible merge rhythms cause an error rather than guessed musical content.
+Split scans the entire score, retains original staves, and adds numbered derived staves only when needed. Chord mode separates tones; voices mode keeps chords within explicit voices. A voice absent from a measure follows voice 1; explicit rests remain rests. At shared-voice transitions, split repairs tie endpoints and uses a slur when connected single notes change pitch. Other ambiguous ties/slurs and incompatible merge rhythms cause an error rather than guessed musical content.
 
 ## Files and safety
 

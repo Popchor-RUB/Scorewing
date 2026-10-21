@@ -187,7 +187,12 @@ fn lane_measure(
     mode: &str,
     assignments: &mut Assignments,
     lane: usize,
-) -> Result<Element> {
+) -> Result<(Vec<Event>, Vec<TimedElement>)> {
+    let voice = if measure.events.iter().any(|event| event.voice == voice) {
+        voice
+    } else {
+        "1"
+    };
     let mut result = Vec::new();
     for (start, end, index) in segments(measure, voice) {
         let source = index.map(|index| &measure.events[index]);
@@ -200,11 +205,12 @@ fn lane_measure(
             continue;
         }
         let source = source.unwrap();
+        // Retain provenance until connections at shared-voice transitions are repaired.
         let selected = Event {
             start: source.start.clone(),
             duration: source.duration.clone(),
             notes: selected_notes.iter().map(|n| (*n).clone()).collect(),
-            voice: "1".into(),
+            voice: source.voice.clone(),
         };
         let sliced = start != source.start || end != source.end();
         let mut event = if sliced {
@@ -276,7 +282,7 @@ fn lane_measure(
             start: source.start.clone(),
             duration: Fraction::zero(),
             notes: copied,
-            voice: "1".into(),
+            voice: source.voice.clone(),
         });
         for original in selected {
             assign(assignments, original, lane);
@@ -312,10 +318,152 @@ fn lane_measure(
             extras.push(extra.clone());
         }
     }
-    render_measure(measure, &result, Some(&extras), None, None)
+    Ok((result, extras))
 }
 
-fn check_relationships(part: &Part, assignments: &Assignments) -> Result<()> {
+fn has_tie(note: &Element, kind: &str) -> bool {
+    elements(note)
+        .filter(|e| e.name == "tie")
+        .chain(
+            note.get_child("notations")
+                .into_iter()
+                .flat_map(elements)
+                .filter(|e| e.name == "tied"),
+        )
+        .any(|e| e.attributes.get("type").is_some_and(|value| value == kind))
+}
+
+fn set_tie(note: &mut Element, kind: &str, enabled: bool) {
+    for tag in ["tie", "tied"] {
+        if enabled && tag == "tied" && note.get_child("notations").is_none() {
+            insert_note_child(note, Element::new("notations"));
+        }
+        let parent = if tag == "tie" {
+            Some(&mut *note)
+        } else {
+            note.get_mut_child("notations")
+        };
+        let Some(parent) = parent else { continue };
+        let matches = |e: &Element| {
+            e.name == tag && e.attributes.get("type").is_some_and(|value| value == kind)
+        };
+        if !enabled {
+            parent
+                .children
+                .retain(|node| node.as_element().is_none_or(|e| !matches(e)));
+        } else if !elements(parent).any(matches) {
+            let mut mark = Element::new(tag);
+            mark.attributes.insert("type".into(), kind.into());
+            if tag == "tie" {
+                insert_note_child(parent, mark);
+            } else {
+                append(parent, mark);
+            }
+        }
+    }
+}
+
+fn connect_shared_voices(
+    part: &Part,
+    measures: &mut [(Vec<Event>, Vec<TimedElement>)],
+) -> Result<()> {
+    let used_slurs: HashSet<_> = measures
+        .iter()
+        .flat_map(|(events, _)| events)
+        .flat_map(|event| &event.notes)
+        .flat_map(descendants)
+        .filter(|e| e.name == "slur")
+        .map(|e| {
+            e.attributes
+                .get("number")
+                .cloned()
+                .unwrap_or_else(|| "1".into())
+        })
+        .collect();
+    let slur_number = (1..=16)
+        .map(|n| n.to_string())
+        .find(|n| !used_slurs.contains(n));
+    let mut previous: Option<(usize, &mut Event)> = None;
+    for (index, event) in measures
+        .iter_mut()
+        .enumerate()
+        .flat_map(|(index, (events, _))| events.iter_mut().map(move |event| (index, event)))
+        .filter(|(_, event)| !event.grace())
+    {
+        if let Some((previous_index, left)) = previous {
+            let adjacent = if previous_index == index {
+                left.end() == event.start
+            } else {
+                previous_index + 1 == index
+                    && left.end() == part.measures[previous_index].length
+                    && event.start.is_zero()
+            };
+            if adjacent && left.voice != event.voice {
+                let outgoing = left.notes.iter().any(|note| has_tie(note, "start"));
+                let incoming = event.notes.iter().any(|note| has_tie(note, "stop"));
+                if outgoing || incoming {
+                    let left_pitches = left.notes.iter().map(pitch).collect::<Result<Vec<_>>>()?;
+                    let right_pitches =
+                        event.notes.iter().map(pitch).collect::<Result<Vec<_>>>()?;
+                    if left.notes.len() == 1
+                        && event.notes.len() == 1
+                        && left_pitches != right_pitches
+                    {
+                        set_tie(&mut left.notes[0], "start", false);
+                        set_tie(&mut event.notes[0], "stop", false);
+                        if left_pitches[0].is_some() && right_pitches[0].is_some() {
+                            let number = slur_number.as_ref().ok_or_else(|| {
+                                ScoreError::new("No free slur number at a shared voice transition")
+                            })?;
+                            for (note, kind) in
+                                [(&mut left.notes[0], "start"), (&mut event.notes[0], "stop")]
+                            {
+                                if note.get_child("notations").is_none() {
+                                    insert_note_child(note, Element::new("notations"));
+                                }
+                                let mut slur = Element::new("slur");
+                                slur.attributes.insert("type".into(), kind.into());
+                                slur.attributes.insert("number".into(), number.clone());
+                                append(note.get_mut_child("notations").unwrap(), slur);
+                            }
+                        }
+                    } else {
+                        for (a, note) in left.notes.iter_mut().enumerate() {
+                            for (b, next) in event.notes.iter_mut().enumerate() {
+                                if left_pitches[a].is_some()
+                                    && left_pitches[a] == right_pitches[b]
+                                    && (has_tie(note, "start") || has_tie(next, "stop"))
+                                {
+                                    set_tie(note, "start", true);
+                                    set_tie(next, "stop", true);
+                                }
+                            }
+                        }
+                        let unmatched = left.notes.iter().enumerate().any(|(i, n)| {
+                            has_tie(n, "start") && !right_pitches.contains(&left_pitches[i])
+                        }) || event.notes.iter().enumerate().any(|(i, n)| {
+                            has_tie(n, "stop") && !left_pitches.contains(&right_pitches[i])
+                        });
+                        if unmatched {
+                            return Err(ScoreError::new(format!(
+                                "{}, position {}: ambiguous tie assignment when splitting",
+                                part.measures[index].context, event.start
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        previous = Some((index, event));
+    }
+    Ok(())
+}
+
+fn check_relationships(
+    part: &Part,
+    assignments: &Assignments,
+    slots: &[(&str, usize)],
+) -> Result<()> {
     let mut ties = HashMap::new();
     let mut slurs = HashMap::new();
     for measure in &part.measures {
@@ -352,7 +500,12 @@ fn check_relationships(part: &Part, assignments: &Assignments) -> Result<()> {
                     );
                 }
                 if kinds.contains("stop")
-                    && ties.remove(&key).is_some_and(|previous| previous != lanes)
+                    && ties.remove(&key).is_some_and(|previous: BTreeSet<usize>| {
+                        // Shared lanes may join or leave; native chord lanes must stay assigned.
+                        previous
+                            .symmetric_difference(&lanes)
+                            .any(|lane| slots[*lane - 1].0 == event.voice)
+                    })
                 {
                     return Err(ScoreError::new(format!(
                         "{}, position {}: ambiguous tie assignment when splitting",
@@ -546,16 +699,25 @@ pub fn split_score(score: &Score, mode: &str, selected: Option<&[String]>) -> Re
             }
             let mut derived = Element::new("part");
             derived.attributes = part.source.attributes.clone();
-            for measure in &part.measures {
+            let mut measures = part
+                .measures
+                .iter()
+                .map(|measure| lane_measure(measure, voice, *tone, mode, &mut assignments, lane))
+                .collect::<Result<Vec<_>>>()?;
+            connect_shared_voices(part, &mut measures)?;
+            for (measure, (mut events, extras)) in part.measures.iter().zip(measures) {
+                for event in &mut events {
+                    event.voice = "1".into();
+                }
                 append(
                     &mut derived,
-                    lane_measure(measure, voice, *tone, mode, &mut assignments, lane)?,
+                    render_measure(measure, &events, Some(&extras), None, None)?,
                 );
             }
             copy_ids(&mut definition, &mut derived, &new_id, &mut used);
             copies.push((definition, derived));
         }
-        check_relationships(part, &assignments)?;
+        check_relationships(part, &assignments, &slots)?;
         replacements.insert(part.id().to_owned(), copies);
     }
     Ok(build_score(score, &replacements))

@@ -1,0 +1,1 @@
+- Before starting initialize a git repository. After after making changes ask the user to commit. Propose a commit message.

@@ -31,12 +31,17 @@ case "${1:-shell}" in
     user_args=(--userns=keep-id --user "$(id -u):$(id -g)")
     # Old nested rootless runtimes cannot chown the host cgroup under keep-id.
     if [[ "${MXML_ROOTLESS_UID0:-0}" == 1 ]]; then user_args=(--user 0:0); fi
+    cache_args=(-v mxml-cargo-registry:/opt/cargo/registry:U
+      -v mxml-cargo-git:/opt/cargo/git:U -v mxml-target:/workspace/target:U)
+    if [[ -n "${MXML_CACHE_DIR:-}" ]]; then
+      mkdir -p "$MXML_CACHE_DIR"/{registry,git,target}
+      cache_args=(-v "$MXML_CACHE_DIR/registry:/opt/cargo/registry:U"
+        -v "$MXML_CACHE_DIR/git:/opt/cargo/git:U" -v "$MXML_CACHE_DIR/target:/workspace/target:U")
+    fi
     exec podman "${podman_args[@]}" run --rm --cgroups=disabled --cgroupns=host "${user_args[@]}" -e HOME=/tmp/mxml-home \
       "${runtime_args[@]}" \
       --mount "type=bind,src=$repo_dir,dst=/workspace" \
-      -v mxml-cargo-registry:/opt/cargo/registry:U \
-      -v mxml-cargo-git:/opt/cargo/git:U \
-      -v mxml-target:/workspace/target:U \
+      "${cache_args[@]}" \
       -w /workspace "$image" "$@"
     ;;
   *) echo 'Usage: tools/devcontainer.sh {build|shell|run COMMAND [ARG...]}' >&2; exit 2 ;;

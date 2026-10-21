@@ -5,10 +5,20 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    env:
+      MXML_CACHE_DIR: ${{ runner.temp }}/mxml-cache
     steps:
       - uses: actions/checkout@v4
       - name: Build development container
         run: tools/devcontainer.sh build
+      - name: Restore Rust cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.MXML_CACHE_DIR }}
+          key: linux-cargo-v1-${{ runner.arch }}-${{ hashFiles('.devcontainer/Containerfile', 'tools/devcontainer.sh', 'tools/build-libxml2.sh', 'rust-toolchain.toml', '.cargo/**') }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}-${{ github.sha }}
+          restore-keys: |
+            linux-cargo-v1-${{ runner.arch }}-${{ hashFiles('.devcontainer/Containerfile', 'tools/devcontainer.sh', 'tools/build-libxml2.sh', 'rust-toolchain.toml', '.cargo/**') }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}-
+            linux-cargo-v1-${{ runner.arch }}-${{ hashFiles('.devcontainer/Containerfile', 'tools/devcontainer.sh', 'tools/build-libxml2.sh', 'rust-toolchain.toml', '.cargo/**') }}-
       - name: Test and build in Podman
         run: tools/devcontainer.sh run bash tools/check.sh
       - name: Copy artifacts from build volume
@@ -57,6 +67,9 @@ jobs:
           bash tools/build-libxml2.sh "$RUNNER_TEMP/libxml2"
           echo "PKG_CONFIG_PATH=$RUNNER_TEMP/libxml2/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.runner }}-${{ hashFiles('.github/workflows/build.yml', 'tools/build-libxml2.sh') }}
       - name: Frontend dependencies and checks
         working-directory: apps/desktop
         run: |

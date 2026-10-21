@@ -1,0 +1,5 @@
+[env]
+LIBXML2_STATIC = "1"
+
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

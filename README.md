@@ -40,4 +40,4 @@ Source replacement is refused, including aliases and hard links. GUI exports pro
 
 Generated scores must pass structural, identifier/reference, and bundled official MusicXML 4.0 schema checks before atomic publication. Failed operations leave existing files intact. XML entities, unsafe archive paths, symbolic archive members, and inputs above 64 MiB are rejected; no external DTD or network lookup is required.
 
-Linux packages require Ubuntu 24.04-compatible GTK/WebKitGTK and libxml2. CI also defines unsigned Windows and macOS builds. See [validation](docs/VALIDATION.md) for checks and platform limits.
+The CLI and desktop app link libxml2 statically; users do not need Homebrew or a separate libxml2 installation. Platform runtimes remain dynamic: macOS system frameworks, Windows system DLLs/WebView2, and Ubuntu 24.04-compatible GTK/WebKitGTK for Linux desktop packages. CI also defines unsigned Windows and macOS builds. See [validation](docs/VALIDATION.md) for checks and platform limits.

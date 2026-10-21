@@ -27,6 +27,7 @@
   },
   "bundle": {
     "active": true,
+    "resources": { "../../../docs/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt" },
     "targets": "all",
     "category": "Music",
     "shortDescription": "Merge and split MusicXML instruments",
@@ -41,12 +42,11 @@
     "linux": {
       "deb": {
         "depends": [
-          "libxml2",
           "libwebkit2gtk-4.1-0",
           "libgtk-3-0 | libgtk-3-0t64"
         ]
       },
-      "rpm": { "depends": ["libxml2", "webkit2gtk4.1", "gtk3"] }
+      "rpm": { "depends": ["webkit2gtk4.1", "gtk3"] }
     }
   }
 }

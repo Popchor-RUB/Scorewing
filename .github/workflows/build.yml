@@ -44,17 +44,19 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          vcpkg install libxml2:x64-windows-static-md
+          vcpkg install "libxml2[core]:x64-windows-static"
           "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
-          "VCPKGRS_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
+          "VCPKGRS_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
           "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
       - name: macOS XML dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install libxml2 pkg-config llvm
-          echo "PKG_CONFIG_PATH=$(brew --prefix libxml2)/lib/pkgconfig" >> "$GITHUB_ENV"
+          brew install cmake pkg-config llvm
+          if [[ "$(uname -m)" == arm64 ]]; then export MACOSX_DEPLOYMENT_TARGET=11.0; else export MACOSX_DEPLOYMENT_TARGET=10.13; fi
+          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
+          bash tools/build-libxml2.sh "$RUNNER_TEMP/libxml2"
+          echo "PKG_CONFIG_PATH=$RUNNER_TEMP/libxml2/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
-          echo "LIBXML2_STATIC=1" >> "$GITHUB_ENV"
       - name: Frontend dependencies and checks
         working-directory: apps/desktop
         run: |
@@ -63,6 +65,7 @@ jobs:
           npm run build
       - name: Rust checks
         run: |
+          node --test tools/check-linkage.test.mjs
           cargo fmt --all -- --check
           cargo test --workspace --locked
           cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -72,11 +75,15 @@ jobs:
         run: npm run tauri -- build
       - name: Smoke test CLI
         shell: bash
-        run: target/release/mxml --version
+        run: |
+          target/release/mxml --version
+          node tools/check-linkage.mjs target/release/mxml${{ runner.os == 'Windows' && '.exe' || '' }}
+          node tools/check-linkage.mjs --desktop target/release/mxml-desktop${{ runner.os == 'Windows' && '.exe' || '' }}
       - name: Collect artifacts and checksums
         shell: bash
         run: |
           mkdir -p dist
+          cp docs/THIRD_PARTY_NOTICES.txt dist/
           cp target/release/mxml.exe dist/ 2>/dev/null || cp target/release/mxml dist/
           find target/release/bundle -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} dist/ \;
           node tools/checksum.mjs dist/*

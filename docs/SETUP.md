@@ -55,4 +55,14 @@ The runner forwards configured proxy variables. If `CODEX_PROXY_CERT` names a CA
 
 ## Native platform builds
 
-Linux compilation and packaging run in Podman. Windows and macOS need native CI runners for Tauri/WebView platform integration; the workflow pins Rust and Node there too. Windows uses vcpkg libxml2; macOS uses Homebrew libxml2. These CI setup steps do not change the development host. Signing, notarization, and automatic updates are outside this release.
+Linux compilation and packaging run in Podman. Windows and macOS need native CI runners for Tauri/WebView platform integration; the workflow pins Rust and Node there too. Linux and macOS build checksum-pinned libxml2 2.15.4 from source as a private static library, without optional iconv/ICU dependencies. The container supplies it under `/opt/libxml2`. Homebrew supplies macOS build tools only. Windows uses `libxml2[core]:x64-windows-static` from vcpkg; Cargo also selects the static MSVC runtime. These CI setup steps do not change the development host.
+
+For a native macOS build, install CMake, pkg-config, LLVM, and Python 3 as build tools, then prepare the static library before running Cargo or Tauri:
+
+```sh
+bash tools/build-libxml2.sh "$PWD/target/libxml2"
+export PKG_CONFIG_PATH="$PWD/target/libxml2/lib/pkgconfig"
+export LIBCLANG_PATH="$(brew --prefix llvm)/lib"
+```
+
+Cargo enables static libxml2 linking through `.cargo/config.toml`. A plain system libxml2 installation is not a replacement for the private static build. Release checks inspect both executables and reject non-platform shared libraries. OS frameworks, Windows WebView2, and Linux GTK/WebKitGTK remain platform requirements; Tauri cannot build fully static desktop executables on all operating systems. Signing, notarization, and automatic updates are outside this release.

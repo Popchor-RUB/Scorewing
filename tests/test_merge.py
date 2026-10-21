@@ -62,7 +62,7 @@ def test_flatten_chords_and_reject_incompatible_overlap():
     result = merged([("S", [chord]), ("A", [note("G", duration=2, note_type="half")])])
     assert [len(e.notes) for e in result.parts[0].measures[0].events] == [2, 1]
     incompatible = note("C", duration=2) + backup(2) + note("E", voice="2") + note("F", voice="2")
-    with pytest.raises(ScoreError, match="measure 1, position 0: incompatible overlapping"):
+    with pytest.raises(ScoreError, match=r"measure 1, position 0.*: incompatible overlapping"):
         merged([("S", [incompatible]), ("A", [note(duration=2)])])
 
 

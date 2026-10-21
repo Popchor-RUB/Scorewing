@@ -7,10 +7,16 @@ ARG NODE_VERSION=22.22.0
 RUN --mount=type=secret,id=proxy_ca \
     if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca CURL_CA_BUNDLE=/run/secrets/proxy_ca; fi; \
     apt-get update && apt-get install -y --no-install-recommends \
-    build-essential ca-certificates curl git pkg-config libxml2-dev libclang-dev \
+    build-essential ca-certificates curl git cmake pkg-config libclang-dev \
     libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
     patchelf file xz-utils python3 python3-lxml python3-pytest xvfb xauth dbus-x11 \
     && rm -rf /var/lib/apt/lists/*
+
+COPY tools/build-libxml2.sh /tmp/build-libxml2.sh
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export CURL_CA_BUNDLE=/run/secrets/proxy_ca; fi; \
+    bash /tmp/build-libxml2.sh /opt/libxml2 && rm /tmp/build-libxml2.sh
+ENV PKG_CONFIG_PATH=/opt/libxml2/lib/pkgconfig LIBXML2_STATIC=1
 
 ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
 ENV PATH=/opt/cargo/bin:/usr/local/bin:$PATH

@@ -1,0 +1,62 @@
+name: Test and build native executables
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            artifact: mxml-linux-x64
+            python-architecture: x64
+            extension: ""
+          - runner: windows-2022
+            artifact: mxml-windows-x64
+            python-architecture: x64
+            extension: .exe
+          - runner: macos-15-intel
+            artifact: mxml-macos-x64
+            python-architecture: x64
+            extension: ""
+          - runner: macos-15
+            artifact: mxml-macos-arm64
+            python-architecture: arm64
+            extension: ""
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: ${{ matrix.python-architecture }}
+          cache: pip
+      - name: Install build and test dependencies
+        run: python -m pip install -e . -r requirements-build.txt
+      - name: Run focused test suite
+        run: python -m pytest -q
+      - name: Build Python distribution
+        run: python -m build
+      - name: Build standalone executable
+        run: python -m PyInstaller --clean --noconfirm mxml.spec
+      - name: Smoke test standalone executable
+        run: python packaging/smoke.py dist/mxml${{ matrix.extension }}
+      - name: Name and checksum executable
+        shell: bash
+        run: |
+          mv "dist/mxml${{ matrix.extension }}" "dist/${{ matrix.artifact }}${{ matrix.extension }}"
+          python packaging/checksum.py "dist/${{ matrix.artifact }}${{ matrix.extension }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/${{ matrix.artifact }}${{ matrix.extension }}
+            dist/${{ matrix.artifact }}${{ matrix.extension }}.sha256
+          if-no-files-found: error

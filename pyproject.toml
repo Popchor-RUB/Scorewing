@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mxml-stave-editor"
+version = "0.1.0"
+description = "Split and merge choir staves in MusicXML scores"
+requires-python = ">=3.11"
+dependencies = ["lxml>=5.3,<7"]
+
+[project.scripts]
+mxml = "mxml.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mxml = ["schema/*.xsd", "schema/*.md", "schema/*.txt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,0 +1,24 @@
+{
+  "caveman": {
+    "repository": "https://github.com/JuliusBrussee/caveman",
+    "version": "v4.0.1",
+    "commit": "d262ab3882952a59312ff3537cd86d894523c5ab",
+    "installer_commit": "bad48a0e1df55e05e3f52249afa35ecc1909ee76"
+  },
+  "ponytail": {
+    "repository": "https://github.com/DietrichGebert/ponytail",
+    "version": "5.3.2",
+    "commit": "09c434ab73ca43761c5d8b0c5d341926c2fba710"
+  },
+  "codebase-memory-mcp": {
+    "repository": "https://github.com/DeusData/codebase-memory-mcp",
+    "version": "v0.12.1",
+    "commit": "a7158ac2f48ca646b4527341b76f930f2aeff87e",
+    "installed_linux_x64_sha256": "77745491f0a9c346d6da23eed4d92b5feaa31a27a883c9faa4fa9f47c8183705"
+  },
+  "musicxml-schema": {
+    "repository": "https://github.com/w3c/musicxml",
+    "version": "v4.0",
+    "commit": "799e2defb2ece0ae7bafe08dcbcac25b2c631d53"
+  }
+}

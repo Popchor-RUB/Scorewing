@@ -86,7 +86,7 @@ def read_score(path: str | Path) -> Score:
 
 @lru_cache(maxsize=1)
 def _schema() -> ET.XMLSchema:
-    schema_path = Path(__file__).with_name("schema") / "musicxml.xsd"
+    schema_path = Path(__file__).resolve().parents[3] / "crates" / "mxml-core" / "schema" / "musicxml.xsd"
     parser = ET.XMLParser(resolve_entities=False, no_network=True, load_dtd=False)
     return ET.XMLSchema(ET.parse(str(schema_path), parser))
 

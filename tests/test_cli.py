@@ -36,7 +36,7 @@ def test_cli_errors_are_stderr_and_leave_no_output(tmp_path, capsys):
 
 
 def test_module_entrypoint_and_help():
-    environment = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    environment = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "tests" / "reference"))
     for option, expected in (("--version", "mxml 0.1.0"), ("--help", "split")):
         result = subprocess.run([sys.executable, "-m", "mxml", option], env=environment, text=True, capture_output=True)
         assert result.returncode == 0

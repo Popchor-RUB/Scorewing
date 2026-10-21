@@ -1,0 +1,36 @@
+FROM docker.io/library/ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG RUST_VERSION=1.90.0
+ARG NODE_VERSION=22.22.0
+
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca CURL_CA_BUNDLE=/run/secrets/proxy_ca; fi; \
+    apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates curl git pkg-config libxml2-dev libclang-dev \
+    libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+    patchelf file xz-utils python3 python3-lxml python3-pytest xvfb xauth dbus-x11 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo
+ENV PATH=/opt/cargo/bin:/usr/local/bin:$PATH
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export SSL_CERT_FILE=/run/secrets/proxy_ca CURL_CA_BUNDLE=/run/secrets/proxy_ca; fi; \
+    curl --fail --silent --show-error https://sh.rustup.rs -o /tmp/rustup.sh && \
+    sh /tmp/rustup.sh -y --profile minimal --default-toolchain "$RUST_VERSION" --component rustfmt,clippy && \
+    rm /tmp/rustup.sh && chmod -R a+rwX /opt/cargo /opt/rustup
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export CURL_CA_BUNDLE=/run/secrets/proxy_ca; fi; \
+    case "$(uname -m)" in x86_64) node_arch=x64 ;; aarch64) node_arch=arm64 ;; *) exit 1 ;; esac && \
+    curl --fail --silent --show-error "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_arch}.tar.xz" -o /tmp/node.tar.xz && \
+    python3 -c 'import tarfile; t=tarfile.open("/tmp/node.tar.xz"); members=t.getmembers(); prefix=members[0].name.split("/")[0]+"/"; [(setattr(m,"name",m.name[len(prefix):])) for m in members if m.name.startswith(prefix)]; t.extractall("/usr/local",members=[m for m in members if m.name and not m.name.startswith("node-v")],filter="data")' && rm /tmp/node.tar.xz
+
+# Dev Containers updates ownership beneath this home when matching the host UID.
+RUN mkdir -p /home/ubuntu/.cargo/registry /home/ubuntu/.cargo/git /home/ubuntu/.cache/mxml-target && \
+    chown -R 1000:1000 /home/ubuntu/.cargo /home/ubuntu/.cache
+
+# Ubuntu already supplies a non-root UID 1000 account.
+USER ubuntu
+WORKDIR /workspace
+ENV CARGO_TARGET_DIR=/workspace/target
+CMD ["bash"]

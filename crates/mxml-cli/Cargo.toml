@@ -1,0 +1,16 @@
+[package]
+name = "mxml-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mxml"
+path = "src/main.rs"
+
+[dependencies]
+mxml-core = { path = "../mxml-core" }
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"

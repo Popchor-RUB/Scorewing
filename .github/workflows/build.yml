@@ -1,62 +1,87 @@
-name: Test and build native executables
-
-on:
-  push:
-  pull_request:
-  workflow_dispatch:
-
+name: Test and build Rust CLI and desktop
+on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
-
 jobs:
-  build:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build development container
+        run: tools/devcontainer.sh build
+      - name: Test and build in Podman
+        run: tools/devcontainer.sh run bash tools/check.sh
+      - name: Copy artifacts from build volume
+        run: tools/devcontainer.sh run bash tools/package-linux.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mxml-linux-x64
+          path: dist/*
+          if-no-files-found: error
+  native:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
-            artifact: mxml-linux-x64
-            python-architecture: x64
-            extension: ""
           - runner: windows-2022
             artifact: mxml-windows-x64
-            python-architecture: x64
-            extension: .exe
           - runner: macos-15-intel
             artifact: mxml-macos-x64
-            python-architecture: x64
-            extension: ""
           - runner: macos-15
             artifact: mxml-macos-arm64
-            python-architecture: arm64
-            extension: ""
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: dtolnay/rust-toolchain@1.90.0
         with:
-          python-version: "3.12"
-          architecture: ${{ matrix.python-architecture }}
-          cache: pip
-      - name: Install build and test dependencies
-        run: python -m pip install -e . -r requirements-build.txt
-      - name: Run focused test suite
-        run: python -m pytest -q
-      - name: Build Python distribution
-        run: python -m build
-      - name: Build standalone executable
-        run: python -m PyInstaller --clean --noconfirm mxml.spec
-      - name: Smoke test standalone executable
-        run: python packaging/smoke.py dist/mxml${{ matrix.extension }}
-      - name: Name and checksum executable
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Windows XML dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          vcpkg install libxml2:x64-windows-static-md
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          "VCPKGRS_TRIPLET=x64-windows-static-md" >> $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+      - name: macOS XML dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install libxml2 pkg-config llvm
+          echo "PKG_CONFIG_PATH=$(brew --prefix libxml2)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+          echo "LIBXML2_STATIC=1" >> "$GITHUB_ENV"
+      - name: Frontend dependencies and checks
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Rust checks
+        run: |
+          cargo fmt --all -- --check
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo build -p mxml-cli --release --locked
+      - name: Build desktop installer
+        working-directory: apps/desktop
+        run: npm run tauri -- build
+      - name: Smoke test CLI
+        shell: bash
+        run: target/release/mxml --version
+      - name: Collect artifacts and checksums
         shell: bash
         run: |
-          mv "dist/mxml${{ matrix.extension }}" "dist/${{ matrix.artifact }}${{ matrix.extension }}"
-          python packaging/checksum.py "dist/${{ matrix.artifact }}${{ matrix.extension }}"
+          mkdir -p dist
+          cp target/release/mxml.exe dist/ 2>/dev/null || cp target/release/mxml dist/
+          find target/release/bundle -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} dist/ \;
+          node tools/checksum.mjs dist/*
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            dist/${{ matrix.artifact }}${{ matrix.extension }}
-            dist/${{ matrix.artifact }}${{ matrix.extension }}.sha256
+          path: dist/*
           if-no-files-found: error

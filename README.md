@@ -1,99 +1,43 @@
-# mxml
+# MXML
 
-A cross-platform CLI for splitting and merging choir staves in MusicXML.
-Supports `.mxml`, `.musicxml`, `.xml`, and compressed `.mxl` score-partwise files.
-Each single-staff part is one stave. Multi-staff instruments and score-timewise
-documents are rejected with an explanation.
+A Rust CLI and Tauri 2 desktop app for splitting and merging choir staves in MusicXML.
 
-## Install
+Open or drop `.mxml`, `.musicxml`, `.xml`, or compressed `.mxl` scores. Select a queued file to see its instruments, then choose **Merge** or **Split** and export a new score. Files are independent; merging across files is not supported.
 
-Use a standalone executable from the native build artifacts, or install with
-Python 3.11 or newer:
+- **Merge:** create disjoint groups of at least two instruments and order their voices.
+- **Split:** select instruments and separate chord tones or explicit voices. Originals remain, with derived staves inserted immediately below them.
+- Export one operation at a time. Open an exported file to continue arranging it.
 
-```sh
-python -m pip install .
-mxml --help
-```
-
-The standalone executable includes Python, lxml, and offline MusicXML schemas.
-Build instructions and tooling activation status are in [docs/SETUP.md](docs/SETUP.md).
-
-## Split
-
-```sh
-mxml split choir.mxl -o split.mxl
-mxml split choir.musicxml -o split.musicxml --mode voices
-```
-
-Every original stave is retained. Derived staves appear immediately below it,
-named `Soprano 1`, `Soprano 2`, and so on. Entirely monophonic staves remain alone.
-
-The default `chords` mode separates explicit voices, then orders chord tones
-from highest to lowest. `voices` mode separates explicit voices while keeping
-their chords. Voice slots are stable across the entire part, ordered by numeric
-voice ID, followed by nonnumeric IDs in lexical order. No melodic crossing is
-inferred.
-
-Single notes are shared among that voice's chord-derived staves. Passages with
-only one encoded voice are shared with absent voices. Explicit rests remain
-rests; vacant slots in partially populated chords receive rests. Every derived
-stave uses voice 1 and retains complete measure timing, including pickups.
-Assignments that would break ties or slurs are rejected with a part, measure,
-and position rather than silently changing the music.
-
-## Merge
-
-```sh
-mxml merge choir.mxl -o merged.mxl --pair 1+2 --pair 3+4
-mxml merge choir.mxl -o merged.mxl --pair "Soprano+Alto"
-mxml merge choir.mxl -o merged.mxl --pair 1+2+3
-```
-
-At least one `--pair` is required. Each group accepts two or more distinct staves,
-using one-based input positions, exact part names, or a mixture. Groups cannot
-overlap. Argument order assigns voices 1, 2, 3, etc.; it does not change selectors
-in later groups. A merged stave replaces its members at their earliest original
-position, with names joined by ` / `. Unselected staves remain intact.
-
-Odd voices have up-stems; even voices have down-stems. Whole notes and other
-stemless values remain stemless. Each measure starts in shared voice 1 when all
-members match in spelled pitch, onset, duration, and tie state. Matching rests
-also collapse. At the first difference, assigned voices remain separate until
-the barline, even if the notes reunite. Sustained notes cut at a divergence are
-tied across the cut.
-
-Existing voices within a selected stave are flattened. Simultaneous notes with
-equal rhythmic spans become chords. Unequal overlapping spans cannot become
-one output voice and are rejected. Distinct lyrics receive stable separate
-lines; identical lyrics are deduplicated. Source-specific directions retain
-their voice. The merged stave uses the treble or bass clef with fewer ledger
-lines across the part, choosing treble on a tie. Encoded pitches are preserved.
-Measure boundaries, time and key signatures, and transpositions must agree.
-
-## Files and safety
-
-`-o` is required; its extension selects plain or compressed output. The input
-cannot be replaced, even with `--force`. Existing output requires `--force`.
-Output is checked against the bundled official MusicXML 4.0 schema and written
-atomically only after successful validation. Errors go to stderr with exit code
-2; success returns 0.
-
-External XML resources are disabled. Entity declarations, unsafe archive paths,
-duplicate archive members, and archives with symbolic links are rejected. XML
-inputs and decompressed XML members are limited to 64 MiB.
-
-The editor retains score metadata, part groups, lyrics, note relationships,
-tuplets, annotations, directions, and repeats in the XML. Affected notes lose
-stale drawing coordinates so engraving software can position them again.
-The output is a new engraving; page breaks and spacing may change.
+Only score-partwise documents with single-staff parts are supported. Multi-staff instruments such as piano and score-timewise documents are rejected with an explanation. There is no notation rendering or playback.
 
 ## Development
 
+Use the Podman devcontainer; no host Rust, Node, or native-library upgrade is needed:
+
 ```sh
-python -m pip install -e . -r requirements-build.txt
-python -m pytest -q
+tools/devcontainer.sh build
+tools/devcontainer.sh run cargo test --workspace --locked
+tools/devcontainer.sh run bash -c 'cd apps/desktop && npm ci && npm test && npm run build'
 ```
 
-See [docs/VALIDATION.md](docs/VALIDATION.md) for verification and real-score results.
-Native CI builds unsigned Windows x64, Linux x64, macOS Intel, and macOS Apple
-Silicon executables with SHA-256 checksums. Publishing and signing are separate.
+See [setup](docs/SETUP.md) for VS Code, GUI sessions, build artifacts, and container troubleshooting.
+
+## CLI
+
+```sh
+mxml split input.mxl -o split.musicxml
+mxml split input.musicxml -o voices.mxl --mode voices --part Soprano --part 3
+mxml merge input.mxl -o merged.mxl --pair 'Soprano+Alto' --pair '3+4'
+```
+
+Selectors are one-based positions or exact part names. Use positions when names repeat. Merge groups cannot overlap; the order inside each group determines voice order. Unselected parts remain unchanged. Omitting `--part` splits every eligible part, preserving the previous CLI default.
+
+Split scans the entire score, retains original staves, and adds numbered derived staves only when needed. Chord mode separates tones; voices mode keeps chords within explicit voices. Ambiguous ties/slurs and incompatible merge rhythms cause an error rather than guessed musical content.
+
+## Files and safety
+
+Source replacement is refused, including aliases and hard links. GUI exports protect all queued sources. Existing outputs require confirmation in the GUI or `--force` in the CLI.
+
+Generated scores must pass structural, identifier/reference, and bundled official MusicXML 4.0 schema checks before atomic publication. Failed operations leave existing files intact. XML entities, unsafe archive paths, symbolic archive members, and inputs above 64 MiB are rejected; no external DTD or network lookup is required.
+
+Linux packages require Ubuntu 24.04-compatible GTK/WebKitGTK and libxml2. CI also defines unsigned Windows and macOS builds. See [validation](docs/VALIDATION.md) for checks and platform limits.

@@ -1,133 +1,58 @@
-# Development and standalone builds
+# Development with Podman
 
-Use Python 3.11 or newer. Python 3.12 is used in the native build workflow.
-
-```sh
-python -m venv .venv
-# Linux/macOS: source .venv/bin/activate
-# Windows PowerShell: .venv\Scripts\Activate.ps1
-python -m pip install -e . -r requirements-build.txt
-python -m pytest -q
-python -m build
-python -m PyInstaller --clean --noconfirm mxml.spec
-python packaging/smoke.py dist/mxml
-python packaging/checksum.py dist/mxml
-```
-
-On Windows, use `dist/mxml.exe` for the last two commands. PyInstaller builds
-for the operating system and architecture running the build. The executable
-includes the offline MusicXML schemas and does not require an installed Python.
-Build requirements pin direct verification tools; the runtime package declares
-its supported `lxml` version range.
-
-The GitHub Actions workflow runs tests, builds Python distributions, builds and
-smoke tests standalone executables, and uploads executables with SHA-256 files.
-It uses Windows x64, Linux x64, macOS Intel, and macOS Apple Silicon runners.
-Artifacts are unsigned. The workflow does not publish releases.
-
-Linux standalone smoke tests and Python wheel/source-distribution builds passed
-in this workspace. Other platform executables still require their native CI
-runs. Downloaded Unix executables may need `chmod +x mxml-linux-x64` (or the
-corresponding macOS filename) after extracting the Actions artifact.
-
-## Session runtime
-
-The workspace initially had Python 3.10 only. A local `.venv` now runs Python
-3.12.15, with lxml 6.0.2, pytest 8.4.2, build 1.3.0, and PyInstaller 6.16.0.
-Its base interpreter was bootstrapped under `/tmp/mxml-python`; recreate the
-environment with your own Python 3.11+ after temporary files are removed.
-
-## Codex tooling
-
-Exact reviewed versions and commits are recorded in `tools/tooling-lock.json`.
-These tools support development; they are not executable runtime dependencies.
-Existing unrelated Codex configuration and graph indexes were preserved.
-
-| Tool | Installed state | Activation state |
-| --- | --- | --- |
-| Caveman | Official Codex installer installed v4.0.1 skills at commit `d262ab3882952a59312ff3537cd86d894523c5ab`. The existing Caveman CLI is 1.3.4 (binary release bin-v1.1.7). | Existing native Codex hooks were retained. Caveman instructions are active in this session. New skills become available on the next turn; the official installer skipped duplicate hooks. |
-| Ponytail | Existing enabled Codex plugin is 5.3.2, checkout `09c434ab73ca43761c5d8b0c5d341926c2fba710`. It already matched the reviewed pin, so no replacement was needed. | Existing lifecycle hooks have trusted hashes in Codex configuration. Ponytail instructions are active in this session. |
-| codebase-memory-mcp | Existing 0.12.1 binary retained; native `install --clients=codex -y` refreshed its Codex MCP configuration, skill, agent profiles, and hooks. | MCP tools and graph context are available in this session. The installer requires a session restart to reload refreshed integration; review changed hooks in `/hooks` if requested. |
-
-Installation and hook activation are separate. Codex hook trust belongs to the
-user. The installers do not bypass `/hooks` review. A new session is needed to
-prove newly installed lifecycle hooks run; existing injected instructions and
-MCP calls prove only current-session availability.
-
-Reproduce the official Caveman installation from the pinned installer checkout:
+The host needs Podman and Git. Rust, Node, Python test tools, libxml2, GTK, WebKitGTK, and packaging tools live in the Ubuntu 24.04 development image. Rust 1.90.0 and Node 22.22.0 are pinned; dependency lockfiles pin application dependencies.
 
 ```sh
-git clone https://github.com/JuliusBrussee/caveman.git
-git -C caveman checkout bad48a0e1df55e05e3f52249afa35ecc1909ee76
-node caveman/installer/install.js --only codex --no-mcp-shrink
+tools/devcontainer.sh build
+tools/devcontainer.sh shell
 ```
 
-The installer selects Caveman release v4.0.1. `--no-mcp-shrink` preserves the
-existing MCP/output configuration. The upstream Codex installation documentation
-is [Caveman INSTALL.md](https://github.com/JuliusBrussee/caveman/blob/bad48a0e1df55e05e3f52249afa35ecc1909ee76/INSTALL.md).
+The runner uses Podman's `keep-id` mapping and your host UID/GID as a non-root container user. It binds the repository at `/workspace` and uses named volumes for Cargo downloads and `target/`. Generated source files remain owned by your host account. Build artifacts stay in the `mxml-target` volume; `tools/package-linux.sh` copies distributables to repository `dist/`.
 
-For a fresh Ponytail setup, its documented marketplace supports a pinned ref:
+VS Code Dev Containers can open `.devcontainer/devcontainer.json`. Set its `dev.containers.dockerPath` setting to `podman`. The same Containerfile powers the command-line runner and Linux CI.
+
+## Checks and packages
 
 ```sh
-codex plugin marketplace add DietrichGebert/ponytail --ref 09c434ab73ca43761c5d8b0c5d341926c2fba710
-codex plugin add ponytail@ponytail
+tools/devcontainer.sh run cargo test --workspace --locked
+tools/devcontainer.sh run bash -c 'cd apps/desktop && npm ci && npm test && npm run build'
+tools/devcontainer.sh run bash tools/check.sh
+tools/devcontainer.sh run bash tools/package-linux.sh
 ```
 
-Do not replace an existing marketplace merely to rerun this command. The current
-checkout already has the pinned content. See
-[Ponytail INSTALL.md](https://github.com/DietrichGebert/ponytail/blob/09c434ab73ca43761c5d8b0c5d341926c2fba710/INSTALL.md).
+The full check includes Rust tests/lints, Python migration regression comparisons, frontend checks, release CLI compilation, and desktop packaging. Python is only a migration test oracle; the shipped app does not invoke it.
 
-Install a fresh codebase-memory binary from the
-[v0.12.1 release](https://github.com/DeusData/codebase-memory-mcp/releases/tag/v0.12.1),
-verify its release checksum, then run:
+For a graphical development session, start the app from a Dev Containers terminal with desktop display forwarding configured for your workstation. Do not expose an unauthenticated X server publicly. Vite listens on port 1420, which the devcontainer forwards.
 
 ```sh
-codebase-memory-mcp install --clients=codex -y
+cd apps/desktop
+npm ci
+npm run tauri -- dev
 ```
 
-Review `/hooks` and restart Codex after installing or updating hooks. Reindex the
-project once source files exist and after material changes.
+Headless Linux startup checks use Xvfb inside the container. Xvfb provides a virtual display, not an interactive host window.
 
-## Offline MusicXML validation
+## Restricted runtime directories
 
-`src/mxml/schema/` bundles the official MusicXML 4.0 XSD and its two imports.
-Only the two import locations were changed to relative local filenames.
-Copyright and license notices remain in the schemas; `NOTICE.md` records source
-and provenance. Schema compilation was verified with XML networking disabled.
-
-## Rendered inspection
-
-MuseScore 3.6.2 rendered a representative two-measure SATB score and its split
-and merged results. The images were visually inspected: the split keeps the
-original Soprano with two numbered staves immediately beneath it, copies the
-shared first measure, and separates later chord tones. The merged score has two
-staves, shared notes, opposing stems after divergence, separate differing lyrics,
-and a bass clef for the lower pair.
-
-Local inspection artifacts are `dist/preview.musicxml`,
-`dist/preview-split.musicxml`, `dist/preview-merged.musicxml`, and their
-`preview-original-1.png`, `preview-split-1.png`, `preview-merged-1.png` renders.
-These generated files are ignored by Git. The renderer was bootstrapped under
-`/tmp` from the official MuseScore AppImage and extracted runtime libraries;
-no system packages were installed. This representative inspection does not
-replace checking a user's complete score in their preferred notation program.
-
-The session used the official `MuseScore-3.6.2.548021370-x86_64.AppImage`,
-extracted under `/tmp/squashfs-root`. Its Qt X11 plugin ran against an isolated
-Xvfb display `:94`; missing shared libraries were extracted under
-`/tmp/mxml-musescore-libs/root`. A temporary Xvfb loader shim relocated its
-keyboard compiler into that same directory. The temporary MuseScore preferences
-disabled `export/png/useTransparency` so previews have a white background.
-The successful export command was:
+If Podman cannot write its normal runtime/storage locations, select writable task-local locations. This does not require installing host dependencies:
 
 ```sh
-XDG_CONFIG_HOME=/tmp/mxml-ms-config \
-DISPLAY=:94 \
-LD_LIBRARY_PATH=/tmp/mxml-musescore-libs/root/usr/lib/x86_64-linux-gnu \
-/tmp/squashfs-root/AppRun \
-  -o /home/Codex/MXML-CLI/dist/preview-merged.png \
-  /home/Codex/MXML-CLI/dist/preview-merged.musicxml
+mkdir -p /tmp/mxml-runtime
+chmod 700 /tmp/mxml-runtime
+export XDG_RUNTIME_DIR=/tmp/mxml-runtime
+export MXML_PODMAN_RUNROOT=/tmp/mxml-runtime/run
+export MXML_PODMAN_ROOT=/tmp/mxml-container-storage
+tools/devcontainer.sh build
 ```
 
-These temporary paths describe this session, not an additional project runtime
-dependency. A regular local MuseScore installation can export the same files.
+User namespaces and `newuidmap` must be available to Podman. A sandbox that blocks them needs permission to run Podman outside that sandbox; do not use privileged containers as a workaround.
+
+Some older nested rootless runtimes fail with `cannot chown /sys/fs/cgroup/cgroup.procs` when using `keep-id`. For that specific case, set `MXML_ROOTLESS_UID0=1` when invoking the runner. Podman must still run as your unprivileged host account: container UID 0 then maps to that account, so output files retain host ownership. No privileged flag or host root access is used.
+
+## Proxies and certificates
+
+The runner forwards configured proxy variables. If `CODEX_PROXY_CERT` names a CA bundle, it mounts that bundle read-only for runtime tooling and as a build secret. Use a combined system/proxy bundle where required. Credentials and session certificates are not copied into image layers. Dev Containers users with a proxy must supply equivalent build-secret and runtime CA mounts through their local tooling.
+
+## Native platform builds
+
+Linux compilation and packaging run in Podman. Windows and macOS need native CI runners for Tauri/WebView platform integration; the workflow pins Rust and Node there too. Windows uses vcpkg libxml2; macOS uses Homebrew libxml2. These CI setup steps do not change the development host. Signing, notarization, and automatic updates are outside this release.

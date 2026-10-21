@@ -5,8 +5,6 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-24.04
-    env:
-      MXML_CACHE_DIR: ${{ runner.temp }}/mxml-cache
     steps:
       - uses: actions/checkout@v4
       - name: Build development container
@@ -14,14 +12,18 @@ jobs:
       - name: Restore Rust cache
         uses: actions/cache@v4
         with:
-          path: ${{ env.MXML_CACHE_DIR }}
+          path: ${{ runner.temp }}/mxml-cache
           key: linux-cargo-v1-${{ runner.arch }}-${{ hashFiles('.devcontainer/Containerfile', 'tools/devcontainer.sh', 'tools/build-libxml2.sh', 'rust-toolchain.toml', '.cargo/**') }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}-${{ github.sha }}
           restore-keys: |
             linux-cargo-v1-${{ runner.arch }}-${{ hashFiles('.devcontainer/Containerfile', 'tools/devcontainer.sh', 'tools/build-libxml2.sh', 'rust-toolchain.toml', '.cargo/**') }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}-
             linux-cargo-v1-${{ runner.arch }}-${{ hashFiles('.devcontainer/Containerfile', 'tools/devcontainer.sh', 'tools/build-libxml2.sh', 'rust-toolchain.toml', '.cargo/**') }}-
       - name: Test and build in Podman
+        env:
+          MXML_CACHE_DIR: ${{ runner.temp }}/mxml-cache
         run: tools/devcontainer.sh run bash tools/check.sh
       - name: Copy artifacts from build volume
+        env:
+          MXML_CACHE_DIR: ${{ runner.temp }}/mxml-cache
         run: tools/devcontainer.sh run bash tools/package-linux.sh
       - uses: actions/upload-artifact@v4
         with:

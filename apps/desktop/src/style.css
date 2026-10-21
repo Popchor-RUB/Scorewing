@@ -348,11 +348,27 @@ h3 {
   align-items: center;
   gap: 13px;
   padding: 13px 17px;
-  border-bottom: 1px solid #e9ede4;
   cursor: pointer;
 }
-.instrument:last-child {
-  border: 0;
+.instrument-entry + .instrument-entry {
+  border-top: 1px solid #e9ede4;
+}
+.split-preview {
+  padding: 0 17px 15px;
+  background: #f5f8ee;
+  font-size: 11px;
+}
+.split-preview p {
+  margin: 0 0 10px;
+  color: #4d6848;
+}
+.fallback-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
 }
 .instrument.checked {
   background: #f5f8ee;
@@ -400,7 +416,8 @@ h3 {
 .split-options label {
   font-weight: 600;
 }
-.split-options select {
+.split-options select,
+.fallback-row select {
   border: 1px solid #d5dece;
   border-radius: 5px;
   padding: 8px;

@@ -2,11 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   addGroup,
+  fallbackVoice,
   movePart,
   newArrangement,
   operation,
+  setFallbackVoice,
   type Arrangement,
   type Inspection,
+  type Part,
 } from "./model.ts";
 
 interface QueueItem {
@@ -49,6 +52,20 @@ function notify(text: string, error = false): void {
   render();
 }
 
+function splitPreview(part: Part, index: number, state: Arrangement): string {
+  if (state.kind !== "split" || !state.selected.has(part.id)) return "";
+  const lanes = part.split_plans[state.mode];
+  const voices = [...new Set(lanes.map((lane) => lane.voice))];
+  return `<section class="split-preview" aria-label="Split preview for ${escape(part.name || part.id)} ${escape(part.id)}">
+    <p>${lanes.length} additional ${lanes.length === 1 ? "staff" : "staves"} · Original staff retained</p>
+    <p>A fallback is used only when the staff’s voice is absent for the whole measure.</p>
+    ${lanes.map((lane, li) => {
+      const label = `Additional staff ${li + 1} · Voice ${lane.voice}${state.mode === "chords" ? ` · Chord tone ${lane.tone + 1}` : ""}`;
+      return `<div class="fallback-row"><label for="fallback-${index}-${li}"><span class="sr-only">${escape(part.name || part.id)} ${escape(part.id)} · </span>${escape(label)} · Fallback voice</label><select id="fallback-${index}-${li}" data-fallback-part="${escape(part.id)}" data-lane="${li}" data-focus="fallback-${index}-${li}" ${busy ? "disabled" : ""}><option value="none">None (silent)</option>${voices.filter((voice) => voice !== lane.voice).map((voice) => `<option value="voice:${escape(voice)}">Voice ${escape(voice)}</option>`).join("")}</select></div>`;
+    }).join("")}
+  </section>`;
+}
+
 function render(): void {
   const focus = (document.activeElement as HTMLElement | null)?.dataset.focus;
   const sameScore = renderedKey === selectedKey;
@@ -80,7 +97,7 @@ function render(): void {
         <div class="score-heading"><div><span class="eyebrow">ARRANGE YOUR SCORE</span><h2>${escape(score.name)}</h2><p>${score.parts.length} instruments · Source files stay intact</p></div><span class="score-badge">MusicXML</span></div>
         <fieldset class="operation"><legend class="sr-only">Choose an operation</legend><label class="operation-choice ${state.kind === "split" ? "chosen" : ""}"><input type="radio" name="operation" value="split" data-focus="operation-split" ${state.kind === "split" ? "checked" : ""} ${busy ? "disabled" : ""}><span><strong>Split instruments</strong><small>Separate chord tones or voices</small></span></label><label class="operation-choice ${state.kind === "merge" ? "chosen" : ""}"><input type="radio" name="operation" value="merge" data-focus="operation-merge" ${state.kind === "merge" ? "checked" : ""} ${busy ? "disabled" : ""}><span><strong>Merge instruments</strong><small>Bring parts into a single staff</small></span></label></fieldset>
         <div class="instrument-heading"><div><h3>${state.kind === "split" ? "Choose instruments to split" : "Choose instruments for a group"}</h3><p>${state.kind === "split" ? "Originals are kept. New staves appear immediately below each original." : "Each instrument can belong to one group. Other parts stay as they are."}</p></div><button type="button" class="text-button" data-action="select-all" data-focus="select-all" ${busy ? "disabled" : ""}>${score.parts.filter((p) => state.kind !== "merge" || !assigned.has(p.id)).every((p) => state.selected.has(p.id)) ? "Clear selection" : "Select all"}</button></div>
-        <div class="instruments" role="group" aria-label="Instruments">${score.parts.map((part, index) => `<label class="instrument ${state.selected.has(part.id) ? "checked" : ""} ${state.kind === "merge" && assigned.has(part.id) ? "assigned" : ""}"><input type="checkbox" data-part="${escape(part.id)}" data-focus="part-${index}" ${state.selected.has(part.id) ? "checked" : ""} ${busy || (state.kind === "merge" && assigned.has(part.id)) ? "disabled" : ""}><span class="part-number">${String(index + 1).padStart(2, "0")}</span><span class="part-name"><strong>${escape(part.name || part.id)}</strong><small>${escape(part.instrument_names.join(", ") || "Unnamed instrument")} · ${escape(part.id)}</small></span><span class="voice-count">${state.kind === "merge" && assigned.has(part.id) ? "Grouped" : `${part.voice_count} ${part.voice_count === 1 ? "voice" : "voices"}`}</span></label>`).join("")}</div>
+        <div class="instruments" role="group" aria-label="Instruments">${score.parts.map((part, index) => `<div class="instrument-entry"><label class="instrument ${state.selected.has(part.id) ? "checked" : ""} ${state.kind === "merge" && assigned.has(part.id) ? "assigned" : ""}"><input type="checkbox" data-part="${escape(part.id)}" data-focus="part-${index}" ${state.selected.has(part.id) ? "checked" : ""} ${busy || (state.kind === "merge" && assigned.has(part.id)) ? "disabled" : ""}><span class="part-number">${String(index + 1).padStart(2, "0")}</span><span class="part-name"><strong>${escape(part.name || part.id)}</strong><small>${escape(part.instrument_names.join(", ") || "Unnamed instrument")} · ${escape(part.id)}</small></span><span class="voice-count">${state.kind === "merge" && assigned.has(part.id) ? "Grouped" : `${part.voice_count} ${part.voice_count === 1 ? "voice" : "voices"}`}</span></label>${splitPreview(part, index, state)}</div>`).join("")}</div>
         ${state.kind === "split" ? `<div class="split-options"><label for="split-mode">Split by</label><select id="split-mode" data-focus="split-mode" ${busy ? "disabled" : ""}><option value="chords" ${state.mode === "chords" ? "selected" : ""}>Chord tones</option><option value="voices" ${state.mode === "voices" ? "selected" : ""}>Explicit voices</option></select><p>${state.mode === "chords" ? "Separate simultaneous notes by pitch into individual staves." : "Separate the voices already written into the score."}</p></div>` : `<div class="merge-options"><button type="button" data-action="add-group" data-focus="add-group" ${busy || state.selected.size < 2 ? "disabled" : ""}>＋ Create merge group</button><span>${state.selected.size} selected</span></div><div class="groups">${state.groups.map((group, gi) => `<section class="merge-group" aria-label="Merge group ${gi + 1}"><div class="group-heading"><h4>Group ${gi + 1}</h4><button type="button" class="text-button" data-action="remove-group" data-group="${gi}" data-focus="remove-group-${gi}" ${busy ? "disabled" : ""}>Remove group</button></div><ol>${group.map((id, pi) => `<li><span>${escape(score.parts.find((p) => p.id === id)?.name || id)} <small>${escape(id)}</small></span><span class="reorder"><button type="button" aria-label="Move ${escape(id)} up in group ${gi + 1}" data-action="up" data-group="${gi}" data-index="${pi}" data-focus="up-${gi}-${pi}" ${busy || pi === 0 ? "disabled" : ""}>↑</button><button type="button" aria-label="Move ${escape(id)} down in group ${gi + 1}" data-action="down" data-group="${gi}" data-index="${pi}" data-focus="down-${gi}-${pi}" ${busy || pi === group.length - 1 ? "disabled" : ""}>↓</button></span></li>`).join("")}</ol><p class="hint">Top to bottom sets voice order in the merged staff.</p></section>`).join("")}</div>`}
         <footer class="export-bar"><p>Export a new score.<br><span>${loading ? "Wait for queued scores to finish loading." : "Open the exported file to arrange it further."}</span></p><button type="button" class="primary" data-action="export" data-focus="export" ${busy || loading ? "disabled" : ""}>${busy ? "Exporting…" : "Export score"}<span aria-hidden="true"> →</span></button></footer>
       `
@@ -89,6 +106,14 @@ function render(): void {
     </main>
     <div class="status ${messageError ? "error-text" : ""}" role="${messageError ? "alert" : "status"}" aria-live="polite">${escape(message || "Your music stays on this device.")}</div>
     ${dropping ? '<div class="drop-overlay" aria-hidden="true"><div>Drop scores to open them<span>MusicXML · Compressed MusicXML</span></div></div>' : ""}`;
+  if (ready && state.kind === "split")
+    score.parts.forEach((part, index) =>
+      part.split_plans[state.mode].forEach((lane, li) => {
+        const select = root.querySelector<HTMLSelectElement>(`#fallback-${index}-${li}`);
+        const fallback = fallbackVoice(state, part.id, lane);
+        if (select) select.value = fallback === null ? "none" : `voice:${fallback}`;
+      }),
+    );
   if (focus)
     root
       .querySelector<HTMLElement>(`[data-focus="${CSS.escape(focus)}"]`)
@@ -225,6 +250,11 @@ root.addEventListener("change", (event) => {
     else item.arrangement.selected.delete(input.dataset.part);
   } else if (input.id === "split-mode") {
     item.arrangement.mode = input.value as "chords" | "voices";
+  } else if (input.dataset.fallbackPart && item.document) {
+    const part = item.document.parts.find((part) => part.id === input.dataset.fallbackPart);
+    const lane = part?.split_plans[item.arrangement.mode][Number(input.dataset.lane)];
+    if (part && lane)
+      setFallbackVoice(item.arrangement, part.id, lane, input.value === "none" ? null : input.value.slice(6));
   }
   render();
 });

@@ -1,6 +1,6 @@
 use mxml_core::{
-    check_output, merge_score, read_score_bytes, split_score, validate_score, write_score, Element,
-    EXTENSIONS, MAX_XML_BYTES,
+    check_output, merge_score, read_score_bytes, split_plan, split_score_with_fallbacks,
+    validate_score, write_score, Element, Part, SplitFallback, EXTENSIONS, MAX_XML_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -33,6 +33,32 @@ struct PartSummary {
     name: String,
     instrument_names: Vec<String>,
     voice_count: usize,
+    split_plans: SplitPlans,
+}
+
+#[derive(Serialize)]
+struct SplitPlans {
+    chords: Vec<LaneSummary>,
+    voices: Vec<LaneSummary>,
+}
+
+#[derive(Serialize)]
+struct LaneSummary {
+    voice: String,
+    tone: usize,
+    fallback_voice: Option<String>,
+}
+
+fn split_preview(part: &Part, mode: &str) -> Result<Vec<LaneSummary>, String> {
+    Ok(split_plan(part, mode)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|lane| LaneSummary {
+            voice: lane.voice,
+            tone: lane.tone,
+            fallback_voice: lane.fallback_voice,
+        })
+        .collect())
 }
 
 #[derive(Serialize)]
@@ -50,10 +76,20 @@ enum Operation {
     Split {
         part_ids: Vec<String>,
         mode: SplitMode,
+        fallbacks: Vec<FallbackSelection>,
     },
     Merge {
         groups: Vec<Vec<String>>,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FallbackSelection {
+    part_id: String,
+    voice: String,
+    tone: usize,
+    fallback_voice: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -163,14 +199,18 @@ fn inspect_registered(
                             .map(|text| text.into_owned())
                     })
                     .collect();
-                PartSummary {
+                Ok(PartSummary {
                     id: part.id().into(),
                     name: part.name(),
                     instrument_names,
                     voice_count: voices.len(),
-                }
+                    split_plans: SplitPlans {
+                        chords: split_preview(part, "chords")?,
+                        voices: split_preview(part, "voices")?,
+                    },
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, String>>()?;
         Ok((bytes, parts))
     })();
     match parsed {
@@ -241,13 +281,26 @@ fn protect_sources(state: &Documents, output: &Path) -> Result<(), String> {
 fn prepare_export(bytes: &[u8], context: &str, operation: Operation) -> Result<Element, String> {
     let score = read_score_bytes(bytes, context).map_err(|error| error.to_string())?;
     let transformed = match operation {
-        Operation::Split { part_ids, mode } => split_score(
+        Operation::Split {
+            part_ids,
+            mode,
+            fallbacks,
+        } => split_score_with_fallbacks(
             &score,
             match mode {
                 SplitMode::Chords => "chords",
                 SplitMode::Voices => "voices",
             },
             Some(&part_ids),
+            &fallbacks
+                .into_iter()
+                .map(|setting| SplitFallback {
+                    part_id: setting.part_id,
+                    voice: setting.voice,
+                    tone: setting.tone,
+                    fallback_voice: setting.fallback_voice,
+                })
+                .collect::<Vec<_>>(),
         ),
         Operation::Merge { groups } => merge_score(&score, &groups),
     }
@@ -348,6 +401,19 @@ pub fn run() {
 mod tests {
     use super::*;
 
+    const FALLBACK_SCORE: &[u8] = concat!(
+        "<score-partwise version=\"4.0\"><part-list><score-part id=\"P1\"><part-name>Choir</part-name></score-part></part-list><part id=\"P1\">",
+        "<measure number=\"1\"><attributes><divisions>1</divisions></attributes>",
+        "<note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><stem>up</stem></note><backup><duration>1</duration></backup>",
+        "<note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration><voice>2</voice><type>quarter</type><stem>down</stem></note>",
+        "<note><chord/><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><voice>2</voice><type>quarter</type><stem>down</stem></note><backup><duration>1</duration></backup>",
+        "<note><pitch><step>G</step><octave>4</octave></pitch><duration>1</duration><voice>3</voice><type>quarter</type><stem>down</stem></note></measure>",
+        "<measure number=\"2\"><note><pitch><step>C</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><stem>up</stem></note><backup><duration>1</duration></backup>",
+        "<note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration><voice>2</voice><type>quarter</type><stem>down</stem><lyric><text>alto</text></lyric></note></measure>",
+        "<measure number=\"3\"><note><pitch><step>D</step><octave>5</octave></pitch><duration>1</duration><voice>1</voice><type>quarter</type><stem>up</stem></note></measure>",
+        "</part></score-partwise>"
+    ).as_bytes();
+
     fn inspect(path: PathBuf, documents: &SharedDocuments) -> Result<Inspection, String> {
         let (id, path) = register_input(path, documents)?;
         inspect_registered(id, path, documents)
@@ -367,6 +433,7 @@ mod tests {
         let split = || Operation::Split {
             part_ids: vec!["P1".into()],
             mode: SplitMode::Chords,
+            fallbacks: vec![],
         };
         assert!(prepare_export(source, "score.xml", split()).is_ok());
         let invalid = String::from_utf8(source.to_vec())
@@ -381,10 +448,133 @@ mod tests {
             Operation::Split {
                 part_ids: vec!["missing".into()],
                 mode: SplitMode::Chords,
+                fallbacks: vec![],
             },
         )
         .unwrap_err();
         assert!(error.contains("Unknown part ID"), "{error}");
+    }
+
+    #[test]
+    fn inspection_preview_and_export_use_the_same_fallback_lanes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("choir.xml");
+        std::fs::write(&path, FALLBACK_SCORE).unwrap();
+        let inspected = inspect(path, &SharedDocuments::default()).unwrap();
+        assert!(inspected.error.is_none(), "{:?}", inspected.error);
+        let part = &inspected.parts[0];
+        assert_eq!(part.split_plans.voices.len(), 3);
+        assert_eq!(part.split_plans.chords.len(), 4);
+        assert_eq!(part.split_plans.voices[2].voice, "3");
+        assert_eq!(
+            part.split_plans.voices[2].fallback_voice.as_deref(),
+            Some("2")
+        );
+        assert_eq!(part.split_plans.chords[2].voice, "2");
+        assert_eq!(part.split_plans.chords[2].tone, 1);
+        let settings = || {
+            part.split_plans
+                .voices
+                .iter()
+                .map(|lane| FallbackSelection {
+                    part_id: part.id.clone(),
+                    voice: lane.voice.clone(),
+                    tone: lane.tone,
+                    fallback_voice: lane.fallback_voice.clone(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let export = |fallbacks| {
+            let root = prepare_export(
+                FALLBACK_SCORE,
+                "choir.xml",
+                Operation::Split {
+                    part_ids: vec![part.id.clone()],
+                    mode: SplitMode::Voices,
+                    fallbacks,
+                },
+            )
+            .unwrap();
+            mxml_core::model::parse_score(root).unwrap()
+        };
+        let score = export(settings());
+        assert_eq!(score.parts.len(), 4);
+        let third = &score.parts[3];
+        assert_eq!(
+            third.measures[0].events[0].notes[0]
+                .get_child("pitch")
+                .unwrap()
+                .get_child("step")
+                .unwrap()
+                .get_text()
+                .unwrap(),
+            "G"
+        );
+        let fallback = &third.measures[1].events[0].notes[0];
+        assert_eq!(
+            fallback
+                .get_child("pitch")
+                .unwrap()
+                .get_child("step")
+                .unwrap()
+                .get_text()
+                .unwrap(),
+            "E"
+        );
+        assert_eq!(
+            fallback
+                .get_child("lyric")
+                .unwrap()
+                .get_child("text")
+                .unwrap()
+                .get_text()
+                .unwrap(),
+            "alto"
+        );
+        assert!(third.measures[2].events[0].notes[0]
+            .get_child("rest")
+            .is_some());
+        let original = read_score_bytes(FALLBACK_SCORE, "choir.xml").unwrap();
+        assert_eq!(score.parts[0].source, original.parts[0].source);
+
+        let mut silent = settings();
+        silent[2].fallback_voice = None;
+        assert!(export(silent).parts[3].measures[1].events[0].notes[0]
+            .get_child("rest")
+            .is_some());
+        let mut override_voice = settings();
+        override_voice[2].fallback_voice = Some("1".into());
+        assert_eq!(
+            export(override_voice).parts[3].measures[1].events[0].notes[0]
+                .get_child("pitch")
+                .unwrap()
+                .get_child("step")
+                .unwrap()
+                .get_text()
+                .unwrap(),
+            "C"
+        );
+    }
+
+    #[test]
+    fn export_rejects_missing_and_forged_fallback_settings() {
+        let request = |fallbacks| Operation::Split {
+            part_ids: vec!["P1".into()],
+            mode: SplitMode::Voices,
+            fallbacks,
+        };
+        assert!(prepare_export(FALLBACK_SCORE, "choir.xml", request(vec![])).is_err());
+        assert!(prepare_export(
+            FALLBACK_SCORE,
+            "choir.xml",
+            request(vec![FallbackSelection {
+                part_id: "missing".into(),
+                voice: "3".into(),
+                tone: 0,
+                fallback_voice: Some("2".into()),
+            }])
+        )
+        .is_err());
     }
 
     #[test]

@@ -1,8 +1,19 @@
+export interface SplitLane {
+  voice: string;
+  tone: number;
+  fallback_voice: string | null;
+}
+
+export interface SplitFallback extends SplitLane {
+  part_id: string;
+}
+
 export interface Part {
   id: string;
   name: string;
   instrument_names: string[];
   voice_count: number;
+  split_plans: Record<"chords" | "voices", SplitLane[]>;
 }
 
 export interface Inspection {
@@ -14,7 +25,12 @@ export interface Inspection {
 }
 
 export type Operation =
-  | { kind: "split"; part_ids: string[]; mode: "chords" | "voices" }
+  | {
+      kind: "split";
+      part_ids: string[];
+      mode: "chords" | "voices";
+      fallbacks: SplitFallback[];
+    }
   | { kind: "merge"; groups: string[][] };
 
 export interface Arrangement {
@@ -22,10 +38,39 @@ export interface Arrangement {
   mode: "chords" | "voices";
   selected: Set<string>;
   groups: string[][];
+  fallbacks: Record<"chords" | "voices", Map<string, string | null>>;
 }
 
 export function newArrangement(): Arrangement {
-  return { kind: "split", mode: "chords", selected: new Set(), groups: [] };
+  return {
+    kind: "split",
+    mode: "chords",
+    selected: new Set(),
+    groups: [],
+    fallbacks: { chords: new Map(), voices: new Map() },
+  };
+}
+
+export function fallbackVoice(
+  arrangement: Arrangement,
+  part: string,
+  lane: SplitLane,
+): string | null {
+  const key = JSON.stringify([part, lane.voice, lane.tone]);
+  const choices = arrangement.fallbacks[arrangement.mode];
+  return choices.has(key) ? choices.get(key)! : lane.fallback_voice;
+}
+
+export function setFallbackVoice(
+  arrangement: Arrangement,
+  part: string,
+  lane: SplitLane,
+  voice: string | null,
+): void {
+  arrangement.fallbacks[arrangement.mode].set(
+    JSON.stringify([part, lane.voice, lane.tone]),
+    voice,
+  );
 }
 
 export function addGroup(
@@ -60,7 +105,16 @@ export function operation(arrangement: Arrangement, parts: Part[]): Operation {
       .map((p) => p.id);
     if (!part_ids.length)
       throw new Error("Select at least one instrument to split.");
-    return { kind: "split", part_ids, mode: arrangement.mode };
+    const fallbacks = parts
+      .filter((part) => arrangement.selected.has(part.id))
+      .flatMap((part) =>
+        part.split_plans[arrangement.mode].map((lane) => ({
+          ...lane,
+          part_id: part.id,
+          fallback_voice: fallbackVoice(arrangement, part.id, lane),
+        })),
+      );
+    return { kind: "split", part_ids, mode: arrangement.mode, fallbacks };
   }
   if (!arrangement.groups.length)
     throw new Error("Create at least one merge group.");

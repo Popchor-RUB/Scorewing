@@ -58,12 +58,18 @@ def test_entities_rejected_but_standard_external_doctype_is_allowed():
 
 
 @pytest.mark.parametrize("name", ["../score.xml", "/score.xml", "C:/score.xml", "score\\file.xml"])
-def test_unsafe_archive_paths_rejected(tmp_path, name):
+@pytest.mark.parametrize("separator", ["/", "\\"])
+def test_unsafe_archive_paths_rejected(tmp_path, monkeypatch, name, separator):
     path = tmp_path / "bad.mxl"
+    member = zipfile.ZipInfo()
+    # Bypass ZipInfo's Windows separator normalization when creating malformed input.
+    member.filename = name
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr(name, "bad")
-    with pytest.raises(ScoreError, match="Unsafe archive path"):
-        read_score(path)
+        archive.writestr(member, "bad")
+    with monkeypatch.context() as platform:
+        platform.setattr(zipfile.os, "sep", separator)
+        with pytest.raises(ScoreError, match="Unsafe archive path"):
+            read_score(path)
 
 
 def test_missing_container_and_duplicate_archive_members_rejected(tmp_path):

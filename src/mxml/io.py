@@ -65,7 +65,8 @@ def read_score(path: str | Path) -> Score:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 seen = set()
                 for info in archive.infolist():
-                    _archive_path(info.filename)
+                    # ZipInfo normalizes backslashes on Windows; validate the original name.
+                    _archive_path(info.orig_filename)
                     if info.filename in seen or stat.S_ISLNK(info.external_attr >> 16):
                         raise ScoreError(f"Duplicate or symbolic archive member: {info.filename!r}")
                     seen.add(info.filename)

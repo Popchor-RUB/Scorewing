@@ -7,6 +7,66 @@ use mxml_core::{
 use std::collections::HashSet;
 
 #[test]
+fn reports_relationship_errors_across_parts_measures_and_voices() {
+    let broken = |step: &str, voice: &str| {
+        n(step)
+            .voice(voice)
+            .extra(
+                "<tie type=\"start\"/><notations><slur type=\"start\" number=\"1\"/></notations>",
+            )
+            .xml()
+            + &n("G").octave(3).voice(voice).chord().xml()
+            + &n(step)
+                .voice(voice)
+                .extra(
+                    "<tie type=\"stop\"/><notations><slur type=\"stop\" number=\"1\"/></notations>",
+                )
+                .xml()
+            + &n("B").octave(5).voice(voice).chord().xml()
+    };
+    let original = score(&[
+        ("Soprano", vec![broken("C", "1"), broken("D", "1")]),
+        ("Alto", vec![broken("E", "2"), broken("F", "2")]),
+    ]);
+    let error = split_score(&original, "chords", None)
+        .unwrap_err()
+        .to_string();
+    for (part, voice, notes) in [("Soprano", "1", ["C4", "D4"]), ("Alto", "2", ["E4", "F4"])] {
+        for (index, note) in notes.iter().enumerate() {
+            for kind in ["ambiguous tie", "ambiguous slur"] {
+                assert!(
+                    error.lines().any(|line| line.contains(part)
+                        && line.contains(&format!("measure {}", index + 1))
+                        && line.contains(&format!("voice {voice}"))
+                        && line.contains(note)
+                        && line.contains(kind)),
+                    "{error}"
+                );
+            }
+        }
+    }
+    let selected = split_score(&original, "chords", Some(&["P1".into()]))
+        .unwrap_err()
+        .to_string();
+    assert!(!selected.contains("Alto"), "{selected}");
+    let single_measure = score(&[("Soprano", vec![broken("C", "1") + &broken("D", "1")])]);
+    let error = split_score(&single_measure, "chords", None)
+        .unwrap_err()
+        .to_string();
+    for position in [1, 3] {
+        for kind in ["ambiguous tie", "ambiguous slur"] {
+            assert!(
+                error
+                    .lines()
+                    .any(|line| line.contains(&format!("position {position},"))
+                        && line.contains(kind)),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[test]
 fn late_divisi_retains_original_order_metadata_and_sources() {
     let original = score(&[
         (
@@ -369,7 +429,7 @@ fn relationships_preserved_or_ambiguity_rejected() {
     .unwrap_err()
     .to_string();
     assert!(
-        error.contains("measure 2, position 0: ambiguous tie"),
+        error.contains("measure 2, position 0") && error.contains("ambiguous tie"),
         "{error}"
     );
     let first = n("C")

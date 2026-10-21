@@ -6,7 +6,7 @@ use crate::model::{
     strip_position, Event, Fraction, Measure, Part, Score, TimedElement,
 };
 pub(crate) use crate::xml::{append, child_text, elements, visit_mut as walk_mut};
-use crate::{Result, ScoreError};
+use crate::{check_errors, Result, ScoreError};
 use num_bigint::BigInt;
 use num_traits::Zero;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -69,20 +69,31 @@ fn pitch(note: &Element) -> Result<Option<(Fraction, BigInt, usize)>> {
     )))
 }
 
-fn notes<'a>(event: &'a Event, tone: usize, mode: &str, context: &str) -> Result<Vec<&'a Element>> {
+fn notes<'a>(
+    event: &'a Event,
+    tone: usize,
+    mode: &str,
+    measure: &Measure,
+) -> Result<Vec<&'a Element>> {
     if mode == "voices" || event.notes.len() == 1 {
         return Ok(event.notes.iter().collect());
     }
     let mut keyed = Vec::new();
+    let mut errors = Vec::new();
     for note in &event.notes {
-        let pitch = pitch(note)?.ok_or_else(|| {
-            ScoreError::new(format!(
-                "{context}, position {}: a chord cannot contain rests",
-                event.start
-            ))
-        })?;
-        keyed.push((pitch, note));
+        match pitch(note) {
+            Ok(Some(pitch)) => keyed.push((pitch, note)),
+            Ok(None) => errors.push(ScoreError::new(format!(
+                "{}: a chord cannot contain rests",
+                event.context(measure)
+            ))),
+            Err(error) => errors.push(ScoreError::new(format!(
+                "{}: {error}",
+                event.context(measure)
+            ))),
+        }
     }
+    check_errors(errors)?;
     keyed.sort_by(|a, b| b.0.cmp(&a.0));
     Ok(keyed
         .get(tone)
@@ -194,10 +205,17 @@ fn lane_measure(
         "1"
     };
     let mut result = Vec::new();
+    let mut errors = Vec::new();
     for (start, end, index) in segments(measure, voice) {
         let source = index.map(|index| &measure.events[index]);
         let selected_notes = match source {
-            Some(event) => notes(event, tone, mode, &measure.context)?,
+            Some(event) => match notes(event, tone, mode, measure) {
+                Ok(notes) => notes,
+                Err(error) => {
+                    errors.push(error);
+                    continue;
+                }
+            },
             None => Vec::new(),
         };
         if selected_notes.is_empty() {
@@ -205,6 +223,9 @@ fn lane_measure(
             continue;
         }
         let source = source.unwrap();
+        for original in &selected_notes {
+            assign(assignments, original, lane);
+        }
         // Retain provenance until connections at shared-voice transitions are repaired.
         let selected = Event {
             start: source.start.clone(),
@@ -214,12 +235,20 @@ fn lane_measure(
         };
         let sliced = start != source.start || end != source.end();
         let mut event = if sliced {
-            slice_event(&selected, start.clone(), end.clone())?
+            match slice_event(&selected, start.clone(), end.clone()) {
+                Ok(event) => event,
+                Err(error) => {
+                    errors.push(ScoreError::new(format!(
+                        "{}: {error}",
+                        source.context(measure)
+                    )));
+                    continue;
+                }
+            }
         } else {
             selected
         };
         for (original, copied) in selected_notes.iter().zip(&mut event.notes) {
-            assign(assignments, original, lane);
             if sliced {
                 let keep: HashSet<_> = elements(original)
                     .filter(|e| e.name == "tie")
@@ -268,7 +297,13 @@ fn lane_measure(
         if source.voice != voice && occupied.len() != 1 {
             continue;
         }
-        let selected = notes(source, tone, mode, &measure.context)?;
+        let selected = match notes(source, tone, mode, measure) {
+            Ok(notes) => notes,
+            Err(error) => {
+                errors.push(error);
+                continue;
+            }
+        };
         if selected.is_empty() {
             continue;
         }
@@ -318,6 +353,7 @@ fn lane_measure(
             extras.push(extra.clone());
         }
     }
+    check_errors(errors)?;
     Ok((result, extras))
 }
 
@@ -383,6 +419,7 @@ fn connect_shared_voices(
     let slur_number = (1..=16)
         .map(|n| n.to_string())
         .find(|n| !used_slurs.contains(n));
+    let mut errors = Vec::new();
     let mut previous: Option<(usize, &mut Event)> = None;
     for (index, event) in measures
         .iter_mut()
@@ -391,72 +428,85 @@ fn connect_shared_voices(
         .filter(|(_, event)| !event.grace())
     {
         if let Some((previous_index, left)) = previous {
-            let adjacent = if previous_index == index {
-                left.end() == event.start
-            } else {
-                previous_index + 1 == index
-                    && left.end() == part.measures[previous_index].length
-                    && event.start.is_zero()
-            };
-            if adjacent && left.voice != event.voice {
-                let outgoing = left.notes.iter().any(|note| has_tie(note, "start"));
-                let incoming = event.notes.iter().any(|note| has_tie(note, "stop"));
-                if outgoing || incoming {
-                    let left_pitches = left.notes.iter().map(pitch).collect::<Result<Vec<_>>>()?;
-                    let right_pitches =
-                        event.notes.iter().map(pitch).collect::<Result<Vec<_>>>()?;
-                    if left.notes.len() == 1
-                        && event.notes.len() == 1
-                        && left_pitches != right_pitches
-                    {
-                        set_tie(&mut left.notes[0], "start", false);
-                        set_tie(&mut event.notes[0], "stop", false);
-                        if left_pitches[0].is_some() && right_pitches[0].is_some() {
-                            let number = slur_number.as_ref().ok_or_else(|| {
-                                ScoreError::new("No free slur number at a shared voice transition")
-                            })?;
-                            for (note, kind) in
-                                [(&mut left.notes[0], "start"), (&mut event.notes[0], "stop")]
-                            {
-                                if note.get_child("notations").is_none() {
-                                    insert_note_child(note, Element::new("notations"));
-                                }
-                                let mut slur = Element::new("slur");
-                                slur.attributes.insert("type".into(), kind.into());
-                                slur.attributes.insert("number".into(), number.clone());
-                                append(note.get_mut_child("notations").unwrap(), slur);
-                            }
-                        }
-                    } else {
-                        for (a, note) in left.notes.iter_mut().enumerate() {
-                            for (b, next) in event.notes.iter_mut().enumerate() {
-                                if left_pitches[a].is_some()
-                                    && left_pitches[a] == right_pitches[b]
-                                    && (has_tie(note, "start") || has_tie(next, "stop"))
+            let checked = (|| -> Result<()> {
+                let adjacent = if previous_index == index {
+                    left.end() == event.start
+                } else {
+                    previous_index + 1 == index
+                        && left.end() == part.measures[previous_index].length
+                        && event.start.is_zero()
+                };
+                if adjacent && left.voice != event.voice {
+                    let outgoing = left.notes.iter().any(|note| has_tie(note, "start"));
+                    let incoming = event.notes.iter().any(|note| has_tie(note, "stop"));
+                    if outgoing || incoming {
+                        let left_pitches =
+                            left.notes.iter().map(pitch).collect::<Result<Vec<_>>>()?;
+                        let right_pitches =
+                            event.notes.iter().map(pitch).collect::<Result<Vec<_>>>()?;
+                        if left.notes.len() == 1
+                            && event.notes.len() == 1
+                            && left_pitches != right_pitches
+                        {
+                            set_tie(&mut left.notes[0], "start", false);
+                            set_tie(&mut event.notes[0], "stop", false);
+                            if left_pitches[0].is_some() && right_pitches[0].is_some() {
+                                let number = slur_number.as_ref().ok_or_else(|| {
+                                    ScoreError::new(
+                                        "No free slur number at a shared voice transition",
+                                    )
+                                })?;
+                                for (note, kind) in
+                                    [(&mut left.notes[0], "start"), (&mut event.notes[0], "stop")]
                                 {
-                                    set_tie(note, "start", true);
-                                    set_tie(next, "stop", true);
+                                    if note.get_child("notations").is_none() {
+                                        insert_note_child(note, Element::new("notations"));
+                                    }
+                                    let mut slur = Element::new("slur");
+                                    slur.attributes.insert("type".into(), kind.into());
+                                    slur.attributes.insert("number".into(), number.clone());
+                                    append(note.get_mut_child("notations").unwrap(), slur);
                                 }
                             }
-                        }
-                        let unmatched = left.notes.iter().enumerate().any(|(i, n)| {
-                            has_tie(n, "start") && !right_pitches.contains(&left_pitches[i])
-                        }) || event.notes.iter().enumerate().any(|(i, n)| {
-                            has_tie(n, "stop") && !left_pitches.contains(&right_pitches[i])
-                        });
-                        if unmatched {
-                            return Err(ScoreError::new(format!(
-                                "{}, position {}: ambiguous tie assignment when splitting",
-                                part.measures[index].context, event.start
-                            )));
+                        } else {
+                            for (a, note) in left.notes.iter_mut().enumerate() {
+                                for (b, next) in event.notes.iter_mut().enumerate() {
+                                    if left_pitches[a].is_some()
+                                        && left_pitches[a] == right_pitches[b]
+                                        && (has_tie(note, "start") || has_tie(next, "stop"))
+                                    {
+                                        set_tie(note, "start", true);
+                                        set_tie(next, "stop", true);
+                                    }
+                                }
+                            }
+                            let unmatched = left.notes.iter().enumerate().any(|(i, n)| {
+                                has_tie(n, "start") && !right_pitches.contains(&left_pitches[i])
+                            }) || event.notes.iter().enumerate().any(|(i, n)| {
+                                has_tie(n, "stop") && !left_pitches.contains(&right_pitches[i])
+                            });
+                            if unmatched {
+                                return Err(ScoreError::new(
+                                    "ambiguous tie assignment when splitting",
+                                ));
+                            }
                         }
                     }
                 }
+                Ok(())
+            })();
+            if let Err(error) = checked {
+                let context = format!(
+                    "{}; from {}",
+                    event.context(&part.measures[index]),
+                    left.context(&part.measures[previous_index])
+                );
+                errors.push(ScoreError::new(format!("{context}: {error}")));
             }
         }
         previous = Some((index, event));
     }
-    Ok(())
+    check_errors(errors)
 }
 
 fn check_relationships(
@@ -466,6 +516,7 @@ fn check_relationships(
 ) -> Result<()> {
     let mut ties = HashMap::new();
     let mut slurs = HashMap::new();
+    let mut errors = Vec::new();
     for measure in &part.measures {
         let mut events: Vec<_> = measure.events.iter().collect();
         events.sort_by(|a, b| a.start.cmp(&b.start));
@@ -475,6 +526,9 @@ fn check_relationships(
                     .get(&(note as *const Element as usize))
                     .cloned()
                     .unwrap_or_default();
+                if lanes.is_empty() {
+                    continue;
+                }
                 let pitch = note
                     .get_child("pitch")
                     .map(|p| {
@@ -484,7 +538,17 @@ fn check_relationships(
                             child_text(p, "octave"),
                         ))
                     })
-                    .transpose()?;
+                    .transpose();
+                let pitch = match pitch {
+                    Ok(pitch) => pitch,
+                    Err(error) => {
+                        errors.push(ScoreError::new(format!(
+                            "{}: {error}",
+                            event.context(measure)
+                        )));
+                        continue;
+                    }
+                };
                 let key = (event.voice.clone(), pitch);
                 let mut kinds: HashSet<_> = elements(note)
                     .filter(|e| e.name == "tie")
@@ -507,9 +571,9 @@ fn check_relationships(
                             .any(|lane| slots[*lane - 1].0 == event.voice)
                     })
                 {
-                    return Err(ScoreError::new(format!(
-                        "{}, position {}: ambiguous tie assignment when splitting",
-                        measure.context, event.start
+                    errors.push(ScoreError::new(format!(
+                        "{}: ambiguous tie assignment when splitting",
+                        event.context(measure)
                     )));
                 }
                 if kinds.contains("start") {
@@ -529,9 +593,10 @@ fn check_relationships(
                         if kind == Some("stop")
                             && slurs.remove(&key).is_some_and(|previous| previous != lanes)
                         {
-                            return Err(ScoreError::new(format!(
-                                "{}, position {}: ambiguous slur assignment when splitting",
-                                measure.context, event.start
+                            errors.push(ScoreError::new(format!(
+                                "{}: ambiguous slur assignment when splitting (slur {})",
+                                event.context(measure),
+                                key.1
                             )));
                         }
                         if kind == Some("start") {
@@ -542,7 +607,7 @@ fn check_relationships(
             }
         }
     }
-    Ok(())
+    check_errors(errors)
 }
 
 pub(crate) const ID_REFERENCES: &[&str] = &[
@@ -639,6 +704,7 @@ pub fn split_score(score: &Score, mode: &str, selected: Option<&[String]>) -> Re
         .filter_map(|node| node.attributes.get("id").cloned())
         .collect();
     let mut replacements = HashMap::new();
+    let mut errors = Vec::new();
     for part in &score.parts {
         if selected.is_some_and(|ids| !ids.iter().any(|id| id == part.id())) {
             continue;
@@ -699,26 +765,40 @@ pub fn split_score(score: &Score, mode: &str, selected: Option<&[String]>) -> Re
             }
             let mut derived = Element::new("part");
             derived.attributes = part.source.attributes.clone();
-            let mut measures = part
-                .measures
-                .iter()
-                .map(|measure| lane_measure(measure, voice, *tone, mode, &mut assignments, lane))
-                .collect::<Result<Vec<_>>>()?;
-            connect_shared_voices(part, &mut measures)?;
+            let mut measures = Vec::new();
+            let mut failed = false;
+            for measure in &part.measures {
+                match lane_measure(measure, voice, *tone, mode, &mut assignments, lane) {
+                    Ok(result) => measures.push(result),
+                    Err(error) => {
+                        errors.push(error);
+                        failed = true;
+                    }
+                }
+            }
+            if failed {
+                continue;
+            }
+            if let Err(error) = connect_shared_voices(part, &mut measures) {
+                errors.push(error);
+            }
             for (measure, (mut events, extras)) in part.measures.iter().zip(measures) {
                 for event in &mut events {
                     event.voice = "1".into();
                 }
-                append(
-                    &mut derived,
-                    render_measure(measure, &events, Some(&extras), None, None)?,
-                );
+                match render_measure(measure, &events, Some(&extras), None, None) {
+                    Ok(rendered) => append(&mut derived, rendered),
+                    Err(error) => errors.push(error),
+                }
             }
             copy_ids(&mut definition, &mut derived, &new_id, &mut used);
             copies.push((definition, derived));
         }
-        check_relationships(part, &assignments, &slots)?;
+        if let Err(error) = check_relationships(part, &assignments, &slots) {
+            errors.push(error);
+        }
         replacements.insert(part.id().to_owned(), copies);
     }
+    check_errors(errors)?;
     Ok(build_score(score, &replacements))
 }

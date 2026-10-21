@@ -35,3 +35,20 @@ impl From<zip::result::ZipError> for ScoreError {
     }
 }
 pub type Result<T> = std::result::Result<T, ScoreError>;
+
+pub(crate) fn check_errors(errors: Vec<ScoreError>) -> Result<()> {
+    let mut messages = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for error in &errors {
+        for message in error.0.lines() {
+            if seen.insert(message) {
+                messages.push(message);
+            }
+        }
+    }
+    if messages.is_empty() {
+        Ok(())
+    } else {
+        Err(ScoreError::new(messages.join("\n")))
+    }
+}

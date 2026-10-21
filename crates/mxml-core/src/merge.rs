@@ -8,7 +8,7 @@ use crate::split::{
     append, child_text, descendants, elements, elements_mut, numeric, remove_children, voice_cmp,
     walk_mut, ID_REFERENCES,
 };
-use crate::{Result, ScoreError};
+use crate::{check_errors, Result, ScoreError};
 use num_bigint::BigInt;
 use num_traits::Zero;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -158,11 +158,41 @@ fn select_groups(score: &Score, groups: &[Vec<String>]) -> Result<Vec<Vec<usize>
     Ok(result)
 }
 
+fn source_context(measure: &Measure, event: &Event) -> String {
+    measure
+        .events
+        .iter()
+        .filter(|source| {
+            if event.grace() {
+                source.grace() && source.start == event.start
+            } else {
+                !source.grace() && source.start < event.end() && source.end() > event.start
+            }
+        })
+        .map(|source| source.context(measure))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn flatten(measure: &Measure, voice: &str) -> Result<Vec<Event>> {
+    let mut errors = Vec::new();
     let mut by_span = Vec::<Event>::new();
     let mut indices = HashMap::new();
     let mut grace_counts = HashMap::new();
     for event in &measure.events {
+        let mut invalid = false;
+        for note in &event.notes {
+            if let Err(error) = pitch(note) {
+                errors.push(ScoreError::new(format!(
+                    "{}: {error}",
+                    event.context(measure)
+                )));
+                invalid = true;
+            }
+        }
+        if invalid {
+            continue;
+        }
         let ordinal = if event.grace() {
             let count = grace_counts
                 .entry((event.start.clone(), event.voice.clone()))
@@ -202,7 +232,8 @@ fn flatten(measure: &Measure, voice: &str) -> Result<Vec<Event>> {
             continue;
         }
         if event.start < end {
-            return Err(ScoreError::new(format!("{}, position {}: incompatible overlapping rhythmic spans cannot be flattened into one voice", measure.context, event.start)));
+            let context = source_context(measure, &event);
+            errors.push(ScoreError::new(format!("{context}: incompatible overlapping rhythmic spans cannot be flattened into one voice")));
         }
         if event.start > end {
             completed.push(rest_event(end.clone(), &event.start - &end, voice)?);
@@ -230,12 +261,13 @@ fn flatten(measure: &Measure, voice: &str) -> Result<Vec<Event>> {
             }
         }
         event.notes = unique;
-        end = event.end();
+        end = end.max(event.end());
         completed.push(event);
     }
     if end < measure.length {
         completed.push(rest_event(end.clone(), &measure.length - &end, voice)?);
     }
+    check_errors(errors)?;
     Ok(completed)
 }
 
@@ -400,6 +432,7 @@ fn state_signature(tag: &str, element: Option<&Element>) -> Result<Option<String
 
 fn compatible(measures: &[&Measure]) -> Result<()> {
     let reference = measures[0];
+    let mut errors = Vec::new();
     for measure in &measures[1..] {
         if measure.length != reference.length
             || measure.source.attributes.get("number") != reference.source.attributes.get("number")
@@ -416,7 +449,7 @@ fn compatible(measures: &[&Measure]) -> Result<()> {
                     .map(String::as_str)
                     .unwrap_or("no")
         {
-            return Err(ScoreError::new(format!(
+            errors.push(ScoreError::new(format!(
                 "{}, position 0: incompatible measure boundaries with {}",
                 measure.context, reference.context
             )));
@@ -424,20 +457,39 @@ fn compatible(measures: &[&Measure]) -> Result<()> {
     }
     for tag in ["time", "key", "transpose"] {
         let mut timelines = Vec::new();
+        let mut invalid = false;
         for measure in measures {
+            let mut signature = |element: Option<&Element>, position: &Fraction| {
+                match state_signature(tag, element) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        errors.push(ScoreError::new(format!(
+                            "{}, position {position}: {error}",
+                            measure.context
+                        )));
+                        invalid = true;
+                        None
+                    }
+                }
+            };
             let mut timeline = BTreeMap::from([(
                 Fraction::zero(),
-                state_signature(tag, measure.state.get(tag))?,
+                signature(measure.state.get(tag), &Fraction::zero()),
             )]);
             for extra in &measure.extras {
                 if extra.element.name == "attributes" {
                     if let Some(element) = extra.element.get_child(tag) {
-                        timeline
-                            .insert(extra.position.clone(), state_signature(tag, Some(element))?);
+                        timeline.insert(
+                            extra.position.clone(),
+                            signature(Some(element), &extra.position),
+                        );
                     }
                 }
             }
             timelines.push(timeline);
+        }
+        if invalid {
+            continue;
         }
         let boundaries: BTreeSet<_> = timelines.iter().flat_map(|t| t.keys().cloned()).collect();
         for position in boundaries {
@@ -445,39 +497,56 @@ fn compatible(measures: &[&Measure]) -> Result<()> {
                 .iter()
                 .map(|t| t.range(..=position.clone()).next_back().unwrap().1)
                 .collect();
-            if let Some(conflict) = values.iter().position(|value| *value != values[0]) {
-                return Err(ScoreError::new(format!(
+            for conflict in (1..values.len()).filter(|index| values[*index] != values[0]) {
+                errors.push(ScoreError::new(format!(
                     "{}, position {position}: incompatible {tag} with {}",
                     measures[conflict].context, reference.context
                 )));
             }
         }
     }
-    Ok(())
+    check_errors(errors)
 }
 
 fn clef(parts: &[&Part]) -> Result<(&'static str, &'static str)> {
     let mut positions = Vec::new();
+    let mut errors = Vec::new();
     for part in parts {
         for measure in &part.measures {
             for event in &measure.events {
                 for note in &event.notes {
                     if let Some(pitch) = note.get_child("pitch") {
-                        let octave: BigInt = child_text(pitch, "octave")
+                        let octave = child_text(pitch, "octave")
                             .unwrap_or_default()
-                            .parse()
-                            .map_err(|_| ScoreError::new("Invalid pitch octave"))?;
+                            .parse::<BigInt>();
+                        let octave = match octave {
+                            Ok(octave) => octave,
+                            Err(_) => {
+                                errors.push(ScoreError::new(format!(
+                                    "{}: Invalid pitch octave",
+                                    event.context(measure)
+                                )));
+                                continue;
+                            }
+                        };
                         let step = child_text(pitch, "step").unwrap_or_default();
-                        let step = ["C", "D", "E", "F", "G", "A", "B"]
+                        let Some(step) = ["C", "D", "E", "F", "G", "A", "B"]
                             .iter()
                             .position(|s| *s == step)
-                            .ok_or_else(|| ScoreError::new("Invalid pitch step"))?;
+                        else {
+                            errors.push(ScoreError::new(format!(
+                                "{}: Invalid pitch step",
+                                event.context(measure)
+                            )));
+                            continue;
+                        };
                         positions.push(octave * 7 + BigInt::from(step));
                     }
                 }
             }
         }
     }
+    check_errors(errors)?;
     let burden = |bottom: i32, top: i32| -> BigInt {
         positions
             .iter()
@@ -576,32 +645,51 @@ type Relationships = HashMap<(usize, String, String), String>;
 fn relationships(parts: &[&Part]) -> Result<Relationships> {
     let mut mapping = HashMap::new();
     let mut counts: HashMap<&str, usize> = HashMap::new();
+    let mut errors = Vec::new();
     for (source, part) in parts.iter().enumerate() {
-        for node in descendants(&part.source) {
-            if NUMBERED_RELATIONSHIPS.contains(&node.name.as_str()) {
-                let key = (
-                    source,
-                    node.name.clone(),
-                    node.attributes
-                        .get("number")
-                        .cloned()
-                        .unwrap_or_else(|| "1".into()),
-                );
-                if let std::collections::hash_map::Entry::Vacant(entry) = mapping.entry(key) {
-                    let count = counts.entry(&node.name).or_default();
-                    *count += 1;
-                    if *count > 16 {
-                        return Err(ScoreError::new(format!(
-                            "Part {:?}: too many distinct {} relationships to merge safely",
-                            part.name(),
-                            node.name
-                        )));
+        for measure in &part.measures {
+            for node in descendants(&measure.source) {
+                if NUMBERED_RELATIONSHIPS.contains(&node.name.as_str()) {
+                    let key = (
+                        source,
+                        node.name.clone(),
+                        node.attributes
+                            .get("number")
+                            .cloned()
+                            .unwrap_or_else(|| "1".into()),
+                    );
+                    if let std::collections::hash_map::Entry::Vacant(entry) = mapping.entry(key) {
+                        let count = counts.entry(&node.name).or_default();
+                        *count += 1;
+                        if *count > 16 {
+                            let context = measure
+                                .events
+                                .iter()
+                                .filter(|event| {
+                                    event
+                                        .notes
+                                        .iter()
+                                        .any(|note| descendants(note).contains(&node))
+                                })
+                                .map(|event| event.context(measure))
+                                .collect::<Vec<_>>();
+                            let context = if context.is_empty() {
+                                measure.context.clone()
+                            } else {
+                                context.join("; ")
+                            };
+                            errors.push(ScoreError::new(format!(
+                                "{context}: too many distinct {} relationships to merge safely",
+                                node.name
+                            )));
+                        }
+                        entry.insert(count.to_string());
                     }
-                    entry.insert(count.to_string());
                 }
             }
         }
     }
+    check_errors(errors)?;
     Ok(mapping)
 }
 
@@ -670,7 +758,11 @@ fn unique_ids(output: &mut Element, definition: &mut Element, used: &mut HashSet
     }
 }
 
-fn merge_events(streams: &[Vec<Event>], length: &Fraction) -> Result<Vec<Event>> {
+fn merge_events(
+    streams: &[Vec<Event>],
+    length: &Fraction,
+    measures: &[&Measure],
+) -> Result<Vec<Event>> {
     let ordinary: Vec<Vec<_>> = streams
         .iter()
         .map(|s| s.iter().filter(|e| !e.grace()).collect())
@@ -738,9 +830,19 @@ fn merge_events(streams: &[Vec<Event>], length: &Fraction) -> Result<Vec<Event>>
         }
     }
     let mut result = Vec::new();
+    let mut errors = Vec::new();
     for event in ordinary[0].iter().filter(|e| e.start < divergence) {
         let end = event.end().min(divergence.clone());
-        let mut merged = slice_event(event, event.start.clone(), end.clone())?;
+        let mut merged = match slice_event(event, event.start.clone(), end.clone()) {
+            Ok(event) => event,
+            Err(error) => {
+                errors.push(ScoreError::new(format!(
+                    "{}: {error}",
+                    source_context(measures[0], event)
+                )));
+                continue;
+            }
+        };
         merged.voice = "1".into();
         for stream in ordinary.iter().skip(1) {
             for other in stream
@@ -758,13 +860,19 @@ fn merge_events(streams: &[Vec<Event>], length: &Fraction) -> Result<Vec<Event>>
         }
         result.push(merged);
     }
-    for stream in &ordinary {
+    for (source, stream) in ordinary.iter().enumerate() {
         for event in stream.iter().filter(|e| e.end() > divergence) {
-            result.push(slice_event(
+            match slice_event(
                 event,
                 divergence.clone().max(event.start.clone()),
                 event.end(),
-            )?);
+            ) {
+                Ok(event) => result.push(event),
+                Err(error) => errors.push(ScoreError::new(format!(
+                    "{}: {error}",
+                    source_context(measures[source], event)
+                ))),
+            }
         }
     }
     for (source, stream) in grace.iter().enumerate() {
@@ -796,6 +904,7 @@ fn merge_events(streams: &[Vec<Event>], length: &Fraction) -> Result<Vec<Event>>
             .cmp(&b.start)
             .then_with(|| b.grace().cmp(&a.grace()))
     });
+    check_errors(errors)?;
     Ok(result)
 }
 
@@ -827,13 +936,14 @@ pub fn merge_score(score: &Score, groups: &[Vec<String>]) -> Result<Element> {
     let mut used_ids = HashSet::new();
     collect_retained_ids(&score.root, &replaced, &mut used_ids);
     let mut replacements = HashMap::new();
+    let mut errors = Vec::new();
     for indices in groups {
         let parts: Vec<_> = indices.iter().map(|i| &score.parts[*i]).collect();
         if parts
             .iter()
             .any(|p| p.measures.len() != parts[0].measures.len())
         {
-            return Err(ScoreError::new(format!(
+            errors.push(ScoreError::new(format!(
                 "Cannot merge parts with different numbers of measures: {}",
                 parts
                     .iter()
@@ -877,30 +987,63 @@ pub fn merge_score(score: &Score, groups: &[Vec<String>]) -> Result<Element> {
         let mut output = Element::new("part");
         output.attributes = anchor.source.attributes.clone();
         let lines = lyric_lines(&parts);
-        let relationships = relationships(&parts)?;
-        let clef = clef(&parts)?;
-        for index in 0..parts[0].measures.len() {
-            let measures: Vec<_> = parts.iter().map(|p| &p.measures[index]).collect();
-            compatible(&measures)?;
-            let mut streams: Vec<_> = measures
-                .iter()
-                .enumerate()
-                .map(|(source, measure)| flatten(measure, &(source + 1).to_string()))
-                .collect::<Result<_>>()?;
+        let relationships = match relationships(&parts) {
+            Ok(relationships) => Some(relationships),
+            Err(error) => {
+                errors.push(error);
+                None
+            }
+        };
+        let clef = match clef(&parts) {
+            Ok(clef) => Some(clef),
+            Err(error) => {
+                errors.push(error);
+                None
+            }
+        };
+        for index in 0..parts.iter().map(|part| part.measures.len()).max().unwrap() {
+            let measures: Vec<_> = parts.iter().filter_map(|p| p.measures.get(index)).collect();
+            let mut failed = measures.len() != parts.len();
+            if let Err(error) = compatible(&measures) {
+                errors.push(error);
+                failed = true;
+            }
+            let mut streams = Vec::new();
+            for (source, measure) in measures.iter().enumerate() {
+                match flatten(measure, &(source + 1).to_string()) {
+                    Ok(stream) => streams.push(stream),
+                    Err(error) => {
+                        errors.push(error);
+                        failed = true;
+                    }
+                }
+            }
+            if failed {
+                continue;
+            }
+            let (Some(relationships), Some(clef)) = (&relationships, clef) else {
+                continue;
+            };
             for (source, stream) in streams.iter_mut().enumerate() {
                 let instrument = parts[source]
                     .definition
                     .get_child("score-instrument")
                     .and_then(|i| i.attributes.get("id"))
                     .map(String::as_str);
-                prepare(stream, source, &lines, &relationships, instrument);
+                prepare(stream, source, &lines, relationships, instrument);
             }
-            let events = merge_events(&streams, &measures[0].length)?;
-            let extras = extras(&measures, clef, index == 0, &relationships);
-            append(
-                &mut output,
-                render_measure(measures[0], &events, Some(&extras), None, None)?,
-            );
+            let events = match merge_events(&streams, &measures[0].length, &measures) {
+                Ok(events) => events,
+                Err(error) => {
+                    errors.push(error);
+                    continue;
+                }
+            };
+            let extras = extras(&measures, clef, index == 0, relationships);
+            match render_measure(measures[0], &events, Some(&extras), None, None) {
+                Ok(rendered) => append(&mut output, rendered),
+                Err(error) => errors.push(error),
+            }
         }
         unique_ids(&mut output, &mut definition, &mut used_ids);
         for part in parts {
@@ -908,5 +1051,6 @@ pub fn merge_score(score: &Score, groups: &[Vec<String>]) -> Result<Element> {
         }
         replacements.insert(anchor.id().to_owned(), vec![(definition, output)]);
     }
+    check_errors(errors)?;
     Ok(build_score(score, &replacements))
 }

@@ -28,6 +28,7 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   let callbackId = 0;
   let openCount = 0;
   let cancelled = true;
+  let exportError: string | undefined;
   const exported: { id: string; operation: Operation }[] = [];
   const pending: { finish?: () => void } = {};
   const released: string[] = [];
@@ -82,6 +83,7 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
         }
         if (command === "export_document") {
           exported.push(args as unknown as (typeof exported)[number]);
+          if (exportError) throw exportError;
           return cancelled ? null : "/scores/arranged.mxl";
         }
         throw new Error(`Unexpected command ${command}`);
@@ -155,6 +157,11 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
     mode: "chords",
   });
   assert.match(document.querySelector(".status")!.textContent, /cancelled/);
+  exportError = 'Part "Violin", measure 1, position 0, voice 2, notes [C#4]: ambiguous tie assignment\nPart "Violin", measure 8, position 1, voice 7, notes [Eb4]: ambiguous slur assignment';
+  await click('[data-action="export"]');
+  assert.equal(document.querySelector('[role="alert"]')!.textContent, exportError);
+  assert.equal((document.querySelector('[data-action="export"]') as unknown as HTMLButtonElement).disabled, false);
+  exportError = undefined;
   await click('input[name="operation"][value="merge"]');
   await check("P1");
   await check("P2");

@@ -1,6 +1,6 @@
 use mxml_core::{
-    check_output, merge_score, read_score_bytes, split_score, write_score, EXTENSIONS,
-    MAX_XML_BYTES,
+    check_output, merge_score, read_score_bytes, split_score, validate_score, write_score, Element,
+    EXTENSIONS, MAX_XML_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -238,6 +238,24 @@ fn protect_sources(state: &Documents, output: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn prepare_export(bytes: &[u8], context: &str, operation: Operation) -> Result<Element, String> {
+    let score = read_score_bytes(bytes, context).map_err(|error| error.to_string())?;
+    let transformed = match operation {
+        Operation::Split { part_ids, mode } => split_score(
+            &score,
+            match mode {
+                SplitMode::Chords => "chords",
+                SplitMode::Voices => "voices",
+            },
+            Some(&part_ids),
+        ),
+        Operation::Merge { groups } => merge_score(&score, &groups),
+    }
+    .map_err(|error| error.to_string())?;
+    validate_score(&transformed).map_err(|error| error.to_string())?;
+    Ok(transformed)
+}
+
 #[tauri::command]
 async fn export_document(
     app: tauri::AppHandle,
@@ -262,6 +280,7 @@ async fn export_document(
         )
     };
     tauri::async_runtime::spawn_blocking(move || {
+        let transformed = prepare_export(&bytes, &context, operation)?;
         let stem = Path::new(&context)
             .file_stem()
             .unwrap_or_default()
@@ -301,19 +320,6 @@ async fn export_document(
         {
             return Ok(None);
         }
-        let score = read_score_bytes(&bytes, &context).map_err(|error| error.to_string())?;
-        let transformed = match operation {
-            Operation::Split { part_ids, mode } => split_score(
-                &score,
-                match mode {
-                    SplitMode::Chords => "chords",
-                    SplitMode::Voices => "voices",
-                },
-                Some(&part_ids),
-            ),
-            Operation::Merge { groups } => merge_score(&score, &groups),
-        }
-        .map_err(|error| error.to_string())?;
         // A new queued score must be protected even if opened while this export was preparing.
         let state = lock_documents(&documents)?;
         protect_sources(&state, &output)?;
@@ -353,6 +359,32 @@ mod tests {
         assert!(supported(Path::new("score.musicxml")));
         assert!(!supported(Path::new("score.xml.exe")));
         assert!(!supported(Path::new("score")));
+    }
+
+    #[test]
+    fn export_preparation_checks_transformation_and_schema() {
+        let source = br#"<score-partwise version="4.0"><part-list><score-part id="P1"><part-name>Violin</part-name></score-part></part-list><part id="P1"><measure number="1"><attributes><divisions>1</divisions></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><voice>2</voice><type>quarter</type></note></measure></part></score-partwise>"#;
+        let split = || Operation::Split {
+            part_ids: vec!["P1".into()],
+            mode: SplitMode::Chords,
+        };
+        assert!(prepare_export(source, "score.xml", split()).is_ok());
+        let invalid = String::from_utf8(source.to_vec())
+            .unwrap()
+            .replace("<step>C</step>", "<step>H</step>");
+        assert!(prepare_export(invalid.as_bytes(), "score.xml", split())
+            .unwrap_err()
+            .contains("schema validation"));
+        let error = prepare_export(
+            source,
+            "score.xml",
+            Operation::Split {
+                part_ids: vec!["missing".into()],
+                mode: SplitMode::Chords,
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("Unknown part ID"), "{error}");
     }
 
     #[test]

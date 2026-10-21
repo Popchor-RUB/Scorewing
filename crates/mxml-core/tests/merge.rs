@@ -13,6 +13,34 @@ fn merged(parts: &[(&str, Vec<String>)]) -> Score {
 }
 
 #[test]
+fn reports_overlap_errors_across_groups_measures_and_original_voices() {
+    let broken = || n("C").duration(3).voice("7").xml() + &backup(2) + &n("F").voice("9").xml();
+    let input = score(&[
+        ("Soprano", vec![broken(), broken()]),
+        ("Alto", vec![broken(), broken()]),
+        ("Tenor", vec![broken(), broken()]),
+        ("Bass", vec![n("G").xml(), n("G").xml()]),
+    ]);
+    let error = merge_score(&input, &groups(&[&["P1", "P2"], &["P3", "P4"]]))
+        .unwrap_err()
+        .to_string();
+    for part in ["Soprano", "Alto", "Tenor"] {
+        for measure in 1..=2 {
+            for (voice, note) in [("7", "C4"), ("9", "F4")] {
+                assert!(
+                    error.lines().any(|line| line.contains(part)
+                        && line.contains(&format!("measure {measure}"))
+                        && line.contains(&format!("voice {voice}"))
+                        && line.contains(note)
+                        && line.contains("overlapping rhythmic spans")),
+                    "{error}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn ordered_groups_anchor_at_first_score_position_and_keep_unselected_parts() {
     let input = score(&[
         ("Soprano", vec![n("C").xml()]),
@@ -61,6 +89,35 @@ fn invalid_groups_rejected_by_backend() {
 }
 
 #[test]
+fn reports_all_compatibility_conflicts_and_checks_remaining_measures() {
+    let key = "<attributes><key><fifths>1</fifths></key></attributes>";
+    let broken = n("C").duration(3).voice("7").xml() + &backup(2) + &n("F").voice("9").xml();
+    let input = score(&[
+        ("Soprano", vec![n("C").xml()]),
+        ("Alto", vec![key.to_owned() + &n("C").xml(), broken]),
+        ("Tenor", vec![key.to_owned() + &n("C").xml()]),
+    ]);
+    let error = merge_score(&input, &groups(&[&["P1", "P2", "P3"]]))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("different numbers of measures"), "{error}");
+    for part in ["Alto", "Tenor"] {
+        assert!(
+            error.lines().any(|line| line.contains(part)
+                && line.contains("measure 1")
+                && line.contains("incompatible key")),
+            "{error}"
+        );
+    }
+    assert!(
+        error.lines().any(|line| line.contains("Alto")
+            && line.contains("measure 2")
+            && line.contains("overlapping rhythmic spans")),
+        "{error}"
+    );
+}
+
+#[test]
 fn common_prefix_diverges_and_resets_each_bar() {
     let first = n("C").xml() + &n("D").xml() + &n("E").xml() + &n("F").xml();
     let second = n("C").xml() + &n("E").xml() + &n("E").xml() + &n("F").xml();
@@ -86,6 +143,29 @@ fn common_prefix_diverges_and_resets_each_bar() {
         ]
     );
     assert!(measures[1].events.iter().all(|e| e.voice == "1"));
+}
+
+#[test]
+fn reports_slicing_errors_for_each_source_in_a_measure() {
+    let invalid = "<time-modification><actual-notes>3</actual-notes><normal-notes>0</normal-notes></time-modification>";
+    let upper = n("C").duration(4).voice("7").extra(invalid).xml();
+    let lower = n("C").duration(4).voice("9").extra(invalid).xml()
+        + &backup(3)
+        + &n("G").grace().voice("9").xml();
+    let input = score(&[("Soprano", vec![upper]), ("Alto", vec![lower])]);
+    let error = merge_score(&input, &groups(&[&["P1", "P2"]]))
+        .unwrap_err()
+        .to_string();
+    for (part, voice) in [("Soprano", "7"), ("Alto", "9")] {
+        assert!(
+            error.lines().any(|line| line.contains(part)
+                && line.contains(&format!("voice {voice}"))
+                && line.contains("C4")
+                && line.contains("Invalid tuplet")),
+            "{error}"
+        );
+    }
+    assert_eq!(error.lines().count(), 2, "{error}");
 }
 
 #[test]
@@ -136,10 +216,11 @@ fn flatten_chords_deduplicate_unisons_and_reject_overlapping_rhythmic_spans() {
         ("S", vec![incompatible]),
         ("A", vec![n("C").duration(2).xml()]),
     ]);
-    assert!(merge_score(&input, &groups(&[&["P1", "P2"]]))
+    let error = merge_score(&input, &groups(&[&["P1", "P2"]]))
         .unwrap_err()
-        .to_string()
-        .contains("measure 1, position 0: incompatible overlapping"));
+        .to_string();
+    assert!(error.contains("measure 1, position 0"), "{error}");
+    assert!(error.contains("incompatible overlapping"), "{error}");
 }
 
 #[test]

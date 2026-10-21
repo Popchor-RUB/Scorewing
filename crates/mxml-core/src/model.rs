@@ -28,6 +28,46 @@ impl Event {
             .first()
             .is_some_and(|n| child(n, "grace").is_some())
     }
+    pub(crate) fn context(&self, measure: &Measure) -> String {
+        format!(
+            "{}, position {}, voice {}, notes [{}]",
+            measure.context,
+            self.start,
+            self.voice,
+            self.notes
+                .iter()
+                .map(note_name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+}
+
+fn note_name(note: &Element) -> String {
+    if note.get_child("rest").is_some() {
+        return "rest".into();
+    }
+    let (pitch, step, octave, prefix) = if let Some(pitch) = note.get_child("pitch") {
+        (pitch, "step", "octave", "")
+    } else if let Some(pitch) = note.get_child("unpitched") {
+        (pitch, "display-step", "display-octave", "unpitched ")
+    } else {
+        return "unknown note".into();
+    };
+    let alter = child_text(pitch, "alter").unwrap_or_else(|| "0".into());
+    let accidental = match alter.as_str() {
+        "-2" => "bb".into(),
+        "-1" => "b".into(),
+        "0" => String::new(),
+        "1" => "#".into(),
+        "2" => "##".into(),
+        _ => format!("(alter {alter})"),
+    };
+    format!(
+        "{prefix}{}{accidental}{}",
+        child_text(pitch, step).unwrap_or_else(|| "?".into()),
+        child_text(pitch, octave).unwrap_or_else(|| "?".into())
+    )
 }
 #[derive(Debug, Clone)]
 pub struct TimedElement {
@@ -762,6 +802,17 @@ mod tests {
     fn score(body: &str, divisions: &str) -> Score {
         let data=format!("<score-partwise version=\"4.0\"><part-list><score-part id=\"P1\"><part-name>Voice</part-name></score-part></part-list><part id=\"P1\"><measure number=\"1\"><attributes><divisions>{divisions}</divisions></attributes>{body}</measure></part></score-partwise>");
         parse_score(Element::parse(data.as_bytes()).unwrap()).unwrap()
+    }
+    #[test]
+    fn diagnostic_context_keeps_voice_and_spelled_note_names() {
+        let s = score("<note><pitch><step>C</step><alter>1</alter><octave>4</octave></pitch><duration>1</duration><voice>7</voice></note><note><chord/><pitch><step>E</step><alter>-1</alter><octave>5</octave></pitch><duration>1</duration><voice>7</voice></note><note><rest/><duration>1</duration><voice>7</voice></note>", "1");
+        let measure = &s.parts[0].measures[0];
+        let context = measure.events[0].context(measure);
+        assert!(
+            context.contains("measure 1, position 0, voice 7, notes [C#4, Eb5]"),
+            "{context}"
+        );
+        assert!(measure.events[1].context(measure).contains("notes [rest]"));
     }
     #[test]
     fn decimal_timing_is_exact() {

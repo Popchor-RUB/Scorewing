@@ -1,6 +1,6 @@
 use mxml_core::{
     check_output, merge_score, read_score_bytes, split_plan, split_score_with_fallbacks,
-    validate_score, write_score, Element, Part, SplitFallback, EXTENSIONS, MAX_XML_BYTES,
+    validate_score, write_score, Part, SplitFallback, SplitResult, EXTENSIONS, MAX_XML_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -278,7 +278,11 @@ fn protect_sources(state: &Documents, output: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn prepare_export(bytes: &[u8], context: &str, operation: Operation) -> Result<Element, String> {
+fn prepare_export(
+    bytes: &[u8],
+    context: &str,
+    operation: Operation,
+) -> Result<SplitResult, String> {
     let score = read_score_bytes(bytes, context).map_err(|error| error.to_string())?;
     let transformed = match operation {
         Operation::Split {
@@ -302,11 +306,20 @@ fn prepare_export(bytes: &[u8], context: &str, operation: Operation) -> Result<E
                 })
                 .collect::<Vec<_>>(),
         ),
-        Operation::Merge { groups } => merge_score(&score, &groups),
+        Operation::Merge { groups } => merge_score(&score, &groups).map(|root| SplitResult {
+            root,
+            warnings: Vec::new(),
+        }),
     }
     .map_err(|error| error.to_string())?;
-    validate_score(&transformed).map_err(|error| error.to_string())?;
+    validate_score(&transformed.root).map_err(|error| error.to_string())?;
     Ok(transformed)
+}
+
+#[derive(Serialize)]
+struct ExportResult {
+    path: String,
+    warnings: Vec<String>,
 }
 
 #[tauri::command]
@@ -315,7 +328,7 @@ async fn export_document(
     id: String,
     operation: Operation,
     documents: State<'_, SharedDocuments>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<ExportResult>, String> {
     let documents = documents.inner().clone();
     let (input, context, bytes) = {
         let state = lock_documents(&documents)?;
@@ -376,8 +389,12 @@ async fn export_document(
         // A new queued score must be protected even if opened while this export was preparing.
         let state = lock_documents(&documents)?;
         protect_sources(&state, &output)?;
-        write_score(&transformed, &output, &input, overwrite).map_err(|error| error.to_string())?;
-        Ok(Some(output.to_string_lossy().into_owned()))
+        write_score(&transformed.root, &output, &input, overwrite)
+            .map_err(|error| error.to_string())?;
+        Ok(Some(ExportResult {
+            path: output.to_string_lossy().into_owned(),
+            warnings: transformed.warnings,
+        }))
     })
     .await
     .map_err(|error| error.to_string())?
@@ -487,7 +504,8 @@ mod tests {
                     .collect(),
             },
         )
-        .unwrap();
+        .unwrap()
+        .root;
         let score = mxml_core::parse_score(root).unwrap();
         assert_eq!(score.parts.len(), 4);
         for (index, step) in [(4, "G"), (5, "F")] {
@@ -502,6 +520,48 @@ mod tests {
                 Some(step)
             );
         }
+    }
+
+    #[test]
+    fn ambiguous_relations_prepare_a_valid_export_with_review_warnings() {
+        let source = include_bytes!(
+            "../../../../crates/mxml-core/tests/fixtures/ambiguous-relations.musicxml"
+        );
+        let score = read_score_bytes(source, "choir.musicxml").unwrap();
+        let result = prepare_export(
+            source,
+            "choir.musicxml",
+            Operation::Split {
+                part_ids: vec!["P1".into()],
+                mode: SplitMode::Chords,
+                fallbacks: split_plan(&score.parts[0], "chords")
+                    .unwrap()
+                    .into_iter()
+                    .map(|lane| FallbackSelection {
+                        part_id: "P1".into(),
+                        voice: lane.voice,
+                        tone: lane.tone,
+                        fallback_voice: None,
+                    })
+                    .collect(),
+            },
+        )
+        .unwrap();
+        assert_eq!(result.warnings.len(), 2);
+        assert!(result.warnings.iter().any(|w| w.contains("ambiguous tie")));
+        assert!(result.warnings.iter().any(|w| w.contains("ambiguous slur")));
+        let exported = mxml_core::parse_score(result.root).unwrap();
+        assert_eq!(exported.parts.len(), 3);
+        assert!(exported
+            .parts
+            .iter()
+            .flat_map(|p| &p.measures)
+            .flat_map(|m| &m.events)
+            .flat_map(|e| &e.notes)
+            .all(|note| note
+                .attributes
+                .get("color")
+                .is_some_and(|color| color == "#FF0000")));
     }
 
     #[test]
@@ -543,7 +603,8 @@ mod tests {
                     fallbacks,
                 },
             )
-            .unwrap();
+            .unwrap()
+            .root;
             mxml_core::model::parse_score(root).unwrap()
         };
         let score = export(settings());

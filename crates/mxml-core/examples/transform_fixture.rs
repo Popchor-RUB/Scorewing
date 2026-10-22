@@ -10,11 +10,17 @@ fn run() -> Result<()> {
     }
     let score = read_score(Path::new(&args[1]))?;
     let root = match args[0].as_str() {
-        "split" => split_score(
-            &score,
-            args.get(2).map(String::as_str).unwrap_or("chords"),
-            None,
-        )?,
+        "split" => {
+            let result = split_score(
+                &score,
+                args.get(2).map(String::as_str).unwrap_or("chords"),
+                None,
+            )?;
+            for warning in result.warnings {
+                eprintln!("mxml: warning: {warning}");
+            }
+            result.root
+        }
         "merge" => {
             let groups: Vec<Vec<String>> = args[2..]
                 .iter()

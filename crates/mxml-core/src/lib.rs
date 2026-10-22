@@ -7,7 +7,9 @@ pub mod xml;
 pub use io::*;
 pub use merge::merge_score;
 pub use model::*;
-pub use split::{split_plan, split_score, split_score_with_fallbacks, SplitFallback, SplitLane};
+pub use split::{
+    split_plan, split_score, split_score_with_fallbacks, SplitFallback, SplitLane, SplitResult,
+};
 pub use xmltree::{Element, XMLNode};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

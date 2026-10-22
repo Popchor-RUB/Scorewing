@@ -1,6 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mxml_core::{
-    check_output, merge_score, read_score, split_score, write_score, Score, ScoreError,
+    check_output, merge_score, read_score, split_score, write_score, Score, ScoreError, SplitResult,
 };
 use std::path::PathBuf;
 
@@ -80,7 +80,7 @@ fn run(cli: Cli) -> Result<(), ScoreError> {
     };
     check_output(&files.input, &files.output, files.force)?;
     let score = read_score(&files.input)?;
-    let root = match &cli.command {
+    let result = match &cli.command {
         Command::Split { mode, parts, .. } => {
             let selected = parts
                 .iter()
@@ -105,10 +105,17 @@ fn run(cli: Cli) -> Result<(), ScoreError> {
                 .iter()
                 .map(|pair| pair.split('+').map(|s| select(&score, s)).collect())
                 .collect::<Result<Vec<Vec<String>>, _>>()?;
-            merge_score(&score, &groups)?
+            SplitResult {
+                root: merge_score(&score, &groups)?,
+                warnings: Vec::new(),
+            }
         }
     };
-    write_score(&root, &files.output, &files.input, files.force)
+    write_score(&result.root, &files.output, &files.input, files.force)?;
+    for warning in result.warnings {
+        eprintln!("mxml: warning: {warning}");
+    }
+    Ok(())
 }
 
 fn main() {

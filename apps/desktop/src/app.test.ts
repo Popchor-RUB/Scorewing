@@ -31,6 +31,7 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   let holdExport = false;
   let finishExport: (() => void) | undefined;
   let exportError: string | undefined;
+  let exportWarnings: string[] = [];
   const exported: { id: string; operation: Operation }[] = [];
   const pending: { finish?: () => void } = {};
   const released: string[] = [];
@@ -100,7 +101,7 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
           if (holdExport)
             await new Promise<void>((resolve) => { finishExport = resolve; });
           if (exportError) throw exportError;
-          return cancelled ? null : "/scores/arranged.mxl";
+          return cancelled ? null : { path: "/scores/arranged.mxl", warnings: exportWarnings };
         }
         throw new Error(`Unexpected command ${command}`);
       },
@@ -222,7 +223,12 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
     fallbacks: ["1", "2", "3"].map((voice) => ({ part_id: "P2", voice, tone: 0, fallback_voice: null })),
   });
   assert.match(document.querySelector(".status")!.textContent, /cancelled/);
-  exportError = 'Part "Violin", measure 1, position 0, voice 2, notes [C#4]: ambiguous tie assignment\nPart "Violin", measure 8, position 1, voice 7, notes [Eb4]: ambiguous slur assignment';
+  cancelled = false;
+  exportWarnings = ['Part "Violin", measure 1, position 0, voice 2, notes [C#4]: ambiguous tie assignment', 'Part "Violin", measure 8, position 1, voice 7, notes [Eb4]: ambiguous slur assignment'];
+  await click('[data-action="export"]');
+  assert.equal(document.querySelector(".status")!.textContent, `Exported /scores/arranged.mxl\nReview warnings — affected passages are marked red:\n${exportWarnings.join("\n")}`);
+  exportWarnings = [];
+  exportError = "Cannot write output file";
   await click('[data-action="export"]');
   assert.equal(document.querySelector('[role="alert"]')!.textContent, exportError);
   assert.equal((document.querySelector('[data-action="export"]') as unknown as HTMLButtonElement).disabled, false);

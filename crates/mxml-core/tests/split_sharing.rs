@@ -77,7 +77,8 @@ fn empire_state_of_mind_reuses_the_second_alto_lane() {
         } else {
             split_score(&original, "chords", None)
         }
-        .unwrap();
+        .unwrap()
+        .root;
         validate_score(&root).unwrap();
         let result = parse_score(root).unwrap();
         assert_eq!(result.parts.len(), 4);
@@ -181,7 +182,8 @@ fn shared_native_voice_preserves_rests_grace_lyrics_and_directions_before_fallba
         } else {
             split_score(&original, "chords", None)
         }
-        .unwrap();
+        .unwrap()
+        .root;
         validate_score(&root).unwrap();
         let result = parse_score(root).unwrap();
         assert_eq!(result.parts.len(), 4);
@@ -204,7 +206,9 @@ fn shared_native_voice_preserves_rests_grace_lyrics_and_directions_before_fallba
         }
     }
     choices[2].fallback_voice = Some("1".into());
-    let root = split_score_with_fallbacks(&original, "chords", None, &choices).unwrap();
+    let root = split_score_with_fallbacks(&original, "chords", None, &choices)
+        .unwrap()
+        .root;
     validate_score(&root).unwrap();
     let result = parse_score(root).unwrap();
     assert_eq!(pitches(&result.parts[3], 1), [["rest"], ["A"]]);
@@ -333,7 +337,9 @@ fn multiple_shared_voices_must_use_different_measures() {
         ],
     )]);
     assert_eq!(settings(&separate).len(), 3);
-    let root = split_score_with_fallbacks(&separate, "chords", None, &settings(&separate)).unwrap();
+    let root = split_score_with_fallbacks(&separate, "chords", None, &settings(&separate))
+        .unwrap()
+        .root;
     validate_score(&root).unwrap();
     let result = parse_score(root).unwrap();
     assert_eq!(pitches(&result.parts[3], 1), [["A"]]);
@@ -363,7 +369,8 @@ fn absorbed_voice_keeps_its_ties_slurs_and_explicit_rests_on_one_lane() {
         } else {
             split_score(&original, "chords", None)
         }
-        .unwrap();
+        .unwrap()
+        .root;
         validate_score(&root).unwrap();
         let result = parse_score(root).unwrap();
         assert_eq!(pitches(&result.parts[2], 3), [["rest"]]);
@@ -382,7 +389,7 @@ fn absorbed_voice_keeps_its_ties_slurs_and_explicit_rests_on_one_lane() {
 }
 
 #[test]
-fn native_relationship_ambiguities_still_fail_after_compaction() {
+fn native_relationship_ambiguities_warn_after_compaction() {
     let original = score(&[("S", vec![
         n("C").voice("2").extra("<stem>down</stem><tie type=\"start\"/><notations><slur type=\"start\" number=\"1\"/></notations>").xml()
             + &n("G").octave(3).voice("2").chord().extra("<stem>down</stem>").xml()
@@ -397,8 +404,9 @@ fn native_relationship_ambiguities_still_fail_after_compaction() {
         } else {
             split_score(&original, "chords", None)
         }
-        .unwrap_err()
-        .to_string();
+        .unwrap()
+        .warnings
+        .join("\n");
         assert!(error.contains("ambiguous tie"), "{error}");
         assert!(error.contains("ambiguous slur"), "{error}");
     }

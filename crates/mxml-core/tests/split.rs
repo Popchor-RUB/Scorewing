@@ -7,7 +7,7 @@ use mxml_core::{
 use std::collections::HashSet;
 
 #[test]
-fn reports_relationship_errors_across_parts_measures_and_voices() {
+fn reports_relationship_warnings_across_parts_measures_and_voices() {
     let broken = |step: &str, voice: &str| {
         n(step)
             .voice(voice)
@@ -29,8 +29,9 @@ fn reports_relationship_errors_across_parts_measures_and_voices() {
         ("Alto", vec![broken("E", "2"), broken("F", "2")]),
     ]);
     let error = split_score(&original, "chords", None)
-        .unwrap_err()
-        .to_string();
+        .unwrap()
+        .warnings
+        .join("\n");
     for (part, voice, notes) in [("Soprano", "1", ["C4", "D4"]), ("Alto", "2", ["E4", "F4"])] {
         for (index, note) in notes.iter().enumerate() {
             for kind in ["ambiguous tie", "ambiguous slur"] {
@@ -46,13 +47,15 @@ fn reports_relationship_errors_across_parts_measures_and_voices() {
         }
     }
     let selected = split_score(&original, "chords", Some(&["P1".into()]))
-        .unwrap_err()
-        .to_string();
+        .unwrap()
+        .warnings
+        .join("\n");
     assert!(!selected.contains("Alto"), "{selected}");
     let single_measure = score(&[("Soprano", vec![broken("C", "1") + &broken("D", "1")])]);
     let error = split_score(&single_measure, "chords", None)
-        .unwrap_err()
-        .to_string();
+        .unwrap()
+        .warnings
+        .join("\n");
     for position in [1, 3] {
         for kind in ["ambiguous tie", "ambiguous slur"] {
             assert!(
@@ -75,7 +78,7 @@ fn late_divisi_retains_original_order_metadata_and_sources() {
         ),
         ("Alto", vec![n("E").xml(), n("F").xml()]),
     ]);
-    let result = parse_score(split_score(&original, "chords", None).unwrap()).unwrap();
+    let result = parse_score(split_score(&original, "chords", None).unwrap().root).unwrap();
     assert_eq!(
         names(&result),
         ["Soprano", "Soprano 1", "Soprano 2", "Alto"]
@@ -93,9 +96,9 @@ fn late_divisi_retains_original_order_metadata_and_sources() {
 fn monophonic_unchanged_voice_mode_keeps_chords_and_numeric_voice_order() {
     let body = n("C").xml() + &n("E").chord().xml();
     let mono = score(&[("S", vec![body.clone()])]);
-    assert_eq!(split_score(&mono, "voices", None).unwrap(), mono.root);
+    assert_eq!(split_score(&mono, "voices", None).unwrap().root, mono.root);
     let poly = score(&[("S", vec![body + &backup(1) + &n("G").voice("2").xml()])]);
-    let result = parse_score(split_score(&poly, "voices", None).unwrap()).unwrap();
+    let result = parse_score(split_score(&poly, "voices", None).unwrap().root).unwrap();
     assert_eq!(pitches(&result.parts[1], 0), [["C", "E"]]);
     assert_eq!(pitches(&result.parts[2], 0), [["G"]]);
     assert!(result.parts[1..]
@@ -113,9 +116,12 @@ fn monophonic_unchanged_voice_mode_keeps_chords_and_numeric_voice_order() {
         }
         body += &n(step).voice(voice).xml();
     }
-    let result =
-        parse_score(split_score(&score(&[("Choir", vec![body])]), "chords", None).unwrap())
-            .unwrap();
+    let result = parse_score(
+        split_score(&score(&[("Choir", vec![body])]), "chords", None)
+            .unwrap()
+            .root,
+    )
+    .unwrap();
     assert_eq!(
         result.parts[1..]
             .iter()
@@ -134,8 +140,12 @@ fn partial_chords_rests_and_shared_single_notes() {
         + &n("F").chord().xml()
         + &n("A").xml()
         + &n("C").rest().xml();
-    let result =
-        parse_score(split_score(&score(&[("S", vec![body])]), "chords", None).unwrap()).unwrap();
+    let result = parse_score(
+        split_score(&score(&[("S", vec![body])]), "chords", None)
+            .unwrap()
+            .root,
+    )
+    .unwrap();
     assert_eq!(
         pitches(&result.parts[1], 0),
         [["G"], ["F"], ["A"], ["rest"]]
@@ -153,8 +163,12 @@ fn partial_chords_rests_and_shared_single_notes() {
         + &backup(1)
         + &n("C").rest().voice("2").xml()
         + &n("E").voice("2").xml();
-    let result =
-        parse_score(split_score(&score(&[("S", vec![body])]), "chords", None).unwrap()).unwrap();
+    let result = parse_score(
+        split_score(&score(&[("S", vec![body])]), "chords", None)
+            .unwrap()
+            .root,
+    )
+    .unwrap();
     assert_eq!(pitches(&result.parts[1], 0), [["C"], ["D"], ["E"]]);
     assert_eq!(pitches(&result.parts[2], 0), [["C"], ["rest"], ["E"]]);
 }
@@ -162,8 +176,12 @@ fn partial_chords_rests_and_shared_single_notes() {
 #[test]
 fn mixed_explicit_voices_and_chords() {
     let body = n("C").xml() + &n("E").chord().xml() + &backup(1) + &n("G").voice("2").xml();
-    let result =
-        parse_score(split_score(&score(&[("S", vec![body])]), "chords", None).unwrap()).unwrap();
+    let result = parse_score(
+        split_score(&score(&[("S", vec![body])]), "chords", None)
+            .unwrap()
+            .root,
+    )
+    .unwrap();
     assert_eq!(
         result.parts[1..]
             .iter()
@@ -177,8 +195,12 @@ fn mixed_explicit_voices_and_chords() {
 fn directions_follow_their_explicit_voice_and_are_renumbered() {
     let direction="<direction><direction-type><words>Lower only</words></direction-type><voice>2</voice></direction>";
     let body = direction.to_owned() + &n("C").xml() + &backup(1) + &n("G").voice("2").xml();
-    let result =
-        parse_score(split_score(&score(&[("S", vec![body])]), "voices", None).unwrap()).unwrap();
+    let result = parse_score(
+        split_score(&score(&[("S", vec![body])]), "voices", None)
+            .unwrap()
+            .root,
+    )
+    .unwrap();
     assert!(!elements(&result.parts[1].measures[0].source).any(|e| e.name == "direction"));
     let direction = elements(&result.parts[2].measures[0].source)
         .find(|e| e.name == "direction")
@@ -196,7 +218,8 @@ fn pickups_silence_changing_divisions_tuplets_and_graces() {
             "chords",
             None,
         )
-        .unwrap(),
+        .unwrap()
+        .root,
     )
     .unwrap();
     for part in &result.parts[1..] {
@@ -219,9 +242,12 @@ fn pickups_silence_changing_divisions_tuplets_and_graces() {
         + &n("G").duration(2).chord().extra(tuplet).xml()
         + "<attributes><divisions>6</divisions></attributes>"
         + &n("E").duration(6).xml();
-    let result =
-        parse_score(split_score(&score_div(&[("S", vec![body])], 3), "chords", None).unwrap())
-            .unwrap();
+    let result = parse_score(
+        split_score(&score_div(&[("S", vec![body])], 3), "chords", None)
+            .unwrap()
+            .root,
+    )
+    .unwrap();
     for part in &result.parts[1..] {
         assert_eq!(part.measures[0].length, frac(5) / frac(3));
         assert!(part.measures[0].events[0].grace());
@@ -238,7 +264,7 @@ fn missing_second_voice_inherits_first_voice_even_with_other_voices() {
     let explicit_rest = n("B").xml() + &backup(1) + &n("C").voice("2").rest().xml();
     let original = score(&[("Alt", vec![first, shared, explicit_rest, n("D").xml()])]);
     for mode in ["chords", "voices"] {
-        let result = parse_score(split_score(&original, mode, None).unwrap()).unwrap();
+        let result = parse_score(split_score(&original, mode, None).unwrap().root).unwrap();
         assert_eq!(result.parts[0].source, original.parts[0].source);
         for (measure, expected) in ["F", "A", "rest", "D"].iter().enumerate() {
             assert_eq!(pitches(&result.parts[2], measure), [[*expected]]);
@@ -254,7 +280,7 @@ fn shared_voice_transition_repairs_ties_and_inserts_a_slur_for_changed_pitch() {
         let first = n("G").extra(start).xml() + &backup(1) + &n(lower_pitch).voice("2").xml();
         let original = score(&[("Alt", vec![first, n("G").extra(stop).xml()])]);
         for mode in ["chords", "voices"] {
-            let result = parse_score(split_score(&original, mode, None).unwrap()).unwrap();
+            let result = parse_score(split_score(&original, mode, None).unwrap().root).unwrap();
             assert_eq!(result.parts[0].source, original.parts[0].source);
             let upper = &result.parts[1];
             assert_eq!(
@@ -322,7 +348,7 @@ fn shared_ties_connect_to_returning_voices_without_slur_number_collisions() {
         let original = score(&[("Alt", measures)]);
         for mode in ["chords", "voices"] {
             // The unrelated source slur changes lane assignment on its middle note only.
-            let result = parse_score(split_score(&original, mode, None).unwrap()).unwrap();
+            let result = parse_score(split_score(&original, mode, None).unwrap().root).unwrap();
             let lower = &result.parts[2];
             let left = &lower.measures[0].events[0].notes[0];
             let right = if same_measure {
@@ -356,7 +382,7 @@ fn shared_voice_rest_and_untied_transitions_do_not_gain_connections() {
         let shared = if rest { n("G").extra(stop) } else { n("G") }.xml();
         let original = score(&[("Alt", vec![first, shared])]);
         for mode in ["chords", "voices"] {
-            let result = parse_score(split_score(&original, mode, None).unwrap()).unwrap();
+            let result = parse_score(split_score(&original, mode, None).unwrap().root).unwrap();
             assert!(!descendants(&result.parts[2].source)
                 .iter()
                 .any(|e| ["tie", "tied", "slur"].contains(&e.name.as_str())));
@@ -374,9 +400,12 @@ fn shared_chord_ties_connect_matching_pitches_in_voice_mode() {
         + &n("C").voice("2").xml()
         + &n("E").voice("2").chord().xml();
     let second = n("C").extra(stop).xml() + &n("E").chord().extra(stop).xml();
-    let result =
-        parse_score(split_score(&score(&[("Alt", vec![first, second])]), "voices", None).unwrap())
-            .unwrap();
+    let result = parse_score(
+        split_score(&score(&[("Alt", vec![first, second])]), "voices", None)
+            .unwrap()
+            .root,
+    )
+    .unwrap();
     for (measure, kind) in [(0, "start"), (1, "stop")] {
         for note in &result.parts[2].measures[measure].events[0].notes {
             assert_eq!(note.get_child("tie").unwrap().attributes["type"], kind);
@@ -393,7 +422,7 @@ fn shared_chord_ties_connect_matching_pitches_in_voice_mode() {
 }
 
 #[test]
-fn relationships_preserved_or_ambiguity_rejected() {
+fn relationships_preserved_or_ambiguity_reported() {
     let start = "<tie type=\"start\"/><notations><tied type=\"start\"/></notations>";
     let stop = "<tie type=\"stop\"/><notations><tied type=\"stop\"/></notations>";
     let first = n("C").extra(start).xml() + &n("G").chord().xml();
@@ -404,7 +433,8 @@ fn relationships_preserved_or_ambiguity_rejected() {
             "chords",
             None,
         )
-        .unwrap(),
+        .unwrap()
+        .root,
     )
     .unwrap();
     assert_eq!(
@@ -426,8 +456,9 @@ fn relationships_preserved_or_ambiguity_rejected() {
         "chords",
         None,
     )
-    .unwrap_err()
-    .to_string();
+    .unwrap()
+    .warnings
+    .join("\n");
     assert!(
         error.contains("measure 2, position 0") && error.contains("ambiguous tie"),
         "{error}"
@@ -441,8 +472,9 @@ fn relationships_preserved_or_ambiguity_rejected() {
         + &n("G").chord().xml();
     assert!(
         split_score(&score(&[("S", vec![first, second])]), "chords", None)
-            .unwrap_err()
-            .to_string()
+            .unwrap()
+            .warnings
+            .join("\n")
             .contains("ambiguous slur")
     );
 }
@@ -472,7 +504,7 @@ fn chord_marks_lyrics_instruments_players_and_unique_ids() {
         );
     }
     let before = original.root.clone();
-    let result = parse_score(split_score(&original, "chords", None).unwrap()).unwrap();
+    let result = parse_score(split_score(&original, "chords", None).unwrap().root).unwrap();
     assert_eq!(original.root, before);
     for part in &result.parts[1..] {
         assert!(part.definition.get_child("part-name-display").is_none());
@@ -518,8 +550,12 @@ fn chord_marks_lyrics_instruments_players_and_unique_ids() {
 #[test]
 fn shared_note_slicing_preserves_timing_without_dangling_added_ties_or_duplicate_ids() {
     let body = n("C").duration(2).kind("half").xml() + &backup(1) + &n("G").voice("2").xml();
-    let result =
-        parse_score(split_score(&score(&[("S", vec![body])]), "chords", None).unwrap()).unwrap();
+    let result = parse_score(
+        split_score(&score(&[("S", vec![body])]), "chords", None)
+            .unwrap()
+            .root,
+    )
+    .unwrap();
     assert_eq!(result.parts[1].measures[0].events.len(), 1);
     assert_eq!(
         result.parts[2].measures[0]
@@ -540,8 +576,12 @@ fn shared_note_slicing_preserves_timing_without_dangling_added_ties_or_duplicate
         .replace("<note>", "<note id=\"original-note\">")
         + &backup(3)
         + &n("D").voice("2").xml();
-    let result =
-        parse_score(split_score(&score(&[("S", vec![body])]), "chords", None).unwrap()).unwrap();
+    let result = parse_score(
+        split_score(&score(&[("S", vec![body])]), "chords", None)
+            .unwrap()
+            .root,
+    )
+    .unwrap();
     assert_eq!(pitches(&result.parts[2], 0), [["C"], ["D"], ["C"]]);
     assert_eq!(
         result.parts[2].measures[0]
@@ -579,12 +619,17 @@ fn selective_split_and_id_collisions_and_invalid_requests() {
         .attributes
         .insert("id".into(), "P1_split_1".into());
     let selected = vec!["P1".to_owned()];
-    let result = parse_score(split_score(&original, "chords", Some(&selected)).unwrap()).unwrap();
+    let result = parse_score(
+        split_score(&original, "chords", Some(&selected))
+            .unwrap()
+            .root,
+    )
+    .unwrap();
     assert_eq!(names(&result), ["Same", "Same 1", "Same 2", "Same"]);
     assert_eq!(result.parts[1].id(), "P1_split_1_");
     assert_eq!(result.parts[3].source, original.parts[1].source);
     assert_eq!(
-        parse_score(split_score(&original, "chords", None).unwrap())
+        parse_score(split_score(&original, "chords", None).unwrap().root)
             .unwrap()
             .parts
             .len(),

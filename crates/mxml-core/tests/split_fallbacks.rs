@@ -24,7 +24,9 @@ fn settings(score: &Score, mode: &str) -> Vec<SplitFallback> {
 }
 
 fn split(score: &Score, mode: &str, choices: &[SplitFallback]) -> Score {
-    let root = split_score_with_fallbacks(score, mode, None, choices).unwrap();
+    let root = split_score_with_fallbacks(score, mode, None, choices)
+        .unwrap()
+        .root;
     validate_score(&root).unwrap();
     parse_score(root).unwrap()
 }
@@ -87,7 +89,7 @@ fn preview_and_configured_export_follow_stem_suggestions_without_lone_voice_shar
     assert_eq!(pitches(&result.parts[3], 1), [["A"]]);
     assert_eq!(pitches(&result.parts[3], 2), [["rest"]]);
     assert_eq!(pitches(&result.parts[2], 2), [["rest"]]);
-    let legacy = parse_score(split_score(&original, "voices", None).unwrap()).unwrap();
+    let legacy = parse_score(split_score(&original, "voices", None).unwrap().root).unwrap();
     assert_eq!(pitches(&legacy.parts[3], 0), [["C"]]);
     assert_eq!(pitches(&legacy.parts[3], 2), [["E"]]);
 }
@@ -399,7 +401,7 @@ fn silent_boundaries_remove_orphan_ties_and_slurs() {
 }
 
 #[test]
-fn native_chord_relationship_ambiguities_still_fail_with_explicit_fallbacks() {
+fn native_chord_relationship_ambiguities_warn_with_explicit_fallbacks() {
     let original = score(&[(
         "S",
         vec![
@@ -416,8 +418,9 @@ fn native_chord_relationship_ambiguities_still_fail_with_explicit_fallbacks() {
     )]);
     let error =
         split_score_with_fallbacks(&original, "chords", None, &settings(&original, "chords"))
-            .unwrap_err()
-            .to_string();
+            .unwrap()
+            .warnings
+            .join("\n");
     assert!(error.contains("ambiguous tie"), "{error}");
     assert!(error.contains("ambiguous slur"), "{error}");
 }

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<score-partwise version="4.0">
+  <part-list>
+    <score-part id="P1"><part-name>Choir</part-name></score-part>
+  </part-list>
+  <part id="P1">
+    <measure number="1">
+      <attributes><divisions>1</divisions></attributes>
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>1</duration><tie type="start"/><voice>1</voice><type>quarter</type>
+        <notations><tied type="start"/><slur type="start" number="1"/></notations>
+      </note>
+      <note>
+        <chord/><pitch><step>G</step><octave>3</octave></pitch>
+        <duration>1</duration><voice>1</voice><type>quarter</type>
+      </note>
+    </measure>
+    <measure number="2">
+      <note>
+        <pitch><step>C</step><octave>4</octave></pitch>
+        <duration>1</duration><tie type="stop"/><voice>1</voice><type>quarter</type>
+        <notations><tied type="stop"/><slur type="stop" number="1"/></notations>
+      </note>
+      <note>
+        <chord/><pitch><step>B</step><octave>5</octave></pitch>
+        <duration>1</duration><voice>1</voice><type>quarter</type>
+      </note>
+    </measure>
+  </part>
+</score-partwise>

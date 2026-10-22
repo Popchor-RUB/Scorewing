@@ -222,11 +222,14 @@ root.addEventListener("click", async (event) => {
       busy = true;
       notify("Choose where to save your arranged score.");
       try {
-        const path = await invoke<string | null>("export_document", {
+        const result = await invoke<{ path: string; warnings: string[] } | null>("export_document", {
           id: item.document.id,
           operation: request,
         });
-        notify(path ? `Exported ${path}` : "Export cancelled.");
+        notify(result ? [
+          `Exported ${result.path}`,
+          ...(result.warnings.length ? ["Review warnings — affected passages are marked red:", ...result.warnings] : []),
+        ].join("\n") : "Export cancelled.");
       } finally {
         busy = false;
         render();

@@ -31,6 +31,61 @@ pub struct SplitFallback {
     pub fallback_voice: Option<String>,
 }
 
+/// A completed split, including musical ambiguities that need author review.
+#[derive(Debug)]
+pub struct SplitResult {
+    pub root: Element,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Default)]
+struct Review {
+    warnings: Vec<String>,
+    sections: Vec<ReviewSection>,
+}
+
+struct ReviewSection {
+    voice: String,
+    start: (usize, Fraction),
+    last_onset: (usize, Fraction),
+    end: (usize, Fraction),
+}
+
+impl Review {
+    fn warn(&mut self, part: &Part, from: (usize, &Event), to: (usize, &Event), detail: &str) {
+        let message = format!(
+            "{}; from {}: {detail}",
+            to.1.context(&part.measures[to.0]),
+            from.1.context(&part.measures[from.0]),
+        );
+        if !self.warnings.contains(&message) {
+            self.warnings.push(message);
+        }
+        for voice in [&from.1.voice, &to.1.voice] {
+            self.sections.push(ReviewSection {
+                voice: voice.clone(),
+                start: (from.0, from.1.start.clone()),
+                last_onset: (to.0, to.1.start.clone()),
+                end: (to.0, to.1.end()),
+            });
+        }
+    }
+
+    fn affected(&self, measure: usize, event: &Event) -> bool {
+        let position = (measure, event.start.clone());
+        let end = (measure, event.end());
+        self.sections.iter().any(|section| {
+            section.voice == event.voice
+                && (section.start < end || section.start <= position)
+                && (position <= section.last_onset || position < section.end)
+        })
+    }
+}
+
+fn mark_review(note: &mut Element) {
+    note.attributes.insert("color".into(), "#FF0000".into());
+}
+
 fn split_lanes(part: &Part, mode: &str) -> Result<Vec<SplitLane>> {
     if !["chords", "voices"].contains(&mode) {
         return Err(ScoreError::new("Split mode must be 'chords' or 'voices'"));
@@ -708,6 +763,7 @@ fn connect_shared_voices(
     part: &Part,
     measures: &mut [(Vec<Event>, Vec<TimedElement>)],
     configured: bool,
+    review: &mut Review,
 ) -> Result<Option<String>> {
     let used_slurs: HashSet<_> = measures
         .iter()
@@ -805,9 +861,22 @@ fn connect_shared_voices(
                                 has_tie(n, "stop") && !left_pitches.contains(&right_pitches[i])
                             });
                             if unmatched {
-                                return Err(ScoreError::new(
+                                review.warn(
+                                    part,
+                                    (previous_index, left),
+                                    (index, event),
                                     "ambiguous tie assignment when splitting",
-                                ));
+                                );
+                                for (i, note) in left.notes.iter_mut().enumerate() {
+                                    if !right_pitches.contains(&left_pitches[i]) {
+                                        set_tie(note, "start", false);
+                                    }
+                                }
+                                for (i, note) in event.notes.iter_mut().enumerate() {
+                                    if !left_pitches.contains(&right_pitches[i]) {
+                                        set_tie(note, "stop", false);
+                                    }
+                                }
                             }
                         }
                     }
@@ -833,6 +902,7 @@ fn connect_shared_voices(
 fn repair_fallback_relationships(
     measures: &mut [(Vec<Event>, Vec<TimedElement>)],
     shared_slur: Option<&str>,
+    review: Option<&Review>,
 ) -> Result<()> {
     let mut ties = HashMap::new();
     let mut slurs: HashMap<(String, String), Vec<(usize, String)>> = HashMap::new();
@@ -891,31 +961,37 @@ fn repair_fallback_relationships(
             }
         }
     }
-    for (index, note) in measures
-        .iter_mut()
-        .flat_map(|(events, _)| events)
-        .flat_map(|event| &mut event.notes)
-        .enumerate()
-    {
-        for kind in ["start", "stop"] {
-            if !keep_ties.contains(&(index, kind)) {
-                set_tie(note, kind, false);
+    let mut index = 0;
+    for (measure_index, (events, _)) in measures.iter_mut().enumerate() {
+        for event in events {
+            let affected = review.is_none_or(|review| review.affected(measure_index, event));
+            for note in &mut event.notes {
+                let note_index = index;
+                index += 1;
+                if !affected {
+                    continue;
+                }
+                for kind in ["start", "stop"] {
+                    if !keep_ties.contains(&(note_index, kind)) {
+                        set_tie(note, kind, false);
+                    }
+                }
+                if let Some(notations) = note.get_mut_child("notations") {
+                    notations.children.retain(|node| {
+                        node.as_element().is_none_or(|mark| {
+                            mark.name != "slur"
+                                || keep_slurs.contains(&(
+                                    note_index,
+                                    mark.attributes
+                                        .get("number")
+                                        .cloned()
+                                        .unwrap_or_else(|| "1".into()),
+                                    mark.attributes.get("type").cloned().unwrap_or_default(),
+                                ))
+                        })
+                    });
+                }
             }
-        }
-        if let Some(notations) = note.get_mut_child("notations") {
-            notations.children.retain(|node| {
-                node.as_element().is_none_or(|mark| {
-                    mark.name != "slur"
-                        || keep_slurs.contains(&(
-                            index,
-                            mark.attributes
-                                .get("number")
-                                .cloned()
-                                .unwrap_or_else(|| "1".into()),
-                            mark.attributes.get("type").cloned().unwrap_or_default(),
-                        ))
-                })
-            });
         }
     }
     Ok(())
@@ -926,9 +1002,10 @@ fn check_relationships(
     assignments: &Assignments,
     slots: &[AllocatedLane],
     configured: bool,
+    review: &mut Review,
 ) -> Result<()> {
-    let mut ties = HashMap::new();
-    let mut slurs = HashMap::new();
+    let mut ties: HashMap<_, (BTreeSet<usize>, usize, &Event)> = HashMap::new();
+    let mut slurs: HashMap<_, (BTreeSet<usize>, usize, &Event)> = HashMap::new();
     let mut errors = Vec::new();
     for (measure_index, measure) in part.measures.iter().enumerate() {
         let mut events: Vec<_> = measure.events.iter().collect();
@@ -976,21 +1053,24 @@ fn check_relationships(
                             .map(String::as_str),
                     );
                 }
-                if kinds.contains("stop")
-                    && ties.remove(&key).is_some_and(|previous: BTreeSet<usize>| {
+                if kinds.contains("stop") {
+                    if let Some((previous, start_measure, start_event)) = ties.remove(&key) {
                         // Shared lanes may join or leave; native chord lanes must stay assigned.
-                        previous
+                        if previous
                             .symmetric_difference(&lanes)
                             .any(|lane| slots[*lane - 1].native(&event.voice, measure_index))
-                    })
-                {
-                    errors.push(ScoreError::new(format!(
-                        "{}: ambiguous tie assignment when splitting",
-                        event.context(measure)
-                    )));
+                        {
+                            review.warn(
+                                part,
+                                (start_measure, start_event),
+                                (measure_index, event),
+                                "ambiguous tie assignment when splitting",
+                            );
+                        }
+                    }
                 }
                 if kinds.contains("start") {
-                    ties.insert(key, lanes.clone());
+                    ties.insert(key, (lanes.clone(), measure_index, event));
                 }
                 if let Some(notations) = note.get_child("notations") {
                     for slur in elements(notations).filter(|e| e.name == "slur") {
@@ -1003,9 +1083,10 @@ fn check_relationships(
                                 .to_owned(),
                         );
                         let kind = slur.attributes.get("type").map(String::as_str);
-                        if kind == Some("stop")
-                            && slurs.remove(&key).is_some_and(|previous: BTreeSet<usize>| {
-                                previous.symmetric_difference(&lanes).any(|lane| {
+                        if kind == Some("stop") {
+                            if let Some((previous, start_measure, start_event)) = slurs.remove(&key)
+                            {
+                                if previous.symmetric_difference(&lanes).any(|lane| {
                                     let slot = &slots[*lane - 1];
                                     if configured {
                                         slot.native(&event.voice, measure_index)
@@ -1014,17 +1095,21 @@ fn check_relationships(
                                             || slot.slot.voice != event.voice
                                             || slot.native(&event.voice, measure_index)
                                     }
-                                })
-                            })
-                        {
-                            errors.push(ScoreError::new(format!(
-                                "{}: ambiguous slur assignment when splitting (slur {})",
-                                event.context(measure),
-                                key.1
-                            )));
+                                }) {
+                                    review.warn(
+                                        part,
+                                        (start_measure, start_event),
+                                        (measure_index, event),
+                                        &format!(
+                                            "ambiguous slur assignment when splitting (slur {})",
+                                            key.1
+                                        ),
+                                    );
+                                }
+                            }
                         }
                         if kind == Some("start") {
-                            slurs.insert(key, lanes.clone());
+                            slurs.insert(key, (lanes.clone(), measure_index, event));
                         }
                     }
                 }
@@ -1105,7 +1190,7 @@ fn copy_ids(
 
 /// Retain selected originals and insert their derived lanes directly below them.
 /// `None` preserves the CLI's split-all default; selections use stable part IDs.
-pub fn split_score(score: &Score, mode: &str, selected: Option<&[String]>) -> Result<Element> {
+pub fn split_score(score: &Score, mode: &str, selected: Option<&[String]>) -> Result<SplitResult> {
     split_score_inner(score, mode, selected, None)
 }
 
@@ -1117,7 +1202,7 @@ pub fn split_score_with_fallbacks(
     mode: &str,
     selected: Option<&[String]>,
     fallbacks: &[SplitFallback],
-) -> Result<Element> {
+) -> Result<SplitResult> {
     split_score_inner(score, mode, selected, Some(fallbacks))
 }
 
@@ -1126,7 +1211,7 @@ fn split_score_inner(
     mode: &str,
     selected: Option<&[String]>,
     fallbacks: Option<&[SplitFallback]>,
-) -> Result<Element> {
+) -> Result<SplitResult> {
     if !["chords", "voices"].contains(&mode) {
         return Err(ScoreError::new("Split mode must be 'chords' or 'voices'"));
     }
@@ -1196,6 +1281,7 @@ fn split_score_inner(
         .collect();
     let mut replacements = HashMap::new();
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
     for part in &score.parts {
         if selected.is_some_and(|ids| !ids.iter().any(|id| id == part.id())) {
             continue;
@@ -1206,6 +1292,8 @@ fn split_score_inner(
         }
         let mut assignments = HashMap::new();
         let mut copies = vec![(part.definition.clone(), part.source.clone())];
+        let mut review = Review::default();
+        let mut pending = Vec::new();
         for (index, slot) in slots.iter().enumerate() {
             let lane = index + 1;
             let mut new_id = format!("{}_split_{lane}", part.id());
@@ -1260,12 +1348,16 @@ fn split_score_inner(
             }
             if !slot.shared_voices.is_empty() {
                 // Optional unison copies can lose an endpoint when another native voice takes over.
-                if let Err(error) = repair_fallback_relationships(&mut measures, None) {
+                if let Err(error) = repair_fallback_relationships(&mut measures, None, None) {
                     errors.push(error);
                 }
             }
-            let shared_slur = match connect_shared_voices(part, &mut measures, fallbacks.is_some())
-            {
+            let shared_slur = match connect_shared_voices(
+                part,
+                &mut measures,
+                fallbacks.is_some(),
+                &mut review,
+            ) {
                 Ok(number) => number,
                 Err(error) => {
                     errors.push(error);
@@ -1274,13 +1366,67 @@ fn split_score_inner(
             };
             if fallbacks.is_some() {
                 if let Err(error) =
-                    repair_fallback_relationships(&mut measures, shared_slur.as_deref())
+                    repair_fallback_relationships(&mut measures, shared_slur.as_deref(), None)
                 {
                     errors.push(error);
                 }
             }
-            for (measure, (mut events, extras)) in part.measures.iter().zip(measures) {
+            pending.push((definition, derived, measures, shared_slur, new_id));
+        }
+        if let Err(error) =
+            check_relationships(part, &assignments, slots, fallbacks.is_some(), &mut review)
+        {
+            errors.push(error);
+        }
+        // Parsing retains source note order, including chords, grace notes and backup voices.
+        for (measure_index, source) in copies[0]
+            .1
+            .children
+            .iter_mut()
+            .filter_map(XMLNode::as_mut_element)
+            .filter(|node| node.name == "measure")
+            .enumerate()
+        {
+            let flags = part.measures[measure_index]
+                .events
+                .iter()
+                .flat_map(|event| {
+                    event
+                        .notes
+                        .iter()
+                        .map(|_| review.affected(measure_index, event))
+                });
+            for (note, affected) in source
+                .children
+                .iter_mut()
+                .filter_map(XMLNode::as_mut_element)
+                .filter(|node| node.name == "note")
+                .zip(flags)
+            {
+                if affected {
+                    mark_review(note);
+                }
+            }
+        }
+        for (mut definition, mut derived, mut measures, shared_slur, new_id) in pending {
+            if !review.warnings.is_empty() {
+                if let Err(error) = repair_fallback_relationships(
+                    &mut measures,
+                    shared_slur.as_deref(),
+                    Some(&review),
+                ) {
+                    errors.push(error);
+                }
+            }
+            for (measure_index, (measure, (mut events, extras))) in
+                part.measures.iter().zip(measures).enumerate()
+            {
                 for event in &mut events {
+                    if review.affected(measure_index, event) {
+                        for note in &mut event.notes {
+                            mark_review(note);
+                        }
+                    }
                     event.voice = "1".into();
                 }
                 match render_measure(measure, &events, Some(&extras), None, None) {
@@ -1291,11 +1437,12 @@ fn split_score_inner(
             copy_ids(&mut definition, &mut derived, &new_id, &mut used);
             copies.push((definition, derived));
         }
-        if let Err(error) = check_relationships(part, &assignments, slots, fallbacks.is_some()) {
-            errors.push(error);
-        }
+        warnings.extend(review.warnings);
         replacements.insert(part.id().to_owned(), copies);
     }
     check_errors(errors)?;
-    Ok(build_score(score, &replacements))
+    Ok(SplitResult {
+        root: build_score(score, &replacements),
+        warnings,
+    })
 }

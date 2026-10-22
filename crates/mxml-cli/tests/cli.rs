@@ -34,6 +34,55 @@ fn help_version_and_error_contract() {
 }
 
 #[test]
+fn ambiguous_relations_export_xml_and_mxl_with_warnings() {
+    let source = include_str!("../../mxml-core/tests/fixtures/ambiguous-relations.musicxml");
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("choir.musicxml");
+    fs::write(&input, source).unwrap();
+    for extension in ["musicxml", "mxl"] {
+        let output = dir.path().join(format!("split.{extension}"));
+        let result = cli()
+            .arg("split")
+            .arg(&input)
+            .arg("-o")
+            .arg(&output)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(result.stdout.is_empty());
+        let warnings = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            warnings.contains("warning:")
+                && warnings.contains("ambiguous tie")
+                && warnings.contains("ambiguous slur")
+        );
+        let score = mxml_core::read_score(&output).unwrap();
+        mxml_core::validate_score(&score.root).unwrap();
+        assert_eq!(score.parts.len(), 3);
+        for part in &score.parts {
+            assert_eq!(part.measures.len(), 2);
+            for note in part
+                .measures
+                .iter()
+                .flat_map(|m| &m.events)
+                .flat_map(|e| &e.notes)
+            {
+                assert!(note.get_child("pitch").is_some());
+                assert_eq!(
+                    note.attributes.get("color").map(String::as_str),
+                    Some("#FF0000")
+                );
+            }
+        }
+    }
+    assert_eq!(fs::read_to_string(input).unwrap(), source);
+}
+
+#[test]
 fn split_merge_compressed_roundtrip_and_output_protection() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("in.musicxml");

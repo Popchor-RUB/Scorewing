@@ -31,6 +31,14 @@ test("Windows allows OS DLLs and rejects application DLLs and dynamic VC runtime
   }
 });
 
+test("Windows permits the system COM runtime for CLI and desktop imports", () => {
+  for (const desktop of [false, true]) {
+    for (const name of ["combase.dll", "COMBASE.DLL"]) {
+      assert.deepEqual(checkDependencies("win32", pe(name), desktop), [name]);
+    }
+  }
+});
+
 test("unknown or empty tool output fails closed", () => {
   for (const platform of ["darwin", "linux", "win32"]) {
     assert.throws(() => checkDependencies(platform, ""), /No dependencies parsed/);

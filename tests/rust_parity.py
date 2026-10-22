@@ -6,6 +6,7 @@ The Python implementation remains a test oracle during migration only.
 import os
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 
 from lxml import etree as ET
@@ -21,6 +22,8 @@ def transform(score, operation, arguments):
                                 capture_output=True, text=True)
         if result.returncode:
             raise ScoreError(result.stderr.removeprefix("mxml: ").strip())
+        if result.stderr:
+            warnings.warn(result.stderr.strip(), RuntimeWarning, stacklevel=2)
         return ET.fromstring(result.stdout.encode(), ET.XMLParser(remove_blank_text=True))
 
 

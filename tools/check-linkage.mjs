@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 const linuxRuntime = /^(lib(c|m|dl|pthread|rt)\.so\.\d+|libgcc_s\.so\.1|ld-linux[^/]*\.so\.[12])$/;
 const linuxDesktop = /^(lib(gdk-3|gdk_pixbuf-2\.0|cairo|gobject-2\.0|glib-2\.0|dbus-1|webkit2gtk-4\.1|gtk-3|soup-3\.0|gio-2\.0|javascriptcoregtk-4\.1)\.so\.\d+)$/;
 const windowsRuntime = new Set([
-  "advapi32", "bcrypt", "bcryptprimitives", "cfgmgr32", "comctl32", "comdlg32",
+  "advapi32", "bcrypt", "bcryptprimitives", "cfgmgr32", "combase", "comctl32", "comdlg32",
   "crypt32", "d2d1", "d3d11", "dcomp", "dwmapi", "dwrite", "dxgi", "gdi32",
   "imm32", "iphlpapi", "kernel32", "msimg32",
   "ncrypt", "ntdll", "ole32", "oleaut32", "opengl32", "powrprof", "propsys",

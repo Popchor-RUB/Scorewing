@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "mxml",
+    name = "voiceweaver",
     version,
     about = "Split and merge choir staves in MusicXML scores."
 )]
@@ -113,14 +113,14 @@ fn run(cli: Cli) -> Result<(), ScoreError> {
     };
     write_score(&result.root, &files.output, &files.input, files.force)?;
     for warning in result.warnings {
-        eprintln!("mxml: warning: {warning}");
+        eprintln!("voiceweaver: warning: {warning}");
     }
     Ok(())
 }
 
 fn main() {
     if let Err(error) = run(Cli::parse()) {
-        eprintln!("mxml: {error}");
+        eprintln!("voiceweaver: {error}");
         std::process::exit(2);
     }
 }

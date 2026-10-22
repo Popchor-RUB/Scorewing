@@ -411,7 +411,7 @@ pub fn run() {
             export_document
         ])
         .run(tauri::generate_context!())
-        .expect("Failed to start MXML");
+        .expect("Failed to start Voiceweaver");
 }
 
 #[cfg(test)]

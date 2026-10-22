@@ -1,6 +1,8 @@
-# MXML
+# Voiceweaver
 
 A Rust CLI and Tauri 2 desktop app for splitting and merging choir staves in MusicXML.
+
+Builds produce the `voiceweaver` CLI and `voiceweaver-desktop` executable, with desktop installers branded **Voiceweaver**.
 
 Open or drop `.mxml`, `.musicxml`, `.xml`, or compressed `.mxl` scores. Select a queued file to see its instruments, then choose **Merge** or **Split** and export a new score. Files are independent; merging across files is not supported.
 
@@ -29,9 +31,9 @@ See [setup](docs/SETUP.md) for VS Code, GUI sessions, build artifacts, and conta
 ## CLI
 
 ```sh
-mxml split input.mxl -o split.musicxml
-mxml split input.musicxml -o voices.mxl --mode voices --part Soprano --part 3
-mxml merge input.mxl -o merged.mxl --pair 'Soprano+Alto' --pair '3+4'
+voiceweaver split input.mxl -o split.musicxml
+voiceweaver split input.musicxml -o voices.mxl --mode voices --part Soprano --part 3
+voiceweaver merge input.mxl -o merged.mxl --pair 'Soprano+Alto' --pair '3+4'
 ```
 
 Selectors are one-based positions or exact part names. Use positions when names repeat. Merge groups cannot overlap; the order inside each group determines voice order. Unselected parts remain unchanged. Omitting `--part` splits every eligible part, preserving the previous CLI default.

@@ -27,7 +27,7 @@ jobs:
         run: tools/devcontainer.sh run bash tools/package-linux.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: mxml-linux-x64
+          name: voiceweaver-linux-x64
           path: dist/*
           if-no-files-found: error
   native:
@@ -36,11 +36,11 @@ jobs:
       matrix:
         include:
           - runner: windows-2022
-            artifact: mxml-windows-x64
+            artifact: voiceweaver-windows-x64
           - runner: macos-15-intel
-            artifact: mxml-macos-x64
+            artifact: voiceweaver-macos-x64
           - runner: macos-15
-            artifact: mxml-macos-arm64
+            artifact: voiceweaver-macos-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -91,15 +91,15 @@ jobs:
       - name: Smoke test CLI
         shell: bash
         run: |
-          target/release/mxml --version
-          node tools/check-linkage.mjs target/release/mxml${{ runner.os == 'Windows' && '.exe' || '' }}
-          node tools/check-linkage.mjs --desktop target/release/mxml-desktop${{ runner.os == 'Windows' && '.exe' || '' }}
+          target/release/voiceweaver --version
+          node tools/check-linkage.mjs target/release/voiceweaver${{ runner.os == 'Windows' && '.exe' || '' }}
+          node tools/check-linkage.mjs --desktop target/release/voiceweaver-desktop${{ runner.os == 'Windows' && '.exe' || '' }}
       - name: Collect artifacts and checksums
         shell: bash
         run: |
           mkdir -p dist
           cp docs/THIRD_PARTY_NOTICES.txt dist/
-          cp target/release/mxml.exe dist/ 2>/dev/null || cp target/release/mxml dist/
+          cp target/release/voiceweaver.exe dist/ 2>/dev/null || cp target/release/voiceweaver dist/
           find target/release/bundle -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} dist/ \;
           node tools/checksum.mjs dist/*
       - uses: actions/upload-artifact@v4

@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "mxml"
+name = "voiceweaver"
 path = "src/main.rs"
 
 [dependencies]

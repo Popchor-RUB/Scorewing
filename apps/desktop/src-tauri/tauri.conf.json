@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "MXML",
+  "productName": "Voiceweaver",
   "version": "0.1.0",
   "identifier": "org.mxml.desktop",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "MXML",
+        "title": "Voiceweaver",
         "width": 1100,
         "height": 760,
         "minWidth": 760,

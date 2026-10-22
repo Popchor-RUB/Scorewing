@@ -1,7 +1,7 @@
 use std::{fs, process::Command};
 
 fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_mxml"))
+    Command::new(env!("CARGO_BIN_EXE_voiceweaver"))
 }
 
 const SCORE: &str = r#"<score-partwise version="4.0"><work><work-title>CLI fixture</work-title></work><part-list><score-part id="P1"><part-name>Soprano</part-name></score-part><score-part id="P2"><part-name>Alto</part-name></score-part></part-list><part id="P1"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>E</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note><note><chord/><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part><part id="P2"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>A</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part></score-partwise>"#;
@@ -14,7 +14,7 @@ fn help_version_and_error_contract() {
     let version = cli().arg("--version").output().unwrap();
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
-        "mxml 0.1.0"
+        "voiceweaver 0.1.0"
     );
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("invalid.xml");
@@ -29,7 +29,7 @@ fn help_version_and_error_contract() {
         .unwrap();
     assert_eq!(result.status.code(), Some(2));
     assert!(result.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("mxml:"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("voiceweaver:"));
     assert!(!output.exists());
 }
 

@@ -90,7 +90,6 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
                       { voice: "1", tone: 0, fallback_voice: null },
                       { voice: "2", tone: 0, fallback_voice: null },
                       { voice: "2", tone: 1, fallback_voice: null },
-                      { voice: "3", tone: 0, fallback_voice: "2" },
                     ],
                   },
                 })),
@@ -174,9 +173,21 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   );
   assert.equal(exported.length, 0);
   await check("P2");
-  assert.match(document.querySelector(".split-preview")!.textContent, /4 additional staves/);
-  assert.match(document.querySelector(".split-preview")!.textContent, /fallback is used only when the staff’s voice is absent for the whole measure/);
+  assert.match(document.querySelector(".split-preview")!.textContent, /3 additional staves/);
+  assert.match(document.querySelector(".split-preview")!.textContent, /carry compatible voices/);
+  assert.match(document.querySelector(".split-preview")!.textContent, /fallback is used only when the staff’s native voices are absent for the whole measure/);
   assert.match(document.querySelector('label[for="fallback-1-2"]')!.textContent, /Violin P2.*Additional staff 3.*Voice 2.*Chord tone 2.*Fallback voice/);
+  assert.deepEqual(Array.from((document.querySelector('select[data-lane="2"]') as unknown as HTMLSelectElement).options).map((option) => option.value), ["none", "voice:1", "voice:3"]);
+  await choose('select[data-lane="2"]', "voice:3");
+  await click('[data-action="export"]');
+  assert.deepEqual(exported.at(-1)?.operation, {
+    kind: "split", part_ids: ["P2"], mode: "chords",
+    fallbacks: [
+      { part_id: "P2", voice: "1", tone: 0, fallback_voice: null },
+      { part_id: "P2", voice: "2", tone: 0, fallback_voice: null },
+      { part_id: "P2", voice: "2", tone: 1, fallback_voice: "3" },
+    ],
+  });
   await choose("#split-mode", "voices");
   assert.match(document.querySelector(".split-preview")!.textContent, /3 additional staves/);
   const fallbackSelector = 'select[data-fallback-part="P2"][data-lane="2"]';
@@ -192,7 +203,7 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   await check("P2");
   assert.equal(fallbackSelect().value, "none");
   await choose("#split-mode", "chords");
-  assert.equal((document.querySelector('select[data-lane="3"]') as unknown as HTMLSelectElement).value, "voice:2");
+  assert.equal((document.querySelector('select[data-lane="2"]') as unknown as HTMLSelectElement).value, "voice:3");
   await choose("#split-mode", "voices");
   assert.equal(fallbackSelect().value, "none");
   await click('[data-action="select"][data-key="2"]');

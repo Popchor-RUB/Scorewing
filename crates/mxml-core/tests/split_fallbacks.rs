@@ -73,13 +73,13 @@ fn preview_and_configured_export_follow_stem_suggestions_without_lone_voice_shar
     assert_eq!(plan[2].fallback_voice.as_deref(), Some("2"));
     assert_eq!(plan[0].fallback_voice, None);
     let chords = split_plan(&original.parts[0], "chords").unwrap();
-    assert_eq!(chords.len(), 4);
+    assert_eq!(chords.len(), 3);
     assert_eq!(
         chords
             .iter()
             .map(|lane| (lane.voice.as_str(), lane.tone))
             .collect::<Vec<_>>(),
-        [("1", 0), ("2", 0), ("2", 1), ("3", 0)]
+        [("1", 0), ("2", 0), ("2", 1)]
     );
     let result = split(&original, "voices", &settings(&original, "voices"));
     assert_eq!(result.parts[0].source, original.parts[0].source);
@@ -111,7 +111,8 @@ fn overrides_none_and_chord_tone_selection_are_respected() {
     );
     let choices = settings(&original, "chords");
     let result = split(&original, "chords", &choices);
-    assert_eq!(pitches(&result.parts[4], 0), [["G"]]);
+    assert_eq!(result.parts.len(), 4);
+    assert_eq!(pitches(&result.parts[3], 1), [["A"]]);
     assert_eq!(pitches(&result.parts[2], 0), [["G"]]);
     assert_eq!(pitches(&result.parts[3], 0), [["E"]]);
 }

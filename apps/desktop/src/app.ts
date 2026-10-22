@@ -55,10 +55,11 @@ function notify(text: string, error = false): void {
 function splitPreview(part: Part, index: number, state: Arrangement): string {
   if (state.kind !== "split" || !state.selected.has(part.id)) return "";
   const lanes = part.split_plans[state.mode];
-  const voices = [...new Set(lanes.map((lane) => lane.voice))];
+  const voices = [...new Set([...part.split_plans.voices, ...lanes].map((lane) => lane.voice))];
   return `<section class="split-preview" aria-label="Split preview for ${escape(part.name || part.id)} ${escape(part.id)}">
     <p>${lanes.length} additional ${lanes.length === 1 ? "staff" : "staves"} · Original staff retained</p>
-    <p>A fallback is used only when the staff’s voice is absent for the whole measure.</p>
+    ${state.mode === "chords" ? "<p>Chord-tone staffs may also carry compatible voices in measures without that chord tone.</p>" : ""}
+    <p>A fallback is used only when the staff’s native voices are absent for the whole measure.</p>
     ${lanes.map((lane, li) => {
       const label = `Additional staff ${li + 1} · Voice ${lane.voice}${state.mode === "chords" ? ` · Chord tone ${lane.tone + 1}` : ""}`;
       return `<div class="fallback-row"><label for="fallback-${index}-${li}"><span class="sr-only">${escape(part.name || part.id)} ${escape(part.id)} · </span>${escape(label)} · Fallback voice</label><select id="fallback-${index}-${li}" data-fallback-part="${escape(part.id)}" data-lane="${li}" data-focus="fallback-${index}-${li}" ${busy ? "disabled" : ""}><option value="none">None (silent)</option>${voices.filter((voice) => voice !== lane.voice).map((voice) => `<option value="voice:${escape(voice)}">Voice ${escape(voice)}</option>`).join("")}</select></div>`;

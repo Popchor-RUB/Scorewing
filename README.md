@@ -10,7 +10,7 @@ Open or drop `.mxml`, `.musicxml`, `.xml`, or compressed `.mxl` scores. Select a
 
 Only score-partwise documents with single-staff parts are supported. Multi-staff instruments such as piano and score-timewise documents are rejected with an explanation. There is no notation rendering or playback.
 
-In the desktop app, each split staff uses its written voice whenever that voice appears anywhere in the measure, preserving written rests and gaps. When the voice is absent for the whole measure, the staff uses its selected fallback; **None**, or an absent fallback voice, produces silence. Fallbacks never chain. In chord mode, the same chord-tone selection applies to the fallback voice.
+In the desktop app, each split staff uses its written voice whenever that voice appears anywhere in the measure, preserving written rests and gaps. In chord mode, a compatible voice allocated to an extra chord-tone staff takes priority in its own measures. Only when all native sources are absent for the whole measure does the staff use its selected fallback; **None**, or an absent fallback voice, produces silence. Fallbacks never chain. In chord mode, the same chord-tone selection applies to the fallback voice.
 
 Fallback suggestions match consistent explicit up/down stems and prefer the matching voice present in the most measures where the target voice is absent. Missing or conflicting stems and tied candidates default to **None**. Suggestions are editable, and choices are kept separately for each queued file and split mode until the file is closed.
 
@@ -36,7 +36,7 @@ mxml merge input.mxl -o merged.mxl --pair 'Soprano+Alto' --pair '3+4'
 
 Selectors are one-based positions or exact part names. Use positions when names repeat. Merge groups cannot overlap; the order inside each group determines voice order. Unselected parts remain unchanged. Omitting `--part` splits every eligible part, preserving the previous CLI default.
 
-Split scans the entire score, retains original staves, and adds numbered derived staves only when needed. Chord mode separates tones; voices mode keeps chords within explicit voices. The CLI retains its legacy sharing behavior: a voice absent from a measure follows voice 1, and a lone active voice fills gaps; explicit rests remain rests. At shared-voice transitions, split repairs tie endpoints and uses a slur when connected single notes change pitch. Other ambiguous ties/slurs and incompatible merge rhythms cause an error rather than guessed musical content.
+Split scans the entire score, retains original staves, and adds numbered derived staves only when needed. Chord mode separates tones and reuses an extra chord-tone staff for a monophonic voice with matching staff and stem direction when their required measures never overlap. Actual source notes and rests take priority over unison doubling and fallbacks; ambiguous allocations remain separate. Ties and slurs involving real chord tones reserve their connected measures. Voices mode keeps chords within explicit voices. The CLI retains its legacy sharing behavior: a voice absent from a measure follows voice 1, and a lone active voice fills gaps; explicit rests remain rests. At shared-voice transitions, split repairs tie endpoints and uses a slur when connected single notes change pitch. Other ambiguous ties/slurs and incompatible merge rhythms cause an error rather than guessed musical content.
 
 ## Files and safety
 

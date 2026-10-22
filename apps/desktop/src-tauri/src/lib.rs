@@ -456,6 +456,55 @@ mod tests {
     }
 
     #[test]
+    fn empire_state_preview_and_export_share_three_chord_lanes() {
+        let bytes = include_bytes!(
+            "../../../../crates/mxml-core/tests/fixtures/empire-state-of-mind-sopran-alt.mxl"
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("empire-state.mxl");
+        std::fs::write(&path, bytes).unwrap();
+        let inspected = inspect(path, &SharedDocuments::default()).unwrap();
+        assert!(inspected.error.is_none(), "{:?}", inspected.error);
+        let part = &inspected.parts[0];
+        assert_eq!(part.split_plans.chords.len(), 3);
+        assert_eq!(part.split_plans.voices.len(), 3);
+        let root = prepare_export(
+            bytes,
+            "empire-state.mxl",
+            Operation::Split {
+                part_ids: vec![part.id.clone()],
+                mode: SplitMode::Chords,
+                fallbacks: part
+                    .split_plans
+                    .chords
+                    .iter()
+                    .map(|lane| FallbackSelection {
+                        part_id: part.id.clone(),
+                        voice: lane.voice.clone(),
+                        tone: lane.tone,
+                        fallback_voice: lane.fallback_voice.clone(),
+                    })
+                    .collect(),
+            },
+        )
+        .unwrap();
+        let score = mxml_core::parse_score(root).unwrap();
+        assert_eq!(score.parts.len(), 4);
+        for (index, step) in [(4, "G"), (5, "F")] {
+            let note = score.parts[3].measures[index]
+                .events
+                .iter()
+                .flat_map(|event| &event.notes)
+                .find(|note| note.get_child("pitch").is_some())
+                .unwrap();
+            assert_eq!(
+                mxml_core::xml::child_text(note.get_child("pitch").unwrap(), "step").as_deref(),
+                Some(step)
+            );
+        }
+    }
+
+    #[test]
     fn inspection_preview_and_export_use_the_same_fallback_lanes() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("choir.xml");

@@ -12,7 +12,8 @@ use num_traits::Zero;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use xmltree::{Element, XMLNode};
 
-/// A generated staff, with a suggested voice to use in measures missing its own voice.
+/// A generated staff identified by its primary voice and chord tone, with a suggested fallback.
+/// Compatible native voices may share extra chord-tone staffs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SplitLane {
     pub voice: String,
@@ -61,9 +62,185 @@ fn split_lanes(part: &Part, mode: &str) -> Result<Vec<SplitLane>> {
     Ok(if lanes.len() < 2 { Vec::new() } else { lanes })
 }
 
+struct AllocatedLane {
+    slot: SplitLane,
+    shared_voices: Vec<String>,
+    required: Vec<bool>,
+}
+
+impl AllocatedLane {
+    fn native(&self, voice: &str, measure: usize) -> bool {
+        self.shared_voices.iter().any(|source| source == voice)
+            || (self.slot.voice == voice
+                && (self.shared_voices.is_empty() || self.required[measure]))
+    }
+}
+
+fn voice_present(measure: &Measure, voice: &str) -> bool {
+    measure.events.iter().any(|event| event.voice == voice)
+        || measure
+            .extras
+            .iter()
+            .any(|extra| child_text(&extra.element, "voice").as_deref() == Some(voice))
+}
+
+fn voice_layout(part: &Part, voice: &str) -> Option<(String, String)> {
+    let mut staffs = HashSet::new();
+    let mut stems = HashSet::new();
+    for note in part
+        .measures
+        .iter()
+        .flat_map(|measure| &measure.events)
+        .filter(|event| event.voice == voice)
+        .flat_map(|event| &event.notes)
+        .filter(|note| note.get_child("rest").is_none())
+    {
+        staffs.insert(child_text(note, "staff").unwrap_or_else(|| "1".into()));
+        if let Some(stem) = child_text(note, "stem").filter(|s| s == "up" || s == "down") {
+            stems.insert(stem);
+        }
+    }
+    if staffs.len() != 1 || stems.len() != 1 {
+        return None;
+    }
+    Some((staffs.into_iter().next()?, stems.into_iter().next()?))
+}
+
+fn required_measures(part: &Part, slot: &SplitLane) -> Vec<bool> {
+    let mut required = vec![false; part.measures.len()];
+    let mut ties = HashMap::new();
+    let mut slurs = HashMap::new();
+    let mut spans = Vec::new();
+    for (index, measure) in part.measures.iter().enumerate() {
+        for event in measure
+            .events
+            .iter()
+            .filter(|event| event.voice == slot.voice)
+        {
+            required[index] |= event.notes.len() > slot.tone;
+            let Ok(selected) = notes(event, slot.tone, "chords", measure) else {
+                return vec![true; part.measures.len()];
+            };
+            for note in selected {
+                let Ok(key) = pitch(note) else {
+                    return vec![true; part.measures.len()];
+                };
+                if has_tie(note, "stop") {
+                    if let Some(start) = ties.remove(&key) {
+                        spans.push((start, index));
+                    }
+                }
+                if has_tie(note, "start") {
+                    ties.entry(key).or_insert(index);
+                }
+                if let Some(notations) = note.get_child("notations") {
+                    for slur in elements(notations).filter(|node| node.name == "slur") {
+                        let number = slur
+                            .attributes
+                            .get("number")
+                            .map(String::as_str)
+                            .unwrap_or("1")
+                            .to_owned();
+                        match slur.attributes.get("type").map(String::as_str) {
+                            Some("start") => {
+                                slurs.entry(number).or_insert(index);
+                            }
+                            Some("stop") => {
+                                if let Some(start) = slurs.remove(&number) {
+                                    spans.push((start, index));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    spans.extend(
+        ties.into_values()
+            .chain(slurs.into_values())
+            .map(|start| (start, part.measures.len() - 1)),
+    );
+    // A relationship touching a real chord tone also reserves its single-note continuations.
+    loop {
+        let mut changed = false;
+        for &(start, end) in &spans {
+            if required[start..=end].iter().any(|needed| *needed) {
+                for needed in &mut required[start..=end] {
+                    changed |= !*needed;
+                    *needed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    required
+}
+
+fn allocation_plan(part: &Part, mode: &str) -> Result<Vec<AllocatedLane>> {
+    let slots = split_lanes(part, mode)?;
+    let mut lanes: Vec<_> = slots
+        .iter()
+        .map(|slot| AllocatedLane {
+            slot: slot.clone(),
+            shared_voices: Vec::new(),
+            required: if mode == "chords" && slot.tone > 0 {
+                required_measures(part, slot)
+            } else {
+                vec![true; part.measures.len()]
+            },
+        })
+        .collect();
+    if mode != "chords" {
+        return Ok(lanes);
+    }
+    let mut absorbed = HashSet::new();
+    for source in slots.iter().filter(|slot| slot.tone == 0) {
+        if slots
+            .iter()
+            .any(|slot| slot.voice == source.voice && slot.tone > 0)
+        {
+            continue;
+        }
+        let Some(layout) = voice_layout(part, &source.voice) else {
+            continue;
+        };
+        let candidates: Vec<_> = lanes
+            .iter()
+            .enumerate()
+            .filter(|(_, target)| {
+                target.slot.tone > 0
+                    && voice_cmp(&target.slot.voice, &source.voice).is_lt()
+                    && voice_layout(part, &target.slot.voice).as_ref() == Some(&layout)
+                    && part.measures.iter().enumerate().all(|(index, measure)| {
+                        !voice_present(measure, &source.voice)
+                            || (!target.required[index]
+                                && !target
+                                    .shared_voices
+                                    .iter()
+                                    .any(|voice| voice_present(measure, voice)))
+                    })
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if let [index] = candidates.as_slice() {
+            lanes[*index].shared_voices.push(source.voice.clone());
+            absorbed.insert(source.voice.as_str());
+        }
+    }
+    lanes.retain(|lane| !absorbed.contains(lane.slot.voice.as_str()));
+    Ok(lanes)
+}
+
 /// Preview the exact generated staff order and conservative, stem-based fallbacks.
 pub fn split_plan(part: &Part, mode: &str) -> Result<Vec<SplitLane>> {
-    let mut lanes = split_lanes(part, mode)?;
+    let mut lanes: Vec<_> = allocation_plan(part, mode)?
+        .into_iter()
+        .map(|lane| lane.slot)
+        .collect();
     let mut stems: HashMap<&str, HashSet<String>> = HashMap::new();
     let present: Vec<HashSet<&str>> = part
         .measures
@@ -308,13 +485,22 @@ fn assign(assignments: &mut Assignments, note: &Element, lane: usize) {
 
 fn lane_measure(
     measure: &Measure,
-    slot: &SplitLane,
+    allocation: &AllocatedLane,
     mode: &str,
     assignments: &mut Assignments,
     lane: usize,
     configured: bool,
 ) -> Result<(Vec<Event>, Vec<TimedElement>)> {
-    let voice = if measure.events.iter().any(|event| event.voice == slot.voice) {
+    let slot = &allocation.slot;
+    let shared_voice = allocation
+        .shared_voices
+        .iter()
+        .find(|voice| voice_present(measure, voice));
+    let shared = !configured && shared_voice.is_none();
+    let tone = if shared_voice.is_some() { 0 } else { slot.tone };
+    let voice = if let Some(voice) = shared_voice {
+        Some(voice.as_str())
+    } else if measure.events.iter().any(|event| event.voice == slot.voice) {
         Some(slot.voice.as_str())
     } else if configured {
         slot.fallback_voice
@@ -325,10 +511,10 @@ fn lane_measure(
     };
     let mut result = Vec::new();
     let mut errors = Vec::new();
-    for (start, end, index) in segments(measure, voice, !configured) {
+    for (start, end, index) in segments(measure, voice, shared) {
         let source = index.map(|index| &measure.events[index]);
         let selected_notes = match source {
-            Some(event) => match notes(event, slot.tone, mode, measure) {
+            Some(event) => match notes(event, tone, mode, measure) {
                 Ok(notes) => notes,
                 Err(error) => {
                     errors.push(error);
@@ -413,10 +599,10 @@ fn lane_measure(
             })
             .map(|e| e.voice.as_str())
             .collect();
-        if Some(source.voice.as_str()) != voice && (configured || occupied.len() != 1) {
+        if Some(source.voice.as_str()) != voice && (!shared || occupied.len() != 1) {
             continue;
         }
-        let selected = match notes(source, slot.tone, mode, measure) {
+        let selected = match notes(source, tone, mode, measure) {
             Ok(notes) => notes,
             Err(error) => {
                 errors.push(error);
@@ -457,8 +643,7 @@ fn lane_measure(
                 .map(|e| e.voice.as_str())
                 .collect();
             if Some(source_voice.as_str()) != voice
-                && (configured
-                    || !(occupied.len() == 1 && occupied.contains(source_voice.as_str())))
+                && !(shared && occupied.len() == 1 && occupied.contains(source_voice.as_str()))
             {
                 continue;
             }
@@ -739,13 +924,13 @@ fn repair_fallback_relationships(
 fn check_relationships(
     part: &Part,
     assignments: &Assignments,
-    slots: &[(&str, usize)],
+    slots: &[AllocatedLane],
     configured: bool,
 ) -> Result<()> {
     let mut ties = HashMap::new();
     let mut slurs = HashMap::new();
     let mut errors = Vec::new();
-    for measure in &part.measures {
+    for (measure_index, measure) in part.measures.iter().enumerate() {
         let mut events: Vec<_> = measure.events.iter().collect();
         events.sort_by(|a, b| a.start.cmp(&b.start));
         for event in events {
@@ -796,7 +981,7 @@ fn check_relationships(
                         // Shared lanes may join or leave; native chord lanes must stay assigned.
                         previous
                             .symmetric_difference(&lanes)
-                            .any(|lane| slots[*lane - 1].0 == event.voice)
+                            .any(|lane| slots[*lane - 1].native(&event.voice, measure_index))
                     })
                 {
                     errors.push(ScoreError::new(format!(
@@ -820,13 +1005,16 @@ fn check_relationships(
                         let kind = slur.attributes.get("type").map(String::as_str);
                         if kind == Some("stop")
                             && slurs.remove(&key).is_some_and(|previous: BTreeSet<usize>| {
-                                if configured {
-                                    previous
-                                        .symmetric_difference(&lanes)
-                                        .any(|lane| slots[*lane - 1].0 == event.voice)
-                                } else {
-                                    previous != lanes
-                                }
+                                previous.symmetric_difference(&lanes).any(|lane| {
+                                    let slot = &slots[*lane - 1];
+                                    if configured {
+                                        slot.native(&event.voice, measure_index)
+                                    } else {
+                                        slot.shared_voices.is_empty()
+                                            || slot.slot.voice != event.voice
+                                            || slot.native(&event.voice, measure_index)
+                                    }
+                                })
                             })
                         {
                             errors.push(ScoreError::new(format!(
@@ -922,7 +1110,8 @@ pub fn split_score(score: &Score, mode: &str, selected: Option<&[String]>) -> Re
 }
 
 /// Split using explicit measure-level fallback choices instead of legacy voice sharing.
-/// Supply exactly one choice per preview lane in every selected part; `None` means silence.
+/// Supply exactly one choice per preview lane in every selected part.
+/// `None` means silence when all native sources for the staff are absent.
 pub fn split_score_with_fallbacks(
     score: &Score,
     mode: &str,
@@ -958,7 +1147,7 @@ fn split_score_inner(
     let mut plans = HashMap::new();
     for part in &score.parts {
         if selected.is_none_or(|ids| ids.iter().any(|id| id == part.id())) {
-            plans.insert(part.id(), split_lanes(part, mode)?);
+            plans.insert(part.id(), allocation_plan(part, mode)?);
         }
     }
     if let Some(fallbacks) = fallbacks {
@@ -971,11 +1160,21 @@ fn split_score_inner(
             let slots = plans.get_mut(choice.part_id.as_str()).ok_or_else(|| {
                 ScoreError::new("Fallback setting refers to an unknown or unselected part")
             })?;
-            let voices: HashSet<_> = slots.iter().map(|slot| slot.voice.clone()).collect();
+            let part = score
+                .parts
+                .iter()
+                .find(|part| part.id() == choice.part_id)
+                .unwrap();
+            let voices: HashSet<_> = part
+                .measures
+                .iter()
+                .flat_map(|measure| &measure.events)
+                .map(|event| event.voice.as_str())
+                .collect();
             if choice
                 .fallback_voice
                 .as_ref()
-                .is_some_and(|voice| voice == &choice.voice || !voices.contains(voice))
+                .is_some_and(|voice| voice == &choice.voice || !voices.contains(voice.as_str()))
             {
                 return Err(ScoreError::new(
                     "Fallback voice must be another source voice in the part",
@@ -983,9 +1182,9 @@ fn split_score_inner(
             }
             let slot = slots
                 .iter_mut()
-                .find(|slot| slot.voice == choice.voice && slot.tone == choice.tone)
+                .find(|lane| lane.slot.voice == choice.voice && lane.slot.tone == choice.tone)
                 .ok_or_else(|| ScoreError::new("Unknown fallback lane"))?;
-            slot.fallback_voice = choice.fallback_voice.clone();
+            slot.slot.fallback_voice = choice.fallback_voice.clone();
         }
         if plans.values().map(Vec::len).sum::<usize>() != seen.len() {
             return Err(ScoreError::new("Missing fallback lane settings"));
@@ -1059,6 +1258,12 @@ fn split_score_inner(
             if failed {
                 continue;
             }
+            if !slot.shared_voices.is_empty() {
+                // Optional unison copies can lose an endpoint when another native voice takes over.
+                if let Err(error) = repair_fallback_relationships(&mut measures, None) {
+                    errors.push(error);
+                }
+            }
             let shared_slur = match connect_shared_voices(part, &mut measures, fallbacks.is_some())
             {
                 Ok(number) => number,
@@ -1086,13 +1291,7 @@ fn split_score_inner(
             copy_ids(&mut definition, &mut derived, &new_id, &mut used);
             copies.push((definition, derived));
         }
-        let native_slots: Vec<_> = slots
-            .iter()
-            .map(|slot| (slot.voice.as_str(), slot.tone))
-            .collect();
-        if let Err(error) =
-            check_relationships(part, &assignments, &native_slots, fallbacks.is_some())
-        {
+        if let Err(error) = check_relationships(part, &assignments, slots, fallbacks.is_some()) {
             errors.push(error);
         }
         replacements.insert(part.id().to_owned(), copies);

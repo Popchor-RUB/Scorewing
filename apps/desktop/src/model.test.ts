@@ -38,7 +38,8 @@ test("split serializes every lane and retains explicit None per document and mod
     { voice: "2", tone: 0, fallback_voice: null },
     { voice: "3", tone: 0, fallback_voice: "2" },
   ];
-  const score: Part[] = [{ ...parts[0], split_plans: { voices: lanes, chords: [...lanes, { voice: "2", tone: 1, fallback_voice: null }] } }];
+  const chordLanes = [lanes[0], lanes[1], { voice: "2", tone: 1, fallback_voice: null }];
+  const score: Part[] = [{ ...parts[0], split_plans: { voices: lanes, chords: chordLanes } }];
   const state = newArrangement();
   state.mode = "voices";
   state.selected.add("P1");
@@ -47,13 +48,13 @@ test("split serializes every lane and retains explicit None per document and mod
   state.selected.clear();
   state.mode = "chords";
   assert.equal(fallbackVoice(state, "P1", lanes[2]), "2");
-  setFallbackVoice(state, "P1", lanes[2], "1");
+  setFallbackVoice(state, "P1", chordLanes[2], "3");
   state.selected.add("P1");
   const chordRequest = operation(state, score);
   assert.equal(chordRequest.kind, "split");
   if (chordRequest.kind !== "split") return;
-  assert.equal(chordRequest.fallbacks.length, 4);
-  assert.equal(chordRequest.fallbacks[2].fallback_voice, "1");
+  assert.equal(chordRequest.fallbacks.length, 3);
+  assert.deepEqual(chordRequest.fallbacks[2], { part_id: "P1", voice: "2", tone: 1, fallback_voice: "3" });
   state.mode = "voices";
   assert.deepEqual(operation(state, score), {
     kind: "split",

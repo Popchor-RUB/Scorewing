@@ -462,6 +462,8 @@ h3 {
 }
 .merge-group li {
   display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
@@ -475,6 +477,12 @@ h3 {
 .reorder {
   display: flex;
   gap: 5px;
+}
+.merge-stem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 .reorder button {
   padding: 2px 8px;

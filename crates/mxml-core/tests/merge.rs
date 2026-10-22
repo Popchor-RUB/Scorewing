@@ -1,7 +1,7 @@
 mod common;
 use common::*;
 use mxml_core::{
-    merge::merge_score,
+    merge::{merge_score, merge_score_with_stems},
     model::{frac, parse_score, Score},
 };
 use std::collections::HashSet;
@@ -86,6 +86,143 @@ fn invalid_groups_rejected_by_backend() {
         let error = merge_score(&input, &groups).unwrap_err().to_string();
         assert!(error.contains(expected), "{error}");
     }
+}
+
+#[test]
+fn explicit_stems_deduplicate_matching_chord_tones_after_divergence() {
+    let input = score(&[
+        ("S", vec![n("C").xml() + &n("E").xml() + &n("F").xml()]),
+        ("A", vec![n("D").xml() + &n("E").extra("<notations><articulations><accent/></articulations></notations><lyric><text>word</text></lyric>").xml()
+            + &n("G").xml() + &n("F").chord().xml()]),
+    ]);
+    let groups = groups(&[&["P1", "P2"]]);
+    for stem in ["up", "down"] {
+        let output =
+            merge_score_with_stems(&input, &groups, &[vec![stem.into(), stem.into()]]).unwrap();
+        mxml_core::validate_score(&output).unwrap();
+        let output = parse_score(output).unwrap();
+        let events = &output.parts[0].measures[0].events;
+        assert_eq!(
+            event_notes(events),
+            [
+                ("1", "C".into(), stem.into()),
+                ("1", "E".into(), stem.into()),
+                ("1", "F".into(), stem.into()),
+                ("2", "D".into(), stem.into()),
+                ("2", "G".into(), stem.into()),
+            ]
+        );
+        let shared = &events
+            .iter()
+            .find(|e| e.start == frac(1) && e.voice == "1")
+            .unwrap()
+            .notes[0];
+        assert_eq!(text(shared, "lyric/text"), "word");
+        assert!(shared
+            .get_child("notations")
+            .unwrap()
+            .get_child("articulations")
+            .unwrap()
+            .get_child("accent")
+            .is_some());
+        let remaining = events
+            .iter()
+            .find(|e| e.start == frac(2) && e.voice == "2")
+            .unwrap();
+        assert!(remaining.notes[0].get_child("chord").is_none());
+    }
+    let opposite = parse_score(
+        merge_score_with_stems(&input, &groups, &[vec!["down".into(), "up".into()]]).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        opposite.parts[0].measures[0]
+            .events
+            .iter()
+            .map(|e| e.notes.len())
+            .sum::<usize>(),
+        7
+    );
+}
+
+#[test]
+fn stem_settings_require_one_valid_direction_for_each_source() {
+    let input = score(&[("S", vec![n("C").xml()]), ("A", vec![n("D").xml()])]);
+    for stems in [
+        vec![],
+        vec![vec!["up".into()]],
+        vec![vec!["up".into(), "sideways".into()]],
+        vec![vec!["up".into(), "down".into()], vec![]],
+    ] {
+        assert!(
+            merge_score_with_stems(&input, &groups(&[&["P1", "P2"]]), &stems)
+                .unwrap_err()
+                .to_string()
+                .contains("stem direction")
+        );
+    }
+}
+
+#[test]
+fn same_stems_keep_distinct_rhythms_ties_pitches_and_grace_repetitions() {
+    let different_notes = [
+        (
+            n("C").duration(2).kind("half").xml(),
+            n("C").xml() + &n("D").xml(),
+        ),
+        (
+            n("C")
+                .xml()
+                .replace("<voice>", "<tie type=\"start\"/><voice>"),
+            n("C").xml(),
+        ),
+        (
+            n("C")
+                .extra("<notations><tied type=\"start\"/></notations>")
+                .xml(),
+            n("C").xml(),
+        ),
+        (
+            n("C").xml().replace("<octave>", "<alter>1</alter><octave>"),
+            n("D")
+                .xml()
+                .replace("<octave>", "<alter>-1</alter><octave>"),
+        ),
+    ];
+    for (upper, lower) in different_notes {
+        let input = score(&[("S", vec![upper]), ("A", vec![lower])]);
+        let output = merge_score_with_stems(
+            &input,
+            &groups(&[&["P1", "P2"]]),
+            &[vec!["up".into(), "up".into()]],
+        )
+        .unwrap();
+        mxml_core::validate_score(&output).unwrap();
+        assert!(parse_score(output).unwrap().parts[0].measures[0]
+            .events
+            .iter()
+            .any(|e| e.voice == "2"));
+    }
+    let graces = n("D").grace().xml() + &n("D").grace().xml();
+    let input = score(&[
+        ("S", vec![graces.clone() + &n("C").xml()]),
+        ("A", vec![graces + &n("E").xml()]),
+    ]);
+    let output = merge_score_with_stems(
+        &input,
+        &groups(&[&["P1", "P2"]]),
+        &[vec!["up".into(), "up".into()]],
+    )
+    .unwrap();
+    mxml_core::validate_score(&output).unwrap();
+    let output = parse_score(output).unwrap();
+    let graces: Vec<_> = output.parts[0].measures[0]
+        .events
+        .iter()
+        .filter(|e| e.grace())
+        .collect();
+    assert_eq!(graces.len(), 2);
+    assert!(graces.iter().all(|e| e.voice == "1"));
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use mxml_core::{
-    check_output, merge_score, read_score_bytes, split_plan, split_score_with_fallbacks,
+    check_output, merge_score_with_stems, read_score_bytes, split_plan, split_score_with_fallbacks,
     validate_score, write_score, Part, SplitFallback, SplitResult, EXTENSIONS, MAX_XML_BYTES,
 };
 use serde::{Deserialize, Serialize};
@@ -80,6 +80,7 @@ enum Operation {
     },
     Merge {
         groups: Vec<Vec<String>>,
+        stems: Vec<Vec<String>>,
     },
 }
 
@@ -306,10 +307,12 @@ fn prepare_export(
                 })
                 .collect::<Vec<_>>(),
         ),
-        Operation::Merge { groups } => merge_score(&score, &groups).map(|root| SplitResult {
-            root,
-            warnings: Vec::new(),
-        }),
+        Operation::Merge { groups, stems } => {
+            merge_score_with_stems(&score, &groups, &stems).map(|root| SplitResult {
+                root,
+                warnings: Vec::new(),
+            })
+        }
     }
     .map_err(|error| error.to_string())?;
     validate_score(&transformed.root).map_err(|error| error.to_string())?;
@@ -470,6 +473,45 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("Unknown part ID"), "{error}");
+    }
+
+    #[test]
+    fn merge_export_uses_stem_selections_and_removes_same_stem_unisons() {
+        let source = br#"<score-partwise version="4.0"><part-list><score-part id="P1"><part-name>S</part-name></score-part><score-part id="P2"><part-name>A</part-name></score-part></part-list><part id="P1"><measure number="1"><attributes><divisions>1</divisions></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type></note><note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type></note></measure></part><part id="P2"><measure number="1"><attributes><divisions>1</divisions></attributes><note><pitch><step>D</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type></note><note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type></note></measure></part></score-partwise>"#;
+        let request = |stems| Operation::Merge {
+            groups: vec![vec!["P1".into(), "P2".into()]],
+            stems,
+        };
+        let result = prepare_export(
+            source,
+            "score.xml",
+            request(vec![vec!["down".into(), "down".into()]]),
+        )
+        .unwrap();
+        let score = mxml_core::parse_score(result.root).unwrap();
+        let events = &score.parts[0].measures[0].events;
+        assert_eq!(events.len(), 3);
+        assert!(events
+            .iter()
+            .flat_map(|e| &e.notes)
+            .all(|n| mxml_core::xml::child_text(n, "stem").as_deref() == Some("down")));
+        assert_eq!(
+            events
+                .iter()
+                .find(|e| e.start == mxml_core::frac(1))
+                .unwrap()
+                .voice,
+            "1"
+        );
+        for stems in [
+            vec![],
+            vec![vec!["up".into()]],
+            vec![vec!["up".into(), "invalid".into()]],
+        ] {
+            assert!(prepare_export(source, "score.xml", request(stems))
+                .unwrap_err()
+                .contains("stem direction"));
+        }
     }
 
     #[test]

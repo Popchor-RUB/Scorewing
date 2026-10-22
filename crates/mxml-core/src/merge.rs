@@ -348,6 +348,7 @@ fn lyric_lines(parts: &[&Part]) -> LyricLines {
 fn prepare(
     events: &mut [Event],
     source: usize,
+    stem: &str,
     lines: &LyricLines,
     relationships: &Relationships,
     default_instrument: Option<&str>,
@@ -377,8 +378,7 @@ fn prepare(
             if stemless {
                 remove_children(note, &["stem"]);
             } else if child_text(note, "stem").as_deref() != Some("none") {
-                let odd = event.voice.parse::<usize>().unwrap_or(1) % 2 == 1;
-                set_child(note, "stem", if odd { "up" } else { "down" });
+                set_child(note, "stem", stem);
             }
         }
     }
@@ -905,6 +905,55 @@ fn merge_events(
             .then_with(|| b.grace().cmp(&a.grace()))
     });
     check_errors(errors)?;
+    deduplicate_notes(result)
+}
+
+fn deduplicate_notes(events: Vec<Event>) -> Result<Vec<Event>> {
+    let mut result: Vec<Event> = Vec::new();
+    let mut seen: HashMap<_, (usize, usize)> = HashMap::new();
+    let mut grace_counts = HashMap::new();
+    for mut event in events {
+        let ordinal = if event.grace() {
+            let count = grace_counts
+                .entry((event.start.clone(), event.voice.clone()))
+                .or_insert(0_usize);
+            let ordinal = *count;
+            *count += 1;
+            ordinal
+        } else {
+            0
+        };
+        for note in std::mem::take(&mut event.notes) {
+            let stem = child_text(&note, "stem");
+            if note.get_child("rest").is_some() || !matches!(stem.as_deref(), Some("up" | "down")) {
+                event.notes.push(note);
+                continue;
+            }
+            let key = (
+                event.start.clone(),
+                event.duration.clone(),
+                event.grace(),
+                ordinal,
+                pitch(&note)?,
+                tie_state(&note),
+                stem,
+            );
+            if let Some(&(event_index, note_index)) = seen.get(&key) {
+                let target = if event_index == result.len() {
+                    &mut event.notes[note_index]
+                } else {
+                    &mut result[event_index].notes[note_index]
+                };
+                combine_note(target, &note);
+            } else {
+                seen.insert(key, (result.len(), event.notes.len()));
+                event.notes.push(note);
+            }
+        }
+        if !event.notes.is_empty() {
+            result.push(event);
+        }
+    }
     Ok(result)
 }
 
@@ -927,6 +976,35 @@ fn collect_retained_ids(element: &Element, replaced: &HashSet<&str>, used: &mut 
 
 /// Merge disjoint groups of stable part IDs; group order controls voice order.
 pub fn merge_score(score: &Score, groups: &[Vec<String>]) -> Result<Element> {
+    let stems: Vec<Vec<String>> = groups
+        .iter()
+        .map(|group| {
+            (0..group.len())
+                .map(|index| if index % 2 == 0 { "up" } else { "down" }.into())
+                .collect()
+        })
+        .collect();
+    merge_score_with_stems(score, groups, &stems)
+}
+
+/// Merge with one explicit up/down stem direction per source, in group voice order.
+pub fn merge_score_with_stems(
+    score: &Score,
+    groups: &[Vec<String>],
+    stems: &[Vec<String>],
+) -> Result<Element> {
+    if stems.len() != groups.len()
+        || groups.iter().zip(stems).any(|(group, stems)| {
+            group.len() != stems.len()
+                || stems
+                    .iter()
+                    .any(|stem| !["up", "down"].contains(&stem.as_str()))
+        })
+    {
+        return Err(ScoreError::new(
+            "Each merge source requires an up or down stem direction",
+        ));
+    }
     let groups = select_groups(score, groups)?;
     let replaced: HashSet<_> = groups
         .iter()
@@ -937,7 +1015,7 @@ pub fn merge_score(score: &Score, groups: &[Vec<String>]) -> Result<Element> {
     collect_retained_ids(&score.root, &replaced, &mut used_ids);
     let mut replacements = HashMap::new();
     let mut errors = Vec::new();
-    for indices in groups {
+    for (indices, stems) in groups.into_iter().zip(stems) {
         let parts: Vec<_> = indices.iter().map(|i| &score.parts[*i]).collect();
         if parts
             .iter()
@@ -1030,7 +1108,14 @@ pub fn merge_score(score: &Score, groups: &[Vec<String>]) -> Result<Element> {
                     .get_child("score-instrument")
                     .and_then(|i| i.attributes.get("id"))
                     .map(String::as_str);
-                prepare(stream, source, &lines, relationships, instrument);
+                prepare(
+                    stream,
+                    source,
+                    &stems[source],
+                    &lines,
+                    relationships,
+                    instrument,
+                );
             }
             let events = match merge_events(&streams, &measures[0].length, &measures) {
                 Ok(events) => events,

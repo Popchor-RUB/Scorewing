@@ -24,6 +24,8 @@ export interface Inspection {
   error: string | null;
 }
 
+export type StemDirection = "up" | "down";
+
 export type Operation =
   | {
       kind: "split";
@@ -31,13 +33,14 @@ export type Operation =
       mode: "chords" | "voices";
       fallbacks: SplitFallback[];
     }
-  | { kind: "merge"; groups: string[][] };
+  | { kind: "merge"; groups: string[][]; stems: StemDirection[][] };
 
 export interface Arrangement {
   kind: "split" | "merge";
   mode: "chords" | "voices";
   selected: Set<string>;
   groups: string[][];
+  stems: Map<string, StemDirection>;
   fallbacks: Record<"chords" | "voices", Map<string, string | null>>;
 }
 
@@ -47,8 +50,17 @@ export function newArrangement(): Arrangement {
     mode: "chords",
     selected: new Set(),
     groups: [],
+    stems: new Map(),
     fallbacks: { chords: new Map(), voices: new Map() },
   };
+}
+
+export function stemDirection(
+  arrangement: Arrangement,
+  part: string,
+  index: number,
+): StemDirection {
+  return arrangement.stems.get(part) ?? (index % 2 === 0 ? "up" : "down");
 }
 
 export function fallbackVoice(
@@ -133,5 +145,8 @@ export function operation(arrangement: Arrangement, parts: Part[]): Operation {
   return {
     kind: "merge",
     groups: arrangement.groups.map((group) => [...group]),
+    stems: arrangement.groups.map((group) =>
+      group.map((id, index) => stemDirection(arrangement, id, index)),
+    ),
   };
 }

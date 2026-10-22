@@ -6,7 +6,7 @@ Builds produce the `voiceweaver` CLI and `voiceweaver-desktop` executable, with 
 
 Open or drop `.mxml`, `.musicxml`, `.xml`, or compressed `.mxl` scores. Select a queued file to see its instruments, then choose **Merge** or **Split** and export a new score. Files are independent; merging across files is not supported.
 
-- **Merge:** create disjoint groups of at least two instruments and order their voices.
+- **Merge:** create disjoint groups of at least two instruments, order their voices, and choose each voice’s up/down stem direction. Matching notes with the same stem direction, onset, duration, and tie state collapse into the earliest voice, combining lyrics and markings.
 - **Split:** select instruments and separate chord tones or explicit voices. Originals remain, with derived staves inserted immediately below them. Each selected instrument previews its additional staves and offers a fallback voice for each one.
 - Export one operation at a time. Open an exported file to continue arranging it.
 

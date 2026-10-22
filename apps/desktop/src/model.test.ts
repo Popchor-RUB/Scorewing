@@ -87,6 +87,27 @@ test("merge groups are disjoint, ordered, and require two parts", () => {
       ["P2", "P1"],
       ["P3", "P4"],
     ],
+    stems: [["up", "down"], ["up", "down"]],
+  });
+});
+
+test("merge stem choices follow instruments across reordering and stay per document", () => {
+  const state = newArrangement();
+  state.kind = "merge";
+  state.groups = [["P1", "P2"]];
+  state.stems.set("P2", "up");
+  assert.deepEqual(operation(state, parts), {
+    kind: "merge", groups: [["P1", "P2"]], stems: [["up", "up"]],
+  });
+  movePart(state.groups[0], 1, -1);
+  assert.deepEqual(operation(state, parts), {
+    kind: "merge", groups: [["P2", "P1"]], stems: [["up", "down"]],
+  });
+  const other = newArrangement();
+  other.kind = "merge";
+  other.groups = [["P1", "P2"]];
+  assert.deepEqual(operation(other, parts), {
+    kind: "merge", groups: [["P1", "P2"]], stems: [["up", "down"]],
   });
 });
 

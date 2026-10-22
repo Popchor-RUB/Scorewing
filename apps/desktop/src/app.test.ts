@@ -249,14 +249,25 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   await check("P4");
   await click('[data-action="add-group"]');
   assert.equal(document.querySelectorAll(".merge-group").length, 2);
+  assert.equal((document.querySelector('select[data-stem-part="P1"]') as unknown as HTMLSelectElement).value, "down");
+  await choose('select[data-stem-part="P1"]', "up");
+  await choose('select[data-stem-part="P3"]', "down");
+  await click('[data-action="up"][data-group="1"][data-index="1"]');
+  assert.equal((document.querySelector('select[data-stem-part="P3"]') as unknown as HTMLSelectElement).value, "down");
   cancelled = false;
+  holdExport = true;
   await click('[data-action="export"]');
+  assert.ok((document.querySelector('select[data-stem-part="P1"]') as unknown as HTMLSelectElement).disabled);
+  finishExport!();
+  holdExport = false;
+  await settle();
   assert.deepEqual(exported.at(-1)?.operation, {
     kind: "merge",
     groups: [
       ["P2", "P1"],
-      ["P3", "P4"],
+      ["P4", "P3"],
     ],
+    stems: [["up", "up"], ["up", "down"]],
   });
   assert.match(document.querySelector(".status")!.textContent, /Exported/);
   await click('[data-action="open"]');

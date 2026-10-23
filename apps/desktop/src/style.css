@@ -1,3 +1,6 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+
 :root {
   font-family:
     Inter,
@@ -18,12 +21,12 @@
 body {
   margin: 0;
 }
-button,
+button:not(.button),
 input,
 select {
   font: inherit;
 }
-button {
+button:not(.button) {
   border: 1px solid #ccd6ce;
   border-radius: 7px;
   background: #fff;
@@ -32,17 +35,17 @@ button {
   cursor: pointer;
   font-weight: 600;
 }
-button:hover:not(:disabled) {
+button:not(.button):hover:not(:disabled) {
   background: #eaf0e9;
   border-color: #7b9687;
 }
-button:disabled,
+button:not(.button):disabled,
 input:disabled,
 select:disabled {
   opacity: 0.45;
   cursor: default;
 }
-button:focus-visible,
+button:not(.button):focus-visible,
 input:focus-visible,
 select:focus-visible {
   outline: 3px solid #8ebaa5;
@@ -534,6 +537,11 @@ h3 {
   overflow-wrap: anywhere;
   white-space: pre-line;
 }
+.heroui-smoke {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 38px;
+}
 .error-text {
   color: #a34232 !important;
 }
@@ -645,7 +653,7 @@ h3 {
   }
 }
 @media (prefers-reduced-motion: no-preference) {
-  button {
+  button:not(.button) {
     transition:
       background 0.12s,
       border-color 0.12s;

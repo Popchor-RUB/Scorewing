@@ -43,6 +43,16 @@ tools/devcontainer.sh run bash -c 'cd apps/desktop && npm ci && npm test && npm 
 
 See [setup](docs/SETUP.md) for VS Code, GUI sessions, build artifacts, and container troubleshooting.
 
+The desktop frontend uses npm, Vite, TypeScript, React 19, Tailwind CSS v4, and HeroUI v3. Start the Vite dev server at `http://localhost:1420` with:
+
+```sh
+cd apps/desktop
+npm ci
+npm run dev
+```
+
+Run `npm run tauri dev` instead to open the native desktop app with its Rust backend (requires the platform prerequisites in the setup guide). The browser preview can exercise the HeroUI button; score operations require Tauri. The visible **Test HeroUI** button changes to **HeroUI works** when pressed. Its React mount sits alongside the existing score editor. Styles load through `src/main.ts` → `src/style.css`, which imports Tailwind before HeroUI; no provider is needed.
+
 For local release builds, run `tools/build-linux.sh`, `tools/build-macos.sh`, or `powershell -File tools/build-windows.ps1`. These scripts report missing prerequisites and never install dependencies. Linux prefers the prepared devcontainer; macOS and Windows build natively. The macOS script ad-hoc signs the app and installs it in `/Applications`. See [local compilation prerequisites](docs/SETUP.md#local-compilation-without-installing-dependencies).
 
 ## CLI

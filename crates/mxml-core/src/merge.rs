@@ -905,14 +905,28 @@ fn merge_events(
             .then_with(|| b.grace().cmp(&a.grace()))
     });
     check_errors(errors)?;
-    deduplicate_notes(result)
+    deduplicate_notes(result, streams.len())
 }
 
-fn deduplicate_notes(events: Vec<Event>) -> Result<Vec<Event>> {
+fn deduplicate_notes(events: Vec<Event>, voice_count: usize) -> Result<Vec<Event>> {
+    let mut rest_counts = HashMap::<_, usize>::new();
+    for event in events.iter().filter(|event| {
+        !event.grace()
+            && event
+                .notes
+                .iter()
+                .all(|note| note.get_child("rest").is_some())
+    }) {
+        *rest_counts
+            .entry((event.start.clone(), event.duration.clone()))
+            .or_default() += 1;
+    }
     let mut result: Vec<Event> = Vec::new();
     let mut seen: HashMap<_, (usize, usize)> = HashMap::new();
     let mut grace_counts = HashMap::new();
     for mut event in events {
+        let common_rest =
+            rest_counts.get(&(event.start.clone(), event.duration.clone())) == Some(&voice_count);
         let ordinal = if event.grace() {
             let count = grace_counts
                 .entry((event.start.clone(), event.voice.clone()))
@@ -925,7 +939,8 @@ fn deduplicate_notes(events: Vec<Event>) -> Result<Vec<Event>> {
         };
         for note in std::mem::take(&mut event.notes) {
             let stem = child_text(&note, "stem");
-            if note.get_child("rest").is_some() || !matches!(stem.as_deref(), Some("up" | "down")) {
+            let rest = note.get_child("rest").is_some();
+            if rest && !common_rest || !rest && !matches!(stem.as_deref(), Some("up" | "down")) {
                 event.notes.push(note);
                 continue;
             }

@@ -330,6 +330,89 @@ fn three_sources_stems_and_common_rests() {
 }
 
 #[test]
+fn common_rests_after_divergence_only_appear_in_voice_one() {
+    let rest = n("C").rest().xml();
+    let marked_rest = n("C")
+        .rest()
+        .extra("<notations><fermata/></notations>")
+        .xml();
+    let input = score(&[
+        ("S", vec![n("C").xml() + &rest + &n("C").xml() + &rest]),
+        (
+            "A",
+            vec![n("D").xml() + &marked_rest + &n("D").xml() + &rest],
+        ),
+        ("T", vec![n("E").xml() + &rest + &n("E").xml() + &rest]),
+    ]);
+    for group in [vec!["P1", "P2"], vec!["P3", "P2", "P1"]] {
+        let output = merge_score(&input, &groups(&[&group])).unwrap();
+        mxml_core::validate_score(&output).unwrap();
+        let result = parse_score(output).unwrap();
+        let measure = &result.parts[0].measures[0];
+        let rests: Vec<_> = measure
+            .events
+            .iter()
+            .filter(|e| e.notes[0].get_child("rest").is_some())
+            .collect();
+        assert_eq!(rests.len(), 2);
+        assert!(rests
+            .iter()
+            .all(|e| e.voice == "1" && e.duration == frac(1)));
+        assert_eq!(rests[0].start, frac(1));
+        assert_eq!(rests[1].start, frac(3));
+        assert!(rests[0].notes[0]
+            .get_child("notations")
+            .unwrap()
+            .get_child("fermata")
+            .is_some());
+        for voice in 1..=group.len() {
+            let notes: Vec<_> = measure
+                .events
+                .iter()
+                .filter(|e| e.voice == voice.to_string() && e.notes[0].get_child("rest").is_none())
+                .map(|e| (e.start.clone(), e.duration.clone()))
+                .collect();
+            assert_eq!(notes, [(frac(0), frac(1)), (frac(2), frac(1))]);
+        }
+        assert_eq!(measure.length, frac(4));
+    }
+}
+
+#[test]
+fn rests_stay_separate_when_not_shared_by_every_voice_or_duration() {
+    let rest = n("C").rest().xml();
+    let input = score(&[
+        ("S", vec![n("C").xml() + &rest + &rest + &rest]),
+        (
+            "A",
+            vec![n("D").xml() + &rest + &n("C").rest().duration(2).kind("half").xml()],
+        ),
+        ("T", vec![n("E").xml() + &n("E").xml() + &rest + &rest]),
+    ]);
+    let output = merge_score(&input, &groups(&[&["P1", "P2", "P3"]])).unwrap();
+    mxml_core::validate_score(&output).unwrap();
+    let result = parse_score(output).unwrap();
+    let rests: Vec<_> = result.parts[0].measures[0]
+        .events
+        .iter()
+        .filter(|e| e.notes[0].get_child("rest").is_some())
+        .map(|e| (e.voice.as_str(), e.start.clone(), e.duration.clone()))
+        .collect();
+    assert_eq!(
+        rests,
+        [
+            ("1", frac(1), frac(1)),
+            ("1", frac(2), frac(1)),
+            ("1", frac(3), frac(1)),
+            ("2", frac(1), frac(1)),
+            ("2", frac(2), frac(2)),
+            ("3", frac(2), frac(1)),
+            ("3", frac(3), frac(1)),
+        ]
+    );
+}
+
+#[test]
 fn flatten_chords_deduplicate_unisons_and_reject_overlapping_rhythmic_spans() {
     let chord = n("C").duration(2).kind("half").xml()
         + &backup(2)

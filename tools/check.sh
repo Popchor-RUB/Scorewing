@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-node --test tools/check-linkage.test.mjs
+node --test tools/*.test.mjs
 npm --prefix apps/desktop ci
 npm --prefix apps/desktop test
 npm --prefix apps/desktop run build

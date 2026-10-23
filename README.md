@@ -30,6 +30,8 @@ tools/devcontainer.sh run bash -c 'cd apps/desktop && npm ci && npm test && npm 
 
 See [setup](docs/SETUP.md) for VS Code, GUI sessions, build artifacts, and container troubleshooting.
 
+For local release builds, run `tools/build-linux.sh`, `tools/build-macos.sh`, or `powershell -File tools/build-windows.ps1`. These scripts report missing prerequisites and never install dependencies. Linux prefers the prepared devcontainer; macOS and Windows build natively. The macOS script ad-hoc signs the app and installs it in `/Applications`. See [local compilation prerequisites](docs/SETUP.md#local-compilation-without-installing-dependencies).
+
 ## CLI
 
 ```sh

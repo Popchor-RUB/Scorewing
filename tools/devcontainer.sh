@@ -8,6 +8,9 @@ if [[ -n "${MXML_PODMAN_RUNROOT:-}" ]]; then podman_args+=(--runroot "$MXML_PODM
 if [[ -n "${MXML_PODMAN_ROOT:-}" ]]; then podman_args+=(--root "$MXML_PODMAN_ROOT" --storage-driver vfs); fi
 
 case "${1:-shell}" in
+  ready)
+    exec podman "${podman_args[@]}" image exists "$image"
+    ;;
   build)
     ca_args=()
     if [[ -n "${CODEX_PROXY_CERT:-}" ]]; then ca_args+=(--secret "id=proxy_ca,src=$CODEX_PROXY_CERT"); fi
@@ -44,5 +47,5 @@ case "${1:-shell}" in
       "${cache_args[@]}" \
       -w /workspace "$image" "$@"
     ;;
-  *) echo 'Usage: tools/devcontainer.sh {build|shell|run COMMAND [ARG...]}' >&2; exit 2 ;;
+  *) echo 'Usage: tools/devcontainer.sh {ready|build|shell|run COMMAND [ARG...]}' >&2; exit 2 ;;
 esac

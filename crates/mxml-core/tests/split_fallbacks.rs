@@ -1,8 +1,8 @@
 mod common;
 use common::*;
 use mxml_core::{
-    frac, parse_score, split_plan, split_score, split_score_with_fallbacks, validate_score, Score,
-    SplitFallback,
+    frac, parse_score, read_score_bytes, split_plan, split_score, split_score_with_fallbacks,
+    split_score_with_options, validate_score, Score, SplitFallback, SplitOptions,
 };
 
 fn settings(score: &Score, mode: &str) -> Vec<SplitFallback> {
@@ -344,18 +344,216 @@ fn fallback_ties_cross_matching_pitches_and_mismatched_pitches_become_slurs() {
         )]);
         let mut choices = settings(&original, "voices");
         choices[1].fallback_voice = Some("1".into());
-        let result = split(&original, "voices", &choices);
+        let transformed = split_score_with_fallbacks(&original, "voices", None, &choices).unwrap();
+        assert_eq!(transformed.warnings.len(), usize::from(expected == "slur"));
+        validate_score(&transformed.root).unwrap();
+        let result = parse_score(transformed.root).unwrap();
         let lower = &result.parts[2];
         for (measure, kind) in [(0, "start"), (1, "stop")] {
-            assert!(descendants(&lower.measures[measure].events[0].notes[0])
-                .iter()
-                .any(|node| node.name == expected
-                    && node
-                        .attributes
-                        .get("type")
-                        .is_some_and(|value| value == kind)));
+            let note = &lower.measures[measure].events[0].notes[0];
+            assert_eq!(
+                note.attributes.get("color").map(String::as_str),
+                (expected == "slur").then_some("#FF0000")
+            );
+            assert!(descendants(note).iter().any(|node| node.name == expected
+                && node
+                    .attributes
+                    .get("type")
+                    .is_some_and(|value| value == kind)));
         }
     }
+}
+
+#[test]
+fn supplied_scores_mark_only_inserted_slurs_and_report_the_source_locations() {
+    for (name, source, expected) in [
+        (
+            "Test",
+            include_bytes!("fixtures/Test.mxl").as_slice(),
+            include_bytes!("fixtures/Test-arranged-expected.mxl").as_slice(),
+        ),
+        (
+            "Test2",
+            include_bytes!("fixtures/Test2.mxl").as_slice(),
+            include_bytes!("fixtures/Test2-arranged-expected.mxl").as_slice(),
+        ),
+    ] {
+        let original = read_score_bytes(source, name).unwrap();
+        let expected = read_score_bytes(expected, name).unwrap();
+        for mode in ["voices", "chords"] {
+            let mut choices = settings(&original, mode);
+            for choice in &mut choices {
+                choice.fallback_voice = (choice.voice != "1").then(|| "1".into());
+            }
+            let transformed = split_score_with_fallbacks(&original, mode, None, &choices).unwrap();
+            assert_eq!(transformed.warnings.len(), 1, "{name}, {mode}");
+            let warning = &transformed.warnings[0];
+            let source_voice = if name == "Test" { "2" } else { "3" };
+            for location in [
+                "measure 1",
+                "measure 2",
+                "voice 1",
+                "notes [E4]",
+                "notes [A4]",
+                &format!("voice {source_voice}"),
+                "inserted slur",
+            ] {
+                assert!(warning.contains(location), "{warning}: missing {location}");
+            }
+            validate_score(&transformed.root).unwrap();
+            let output = parse_score(transformed.root).unwrap();
+            assert_eq!(output.parts.len(), expected.parts.len());
+            for (part_index, (actual, expected)) in
+                output.parts.iter().zip(&expected.parts).enumerate()
+            {
+                assert_eq!(actual.measures.len(), expected.measures.len());
+                for (measure_index, (actual, expected)) in
+                    actual.measures.iter().zip(&expected.measures).enumerate()
+                {
+                    assert_eq!(actual.events.len(), expected.events.len());
+                    for (event_index, (actual, expected)) in
+                        actual.events.iter().zip(&expected.events).enumerate()
+                    {
+                        assert_eq!(
+                            (&actual.start, &actual.duration, &actual.voice),
+                            (&expected.start, &expected.duration, &expected.voice)
+                        );
+                        assert_eq!(actual.notes.len(), expected.notes.len());
+                        for (actual, expected) in actual.notes.iter().zip(&expected.notes) {
+                            for tag in ["pitch", "rest", "type", "dot"] {
+                                assert_eq!(
+                                    actual.get_child(tag),
+                                    expected.get_child(tag),
+                                    "{name}: {tag}"
+                                );
+                            }
+                            let relations = |note: &xmltree::Element| {
+                                descendants(note)
+                                    .into_iter()
+                                    .filter(|node| {
+                                        ["tie", "tied", "slur"].contains(&node.name.as_str())
+                                    })
+                                    .map(|node| {
+                                        (node.name.clone(), node.attributes.get("type").cloned())
+                                    })
+                                    .collect::<Vec<_>>()
+                            };
+                            assert_eq!(relations(actual), relations(expected), "{name}, {mode}");
+                            // The expected files establish the music; the request adds red endpoints.
+                            let red = part_index == output.parts.len() - 1 && event_index == 0;
+                            assert_eq!(
+                                actual.attributes.get("color").map(String::as_str),
+                                red.then_some("#FF0000"),
+                                "{name}, {mode}, part {part_index}, measure {measure_index}"
+                            );
+                            for slur in descendants(actual)
+                                .into_iter()
+                                .filter(|node| node.name == "slur")
+                            {
+                                assert_eq!(
+                                    slur.attributes.get("color").map(String::as_str),
+                                    Some("#FF0000")
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            assert_eq!(output.parts[0].source, original.parts[0].source);
+        }
+    }
+}
+
+#[test]
+fn disabling_fallback_slurs_preserves_ties_and_other_score_content() {
+    for source in [
+        include_bytes!("fixtures/Test.mxl").as_slice(),
+        include_bytes!("fixtures/Test2.mxl").as_slice(),
+    ] {
+        let original = read_score_bytes(source, "fallback fixture").unwrap();
+        for mode in ["voices", "chords"] {
+            let mut choices = settings(&original, mode);
+            for choice in &mut choices {
+                choice.fallback_voice = (choice.voice != "1").then(|| "1".into());
+            }
+            let mut enabled = split_score_with_fallbacks(&original, mode, None, &choices).unwrap();
+            let mut disabled = split_score_with_options(
+                &original,
+                mode,
+                None,
+                SplitOptions {
+                    fallbacks: Some(&choices),
+                    insert_fallback_slurs: false,
+                },
+            )
+            .unwrap();
+            validate_score(&disabled.root).unwrap();
+            assert!(disabled.warnings.is_empty());
+            assert!(descendants(&disabled.root).iter().all(|node| {
+                node.name != "slur" && node.attributes.get("color").is_none_or(|c| c != "#FF0000")
+            }));
+            // Removing generated red slurs must be the only musical difference.
+            for root in [&mut enabled.root, &mut disabled.root] {
+                mxml_core::xml::visit_mut(root, &mut |node| {
+                    if node.name != "note" {
+                        return;
+                    }
+                    node.attributes.remove("color");
+                    if let Some(notations) = node.get_mut_child("notations") {
+                        notations
+                            .children
+                            .retain(|child| child.as_element().is_none_or(|e| e.name != "slur"));
+                    }
+                    node.children.retain(|child| {
+                        child
+                            .as_element()
+                            .is_none_or(|e| e.name != "notations" || !e.children.is_empty())
+                    });
+                });
+            }
+            assert_eq!(disabled.root, enabled.root, "{mode}");
+        }
+    }
+}
+
+#[test]
+fn disabling_fallback_slurs_preserves_existing_slurs() {
+    let original = score(&[(
+        "S",
+        vec![
+            n("C")
+                .extra("<notations><slur type=\"start\" number=\"1\"/></notations>")
+                .xml()
+                + &backup(1)
+                + &n("E").voice("2").xml(),
+            n("D")
+                .extra("<notations><slur type=\"stop\" number=\"1\"/></notations>")
+                .xml(),
+        ],
+    )]);
+    let mut choices = settings(&original, "voices");
+    choices[1].fallback_voice = Some("1".into());
+    let enabled = split_score_with_fallbacks(&original, "voices", None, &choices).unwrap();
+    let disabled = split_score_with_options(
+        &original,
+        "voices",
+        None,
+        SplitOptions {
+            fallbacks: Some(&choices),
+            insert_fallback_slurs: false,
+        },
+    )
+    .unwrap();
+    assert!(disabled.warnings.is_empty());
+    assert_eq!(disabled.root, enabled.root);
+    let output = parse_score(disabled.root).unwrap();
+    assert_eq!(
+        descendants(&output.parts[1].source)
+            .iter()
+            .filter(|node| node.name == "slur")
+            .count(),
+        2
+    );
 }
 
 #[test]

@@ -31,6 +31,22 @@ pub struct SplitFallback {
     pub fallback_voice: Option<String>,
 }
 
+/// Split settings; defaults preserve automatic voice sharing and fallback slurs.
+pub struct SplitOptions<'a> {
+    /// Explicit measure-level choices; `None` uses legacy voice sharing.
+    pub fallbacks: Option<&'a [SplitFallback]>,
+    pub insert_fallback_slurs: bool,
+}
+
+impl Default for SplitOptions<'_> {
+    fn default() -> Self {
+        Self {
+            fallbacks: None,
+            insert_fallback_slurs: true,
+        }
+    }
+}
+
 /// A completed split, including musical ambiguities that need author review.
 #[derive(Debug)]
 pub struct SplitResult {
@@ -61,6 +77,10 @@ impl Review {
         if !self.warnings.contains(&message) {
             self.warnings.push(message);
         }
+    }
+
+    fn flag(&mut self, part: &Part, from: (usize, &Event), to: (usize, &Event), detail: &str) {
+        self.warn(part, from, to, detail);
         for voice in [&from.1.voice, &to.1.voice] {
             self.sections.push(ReviewSection {
                 voice: voice.clone(),
@@ -763,6 +783,7 @@ fn connect_shared_voices(
     part: &Part,
     measures: &mut [(Vec<Event>, Vec<TimedElement>)],
     configured: bool,
+    insert_fallback_slurs: bool,
     review: &mut Review,
 ) -> Result<Option<String>> {
     let used_slurs: HashSet<_> = measures
@@ -825,12 +846,21 @@ fn connect_shared_voices(
                         {
                             set_tie(&mut left.notes[0], "start", false);
                             set_tie(&mut event.notes[0], "stop", false);
-                            if left_pitches[0].is_some() && right_pitches[0].is_some() {
+                            if insert_fallback_slurs
+                                && left_pitches[0].is_some()
+                                && right_pitches[0].is_some()
+                            {
                                 let number = slur_number.as_ref().ok_or_else(|| {
                                     ScoreError::new(
                                         "No free slur number at a shared voice transition",
                                     )
                                 })?;
+                                review.warn(
+                                    part,
+                                    (previous_index, left),
+                                    (index, event),
+                                    "inserted slur instead of a tie at a voice transition with different pitches",
+                                );
                                 for (note, kind) in
                                     [(&mut left.notes[0], "start"), (&mut event.notes[0], "stop")]
                                 {
@@ -840,6 +870,8 @@ fn connect_shared_voices(
                                     let mut slur = Element::new("slur");
                                     slur.attributes.insert("type".into(), kind.into());
                                     slur.attributes.insert("number".into(), number.clone());
+                                    mark_review(note);
+                                    mark_review(&mut slur);
                                     append(note.get_mut_child("notations").unwrap(), slur);
                                 }
                             }
@@ -861,7 +893,7 @@ fn connect_shared_voices(
                                 has_tie(n, "stop") && !left_pitches.contains(&right_pitches[i])
                             });
                             if unmatched {
-                                review.warn(
+                                review.flag(
                                     part,
                                     (previous_index, left),
                                     (index, event),
@@ -1060,7 +1092,7 @@ fn check_relationships(
                             .symmetric_difference(&lanes)
                             .any(|lane| slots[*lane - 1].native(&event.voice, measure_index))
                         {
-                            review.warn(
+                            review.flag(
                                 part,
                                 (start_measure, start_event),
                                 (measure_index, event),
@@ -1096,7 +1128,7 @@ fn check_relationships(
                                             || slot.native(&event.voice, measure_index)
                                     }
                                 }) {
-                                    review.warn(
+                                    review.flag(
                                         part,
                                         (start_measure, start_event),
                                         (measure_index, event),
@@ -1191,7 +1223,7 @@ fn copy_ids(
 /// Retain selected originals and insert their derived lanes directly below them.
 /// `None` preserves the CLI's split-all default; selections use stable part IDs.
 pub fn split_score(score: &Score, mode: &str, selected: Option<&[String]>) -> Result<SplitResult> {
-    split_score_inner(score, mode, selected, None)
+    split_score_with_options(score, mode, selected, SplitOptions::default())
 }
 
 /// Split using explicit measure-level fallback choices instead of legacy voice sharing.
@@ -1203,15 +1235,28 @@ pub fn split_score_with_fallbacks(
     selected: Option<&[String]>,
     fallbacks: &[SplitFallback],
 ) -> Result<SplitResult> {
-    split_score_inner(score, mode, selected, Some(fallbacks))
+    split_score_with_options(
+        score,
+        mode,
+        selected,
+        SplitOptions {
+            fallbacks: Some(fallbacks),
+            ..SplitOptions::default()
+        },
+    )
 }
 
-fn split_score_inner(
+/// Split with explicit settings. Matching-pitch ties are always repaired automatically.
+pub fn split_score_with_options(
     score: &Score,
     mode: &str,
     selected: Option<&[String]>,
-    fallbacks: Option<&[SplitFallback]>,
+    options: SplitOptions<'_>,
 ) -> Result<SplitResult> {
+    let SplitOptions {
+        fallbacks,
+        insert_fallback_slurs,
+    } = options;
     if !["chords", "voices"].contains(&mode) {
         return Err(ScoreError::new("Split mode must be 'chords' or 'voices'"));
     }
@@ -1356,6 +1401,7 @@ fn split_score_inner(
                 part,
                 &mut measures,
                 fallbacks.is_some(),
+                insert_fallback_slurs,
                 &mut review,
             ) {
                 Ok(number) => number,
@@ -1409,7 +1455,7 @@ fn split_score_inner(
             }
         }
         for (mut definition, mut derived, mut measures, shared_slur, new_id) in pending {
-            if !review.warnings.is_empty() {
+            if !review.sections.is_empty() {
                 if let Err(error) = repair_fallback_relationships(
                     &mut measures,
                     shared_slur.as_deref(),

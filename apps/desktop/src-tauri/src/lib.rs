@@ -1,6 +1,7 @@
 use mxml_core::{
-    check_output, merge_score_with_stems, read_score_bytes, split_plan, split_score_with_fallbacks,
-    validate_score, write_score, Part, SplitFallback, SplitResult, EXTENSIONS, MAX_XML_BYTES,
+    check_output, merge_score_with_stems, read_score_bytes, split_plan, split_score_with_options,
+    validate_score, write_score, Part, SplitFallback, SplitOptions, SplitResult, EXTENSIONS,
+    MAX_XML_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -77,6 +78,7 @@ enum Operation {
         part_ids: Vec<String>,
         mode: SplitMode,
         fallbacks: Vec<FallbackSelection>,
+        insert_fallback_slurs: bool,
     },
     Merge {
         groups: Vec<Vec<String>>,
@@ -290,22 +292,28 @@ fn prepare_export(
             part_ids,
             mode,
             fallbacks,
-        } => split_score_with_fallbacks(
+            insert_fallback_slurs,
+        } => split_score_with_options(
             &score,
             match mode {
                 SplitMode::Chords => "chords",
                 SplitMode::Voices => "voices",
             },
             Some(&part_ids),
-            &fallbacks
-                .into_iter()
-                .map(|setting| SplitFallback {
-                    part_id: setting.part_id,
-                    voice: setting.voice,
-                    tone: setting.tone,
-                    fallback_voice: setting.fallback_voice,
-                })
-                .collect::<Vec<_>>(),
+            SplitOptions {
+                insert_fallback_slurs,
+                fallbacks: Some(
+                    &fallbacks
+                        .into_iter()
+                        .map(|setting| SplitFallback {
+                            part_id: setting.part_id,
+                            voice: setting.voice,
+                            tone: setting.tone,
+                            fallback_voice: setting.fallback_voice,
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+            },
         ),
         Operation::Merge { groups, stems } => {
             merge_score_with_stems(&score, &groups, &stems).map(|root| SplitResult {
@@ -451,6 +459,7 @@ mod tests {
     fn export_preparation_checks_transformation_and_schema() {
         let source = br#"<score-partwise version="4.0"><part-list><score-part id="P1"><part-name>Violin</part-name></score-part></part-list><part id="P1"><measure number="1"><attributes><divisions>1</divisions></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><voice>2</voice><type>quarter</type></note></measure></part></score-partwise>"#;
         let split = || Operation::Split {
+            insert_fallback_slurs: true,
             part_ids: vec!["P1".into()],
             mode: SplitMode::Chords,
             fallbacks: vec![],
@@ -467,6 +476,7 @@ mod tests {
             "score.xml",
             Operation::Split {
                 part_ids: vec!["missing".into()],
+                insert_fallback_slurs: true,
                 mode: SplitMode::Chords,
                 fallbacks: vec![],
             },
@@ -533,6 +543,7 @@ mod tests {
             Operation::Split {
                 part_ids: vec![part.id.clone()],
                 mode: SplitMode::Chords,
+                insert_fallback_slurs: true,
                 fallbacks: part
                     .split_plans
                     .chords
@@ -576,6 +587,7 @@ mod tests {
             Operation::Split {
                 part_ids: vec!["P1".into()],
                 mode: SplitMode::Chords,
+                insert_fallback_slurs: true,
                 fallbacks: split_plan(&score.parts[0], "chords")
                     .unwrap()
                     .into_iter()
@@ -604,6 +616,53 @@ mod tests {
                 .attributes
                 .get("color")
                 .is_some_and(|color| color == "#FF0000")));
+    }
+
+    #[test]
+    fn fallback_slur_warning_reaches_the_gui_export_result() {
+        let source = include_bytes!("../../../../crates/mxml-core/tests/fixtures/Test2.mxl");
+        let score = read_score_bytes(source, "Test2.mxl").unwrap();
+        for insert_fallback_slurs in [true, false] {
+            let result = prepare_export(
+                source,
+                "Test2.mxl",
+                Operation::Split {
+                    part_ids: vec!["P1".into()],
+                    mode: SplitMode::Voices,
+                    insert_fallback_slurs,
+                    fallbacks: split_plan(&score.parts[0], "voices")
+                        .unwrap()
+                        .into_iter()
+                        .map(|lane| FallbackSelection {
+                            part_id: "P1".into(),
+                            fallback_voice: (lane.voice != "1").then(|| "1".into()),
+                            voice: lane.voice,
+                            tone: lane.tone,
+                        })
+                        .collect(),
+                },
+            )
+            .unwrap();
+            assert_eq!(result.warnings.len(), usize::from(insert_fallback_slurs));
+            if !insert_fallback_slurs {
+                continue;
+            }
+            for detail in [
+                "inserted slur",
+                "measure 1",
+                "voice 3",
+                "notes [E4]",
+                "measure 2",
+                "voice 1",
+                "notes [A4]",
+            ] {
+                assert!(
+                    result.warnings[0].contains(detail),
+                    "{}",
+                    result.warnings[0]
+                );
+            }
+        }
     }
 
     #[test]
@@ -641,6 +700,7 @@ mod tests {
                 "choir.xml",
                 Operation::Split {
                     part_ids: vec![part.id.clone()],
+                    insert_fallback_slurs: true,
                     mode: SplitMode::Voices,
                     fallbacks,
                 },
@@ -711,6 +771,7 @@ mod tests {
     #[test]
     fn export_rejects_missing_and_forged_fallback_settings() {
         let request = |fallbacks| Operation::Split {
+            insert_fallback_slurs: true,
             part_ids: vec!["P1".into()],
             mode: SplitMode::Voices,
             fallbacks,

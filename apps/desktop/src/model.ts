@@ -32,6 +32,7 @@ export type Operation =
       part_ids: string[];
       mode: "chords" | "voices";
       fallbacks: SplitFallback[];
+      insert_fallback_slurs: boolean;
     }
   | { kind: "merge"; groups: string[][]; stems: StemDirection[][] };
 
@@ -42,6 +43,7 @@ export interface Arrangement {
   groups: string[][];
   stems: Map<string, StemDirection>;
   fallbacks: Record<"chords" | "voices", Map<string, string | null>>;
+  insertFallbackSlurs: boolean;
 }
 
 export function newArrangement(): Arrangement {
@@ -52,6 +54,7 @@ export function newArrangement(): Arrangement {
     groups: [],
     stems: new Map(),
     fallbacks: { chords: new Map(), voices: new Map() },
+    insertFallbackSlurs: true,
   };
 }
 
@@ -126,7 +129,10 @@ export function operation(arrangement: Arrangement, parts: Part[]): Operation {
           fallback_voice: fallbackVoice(arrangement, part.id, lane),
         })),
       );
-    return { kind: "split", part_ids, mode: arrangement.mode, fallbacks };
+    return {
+      kind: "split", part_ids, mode: arrangement.mode, fallbacks,
+      insert_fallback_slurs: arrangement.insertFallbackSlurs,
+    };
   }
   if (!arrangement.groups.length)
     throw new Error("Create at least one merge group.");

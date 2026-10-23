@@ -429,6 +429,19 @@ h3 {
   color: #8c9784;
   margin: 0;
 }
+.split-connections {
+  margin-top: 18px;
+}
+.split-connections label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.split-connections .hint {
+  margin: 8px 0 0;
+}
 .merge-options {
   display: flex;
   align-items: center;

@@ -8,7 +8,8 @@ pub use io::*;
 pub use merge::{merge_score, merge_score_with_stems};
 pub use model::*;
 pub use split::{
-    split_plan, split_score, split_score_with_fallbacks, SplitFallback, SplitLane, SplitResult,
+    split_plan, split_score, split_score_with_fallbacks, split_score_with_options, SplitFallback,
+    SplitLane, SplitOptions, SplitResult,
 };
 pub use xmltree::{Element, XMLNode};
 

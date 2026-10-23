@@ -175,6 +175,10 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   assert.equal(exported.length, 0);
   await check("P2");
   assert.match(document.querySelector(".split-preview")!.textContent, /3 additional staves/);
+  const slurToggle = () => document.querySelector("#insert-fallback-slurs") as unknown as HTMLInputElement;
+  assert.ok(slurToggle().checked);
+  assert.match(document.querySelector("#fallback-connections-hint")!.textContent, /Ties are inserted automatically to continue existing ties when pitches match/);
+  assert.equal(slurToggle().getAttribute("aria-describedby"), "fallback-connections-hint");
   assert.match(document.querySelector(".split-preview")!.textContent, /carry compatible voices/);
   assert.match(document.querySelector(".split-preview")!.textContent, /fallback is used only when the staff’s native voices are absent for the whole measure/);
   assert.match(document.querySelector('label[for="fallback-1-2"]')!.textContent, /Violin P2.*Additional staff 3.*Voice 2.*Chord tone 2.*Fallback voice/);
@@ -183,12 +187,17 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   await click('[data-action="export"]');
   assert.deepEqual(exported.at(-1)?.operation, {
     kind: "split", part_ids: ["P2"], mode: "chords",
+    insert_fallback_slurs: true,
     fallbacks: [
       { part_id: "P2", voice: "1", tone: 0, fallback_voice: null },
       { part_id: "P2", voice: "2", tone: 0, fallback_voice: null },
       { part_id: "P2", voice: "2", tone: 1, fallback_voice: "3" },
     ],
   });
+  slurToggle().focus();
+  await click("#insert-fallback-slurs");
+  assert.equal(slurToggle().checked, false);
+  assert.equal(document.activeElement?.getAttribute("id"), "insert-fallback-slurs");
   await choose("#split-mode", "voices");
   assert.match(document.querySelector(".split-preview")!.textContent, /3 additional staves/);
   const fallbackSelector = 'select[data-fallback-part="P2"][data-lane="2"]';
@@ -210,9 +219,11 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   await click('[data-action="select"][data-key="2"]');
   await click('[data-action="select"][data-key="1"]');
   assert.equal(fallbackSelect().value, "none");
+  assert.equal(slurToggle().checked, false);
   holdExport = true;
   await click('[data-action="export"]');
   assert.ok(fallbackSelect().disabled);
+  assert.ok(slurToggle().disabled);
   finishExport!();
   holdExport = false;
   await settle();
@@ -221,10 +232,11 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
     part_ids: ["P2"],
     mode: "voices",
     fallbacks: ["1", "2", "3"].map((voice) => ({ part_id: "P2", voice, tone: 0, fallback_voice: null })),
+    insert_fallback_slurs: false,
   });
   assert.match(document.querySelector(".status")!.textContent, /cancelled/);
   cancelled = false;
-  exportWarnings = ['Part "Violin", measure 1, position 0, voice 2, notes [C#4]: ambiguous tie assignment', 'Part "Violin", measure 8, position 1, voice 7, notes [Eb4]: ambiguous slur assignment'];
+  exportWarnings = ['Part "Violin", measure 1, position 0, voice 2, notes [C#4]: ambiguous tie assignment', 'Part "Violin", measure 8, position 1, voice 7, notes [Eb4]: ambiguous slur assignment', 'Part "Violin", measure 2, position 0, voice 1, notes [A4]; from Part "Violin", measure 1, position 0, voice 3, notes [E4]: inserted slur instead of a tie at a voice transition with different pitches'];
   await click('[data-action="export"]');
   assert.equal(document.querySelector(".status")!.textContent, `Exported /scores/arranged.mxl\nReview warnings — affected passages are marked red:\n${exportWarnings.join("\n")}`);
   exportWarnings = [];
@@ -234,6 +246,7 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   assert.equal((document.querySelector('[data-action="export"]') as unknown as HTMLButtonElement).disabled, false);
   exportError = undefined;
   await click('input[name="operation"][value="merge"]');
+  assert.equal(document.querySelector("#insert-fallback-slurs"), null);
   await check("P1");
   await check("P2");
   await click('[data-action="add-group"]');
@@ -276,6 +289,7 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   await check("P2");
   await choose("#split-mode", "voices");
   assert.equal(fallbackSelect().value, "voice:2", "a new file starts with its own suggestions");
+  assert.ok(slurToggle().checked, "a new file defaults to automatic slurs");
   await click('[data-action="select"][data-key="1"]');
   await click('[data-action="remove"][data-key="2"]');
   assert.deepEqual(released, ["/scores/broken.xml"]);

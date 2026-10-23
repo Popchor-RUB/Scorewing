@@ -27,9 +27,14 @@ test("split uses stable IDs in score order and refuses an empty selection", () =
     mode: "chords",
     part_ids: ["P1", "P3"],
     fallbacks: [],
+    insert_fallback_slurs: true,
   });
   state.mode = "voices";
   assert.equal((operation(state, parts) as { mode: string }).mode, "voices");
+  state.insertFallbackSlurs = false;
+  const request = operation(state, parts);
+  assert.equal(request.kind === "split" && request.insert_fallback_slurs, false);
+  assert.equal(newArrangement().insertFallbackSlurs, true);
 });
 
 test("split serializes every lane and retains explicit None per document and mode", () => {
@@ -61,6 +66,7 @@ test("split serializes every lane and retains explicit None per document and mod
     mode: "voices",
     part_ids: ["P1"],
     fallbacks: lanes.map((lane) => ({ ...lane, part_id: "P1", fallback_voice: null })),
+    insert_fallback_slurs: true,
   });
   const otherDocument = newArrangement();
   otherDocument.mode = "voices";

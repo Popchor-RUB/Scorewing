@@ -6,12 +6,26 @@ fn cli() -> Command {
 
 const SCORE: &str = r#"<score-partwise version="4.0"><work><work-title>CLI fixture</work-title></work><part-list><score-part id="P1"><part-name>Soprano</part-name></score-part><score-part id="P2"><part-name>Alto</part-name></score-part></part-list><part id="P1"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>E</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note><note><chord/><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part><part id="P2"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>A</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part></score-partwise>"#;
 
+const GROUP_SCORE: &str = r#"<score-partwise version="4.0">
+<part-list>
+<score-part id="P1"><part-name>Soprano</part-name></score-part>
+<score-part id="P2"><part-name>Alto</part-name></score-part>
+<score-part id="P3"><part-name>Tenor</part-name></score-part>
+<score-part id="P4"><part-name>Bass</part-name></score-part>
+</part-list>
+<part id="P1"><measure number="1"><attributes><divisions>1</divisions></attributes><note><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type></note></measure></part>
+<part id="P2"><measure number="1"><attributes><divisions>1</divisions></attributes><note><pitch><step>E</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type></note></measure></part>
+<part id="P3"><measure number="1"><attributes><divisions>1</divisions></attributes><note><pitch><step>G</step><octave>4</octave></pitch><duration>1</duration><type>quarter</type></note></measure></part>
+<part id="P4"><measure number="1"><attributes><divisions>1</divisions></attributes><note><pitch><step>C</step><octave>3</octave></pitch><duration>1</duration><type>quarter</type></note></measure></part>
+</score-partwise>"#;
+
 #[test]
 fn help_version_and_error_contract() {
     let help = cli().arg("--help").output().unwrap();
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("split"));
     let version = cli().arg("--version").output().unwrap();
+    assert!(version.status.success());
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
         "voiceweaver 0.1.0"
@@ -30,6 +44,7 @@ fn help_version_and_error_contract() {
     assert_eq!(result.status.code(), Some(2));
     assert!(result.stdout.is_empty());
     assert!(String::from_utf8_lossy(&result.stderr).contains("voiceweaver:"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("invalid XML"));
     assert!(!output.exists());
 }
 
@@ -89,20 +104,23 @@ fn split_merge_compressed_roundtrip_and_output_protection() {
     let split = dir.path().join("split.mxl");
     let merged = dir.path().join("merged.musicxml");
     fs::write(&input, SCORE).unwrap();
-    assert!(cli()
-        .arg("split")
-        .arg(&input)
-        .arg("-o")
-        .arg(&split)
-        .args(["--part", "Soprano"])
-        .status()
-        .unwrap()
-        .success());
-    let score = mxml_core::read_score(&split).unwrap();
-    assert_eq!(
-        score.parts.iter().map(|p| p.name()).collect::<Vec<_>>(),
-        ["Soprano", "Soprano 1", "Soprano 2", "Alto"]
-    );
+    for selectors in [vec![], vec!["--part", "Soprano"]] {
+        assert!(cli()
+            .arg("split")
+            .arg(&input)
+            .arg("-o")
+            .arg(&split)
+            .arg("--force")
+            .args(selectors)
+            .status()
+            .unwrap()
+            .success());
+        let score = mxml_core::read_score(&split).unwrap();
+        assert_eq!(
+            score.parts.iter().map(|p| p.name()).collect::<Vec<_>>(),
+            ["Soprano", "Soprano 1", "Soprano 2", "Alto"]
+        );
+    }
     assert!(cli()
         .arg("merge")
         .arg(&split)
@@ -112,7 +130,19 @@ fn split_merge_compressed_roundtrip_and_output_protection() {
         .status()
         .unwrap()
         .success());
-    assert_eq!(mxml_core::read_score(&merged).unwrap().parts.len(), 2);
+    let score = mxml_core::read_score(&merged).unwrap();
+    assert_eq!(
+        score.parts.iter().map(|p| p.name()).collect::<Vec<_>>(),
+        ["Soprano", "Soprano 1 / Soprano 2 / Alto"]
+    );
+    assert_eq!(
+        score.parts[1].measures[0]
+            .events
+            .iter()
+            .map(|event| event.voice.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        ["1", "2", "3"].into_iter().collect()
+    );
     let before = fs::read(&merged).unwrap();
     assert!(!cli()
         .arg("split")
@@ -163,4 +193,90 @@ fn duplicate_names_require_positions_and_bad_selections_publish_nothing() {
         .unwrap()
         .success());
     assert_eq!(mxml_core::read_score(&output).unwrap().parts.len(), 4);
+}
+
+#[test]
+fn merge_groups_resolve_mixed_names_and_positions_in_voice_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("choir.musicxml");
+    let output = dir.path().join("merged.musicxml");
+    fs::write(&input, GROUP_SCORE).unwrap();
+    let result = cli()
+        .arg("merge")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .args(["--pair", "Alto+1", "--pair", "3+Bass"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let score = mxml_core::read_score(&output).unwrap();
+    assert_eq!(
+        score.parts.iter().map(|p| p.name()).collect::<Vec<_>>(),
+        ["Alto / Soprano", "Tenor / Bass"]
+    );
+    let events = &score.parts[0].measures[0].events;
+    assert_eq!(events.len(), 2);
+    for (event, (voice, pitch, stem)) in events.iter().zip([("1", "E", "up"), ("2", "C", "down")]) {
+        assert_eq!(event.voice, voice);
+        let note = &event.notes[0];
+        assert_eq!(
+            note.get_child("pitch")
+                .unwrap()
+                .get_child("step")
+                .unwrap()
+                .get_text()
+                .as_deref(),
+            Some(pitch)
+        );
+        assert_eq!(
+            note.get_child("stem").unwrap().get_text().as_deref(),
+            Some(stem)
+        );
+    }
+}
+
+#[test]
+fn invalid_merge_groups_report_errors_and_publish_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("choir.musicxml");
+    let output = dir.path().join("merged.musicxml");
+    fs::write(
+        &input,
+        GROUP_SCORE
+            .replace("Soprano", "Same")
+            .replace("Alto", "Same"),
+    )
+    .unwrap();
+    for (pairs, expected) in [
+        (vec![], "required"),
+        (vec!["1"], "two or more"),
+        (vec!["1+1"], "Repeated"),
+        (vec!["1+2", "2+3"], "Overlapping"),
+        (vec!["1+5"], "Unknown"),
+        (vec!["Missing+2"], "Unknown"),
+        (vec!["Same+3"], "Ambiguous"),
+    ] {
+        let mut command = cli();
+        command.arg("merge").arg(&input).arg("-o").arg(&output);
+        for pair in pairs {
+            command.args(["--pair", pair]);
+        }
+        let result = command.output().unwrap();
+        assert_eq!(result.status.code(), Some(2));
+        assert!(result.stdout.is_empty());
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(error.contains(expected), "{error}");
+        assert!(!output.exists());
+    }
+    assert_eq!(
+        fs::read_to_string(&input).unwrap(),
+        GROUP_SCORE
+            .replace("Soprano", "Same")
+            .replace("Alto", "Same")
+    );
 }

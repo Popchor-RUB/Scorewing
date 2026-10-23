@@ -48,9 +48,9 @@ fn ordered_groups_anchor_at_first_score_position_and_keep_unselected_parts() {
         ("Tenor", vec![n("G").xml()]),
         ("Bass", vec![n("C").octave(3).xml()]),
     ]);
-    let result =
-        parse_score(merge_score(&input, &groups(&[&["P2", "P1"], &["P3", "P4"]])).unwrap())
-            .unwrap();
+    let output = merge_score(&input, &groups(&[&["P2", "P1"], &["P3", "P4"]])).unwrap();
+    mxml_core::validate_score(&output).unwrap();
+    let result = parse_score(output).unwrap();
     assert_eq!(names(&result), ["Alto / Soprano", "Tenor / Bass"]);
     assert_eq!(
         event_notes(&result.parts[0].measures[0].events),
@@ -64,7 +64,9 @@ fn ordered_groups_anchor_at_first_score_position_and_keep_unselected_parts() {
         ("Keep", vec![n("D").xml()]),
         ("B", vec![n("E").xml()]),
     ]);
-    let result = parse_score(merge_score(&input, &groups(&[&["P3", "P1"]])).unwrap()).unwrap();
+    let output = merge_score(&input, &groups(&[&["P3", "P1"]])).unwrap();
+    mxml_core::validate_score(&output).unwrap();
+    let result = parse_score(output).unwrap();
     assert_eq!(names(&result), ["B / A", "Keep"]);
     assert_eq!(result.parts[1].source, input.parts[1].source);
 }
@@ -312,8 +314,9 @@ fn three_sources_stems_and_common_rests() {
         ("A", vec![n("C").rest().xml() + &n("D").xml()]),
         ("T", vec![n("C").rest().xml() + &n("E").xml()]),
     ]);
-    let result =
-        parse_score(merge_score(&input, &groups(&[&["P1", "P2", "P3"]])).unwrap()).unwrap();
+    let output = merge_score(&input, &groups(&[&["P1", "P2", "P3"]])).unwrap();
+    mxml_core::validate_score(&output).unwrap();
+    let result = parse_score(output).unwrap();
     let events = &result.parts[0].measures[0].events;
     assert_eq!(events.len(), 4);
     assert!(events[0].notes[0].get_child("rest").is_some());
@@ -366,10 +369,14 @@ fn rhythms_spelled_pitches_and_sound_or_visual_tie_differences_do_not_collapse()
         ("S", vec![n("C").duration(2).kind("half").xml()]),
         ("A", vec![n("C").xml() + &n("D").xml()]),
     ]);
-    assert!(result.parts[0].measures[0]
-        .events
-        .iter()
-        .any(|e| e.voice == "2"));
+    assert_eq!(
+        result.parts[0].measures[0]
+            .events
+            .iter()
+            .map(|e| e.voice.as_str())
+            .collect::<HashSet<_>>(),
+        HashSet::from(["1", "2"])
+    );
     let sharp = n("C").xml().replace("<octave>", "<alter>1</alter><octave>");
     let flat = n("D")
         .xml()
@@ -388,11 +395,15 @@ fn rhythms_spelled_pitches_and_sound_or_visual_tie_differences_do_not_collapse()
             .extra("<notations><tied type=\"start\"/></notations>")
             .xml(),
     ] {
+        let result = merged(&[("S", vec![tied]), ("A", vec![n("C").xml()])]);
+        assert_eq!(result.parts[0].measures[0].events.len(), 2);
         assert_eq!(
-            merged(&[("S", vec![tied]), ("A", vec![n("C").xml()])]).parts[0].measures[0]
+            result.parts[0].measures[0]
                 .events
-                .len(),
-            2
+                .iter()
+                .map(|e| e.voice.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from(["1", "2"])
         );
     }
 }
@@ -425,9 +436,14 @@ fn differing_graces_cut_sustained_note_with_ties_and_unique_identifiers() {
     assert_eq!(
         ordinary
             .iter()
-            .map(|e| e.notes[0].get_child("tie").unwrap().attributes["type"].as_str())
+            .map(|e| {
+                elements(&e.notes[0])
+                    .filter(|n| n.name == "tie")
+                    .map(|n| n.attributes["type"].as_str())
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>(),
-        ["start", "stop", "stop"]
+        [vec!["start"], vec!["stop"], vec!["stop"]]
     );
     let ids = ids(&result.parts[0].source);
     assert_eq!(ids.len(), ids.iter().collect::<HashSet<_>>().len());
@@ -595,7 +611,9 @@ fn exact_changing_divisions_and_hidden_signatures_zero_transpose() {
         "3",
     );
     input = parse_score(input.root).unwrap();
-    let result = parse_score(merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap()).unwrap();
+    let output = merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap();
+    mxml_core::validate_score(&output).unwrap();
+    let result = parse_score(output).unwrap();
     assert_eq!(
         result.parts[0].measures[0]
             .events
@@ -626,11 +644,10 @@ fn exact_changing_divisions_and_hidden_signatures_zero_transpose() {
     }
     append(attrs,element("<transpose><diatonic>0</diatonic><chromatic>0</chromatic><octave-change>0</octave-change></transpose>"));
     let input = parse_score(input.root).unwrap();
+    let output = merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap();
+    mxml_core::validate_score(&output).unwrap();
     assert_eq!(
-        parse_score(merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap())
-            .unwrap()
-            .parts[0]
-            .measures[0]
+        parse_score(output).unwrap().parts[0].measures[0]
             .events
             .len(),
         2
@@ -692,69 +709,93 @@ fn names_instruments_players_lyrics_play_and_overrides_survive() {
     let note = &shared.parts[0].measures[0].events[0].notes[0];
     assert_eq!(text(note, "lyric/text"), "word");
     assert!(note.get_child("play").is_some());
-    let mut input = score(&[
-        (
-            "S",
-            vec![n("C").extra("<play><mute>off</mute></play>").xml() + &n("E").xml()],
-        ),
-        (
-            "A",
-            vec![
-                n("D")
-                    .extra("<lyric number=\"1\"><text>word</text></lyric>")
-                    .xml()
-                    + &n("F").xml(),
-            ],
-        ),
-    ]);
-    for (source, part) in input.parts.iter_mut().enumerate() {
-        let index = source + 1;
-        append(
-            &mut part.definition,
-            element("<part-name-display><display-text>OLD NAME</display-text></part-name-display>"),
+    for shared_prefix in [false, true] {
+        let mut input = score(&[
+            (
+                "S",
+                vec![n("C").extra("<play><mute>off</mute></play>").xml() + &n("E").xml()],
+            ),
+            (
+                "A",
+                vec![
+                    n(if shared_prefix { "C" } else { "D" })
+                        .extra("<lyric number=\"1\"><text>word</text></lyric>")
+                        .xml()
+                        + &n("F").xml(),
+                ],
+            ),
+        ]);
+        for (source, part) in input.parts.iter_mut().enumerate() {
+            let index = source + 1;
+            append(
+                &mut part.definition,
+                element(
+                    "<part-name-display><display-text>OLD NAME</display-text></part-name-display>",
+                ),
+            );
+            append(&mut part.definition,element(&format!("<score-instrument id=\"I{index}\"><instrument-name>Choir</instrument-name></score-instrument>")));
+            append(
+                &mut part.definition,
+                element(&format!(
+                    "<player id=\"Player{index}\"><player-name>Singer</player-name></player>"
+                )),
+            );
+            append(&mut part.definition,element(&format!("<midi-instrument id=\"I{index}\"><midi-channel>{index}</midi-channel></midi-instrument>")));
+            if shared_prefix {
+                let note = &mut part.measures[0].events[0].notes[0];
+                mxml_core::xml::insert_note_child(
+                    note,
+                    element(&format!("<instrument id=\"I{index}\"/>")),
+                );
+                note.attributes.insert("id".into(), format!("N{index}"));
+            }
+        }
+        append(&mut input.parts[1].definition,element("<score-instrument id=\"AltOverride\"><instrument-name>Alternate alto</instrument-name></score-instrument>"));
+        mxml_core::xml::insert_note_child(
+            &mut input.parts[1].measures[0].events[1].notes[0],
+            element("<instrument id=\"AltOverride\"/>"),
         );
-        append(&mut part.definition,element(&format!("<score-instrument id=\"I{index}\"><instrument-name>Choir</instrument-name></score-instrument>")));
-        append(
-            &mut part.definition,
-            element(&format!(
-                "<player id=\"Player{index}\"><player-name>Singer</player-name></player>"
-            )),
+        let output = merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap();
+        mxml_core::validate_score(&output).unwrap();
+        let result = parse_score(output).unwrap();
+        let part = &result.parts[0];
+        assert!(part.definition.get_child("part-name-display").is_none());
+        assert_eq!(
+            elements(&part.definition)
+                .filter(|p| p.name == "player")
+                .map(|p| p.attributes["id"].as_str())
+                .collect::<Vec<_>>(),
+            ["Player1", "Player2"]
         );
-        append(&mut part.definition,element(&format!("<midi-instrument id=\"I{index}\"><midi-channel>{index}</midi-channel></midi-instrument>")));
+        assert_eq!(
+            elements(&part.definition)
+                .filter(|p| p.name == "midi-instrument")
+                .map(|p| p.attributes["id"].as_str())
+                .collect::<Vec<_>>(),
+            ["I1", "I2"]
+        );
+        let events = &part.measures[0].events;
+        assert_eq!(
+            events
+                .iter()
+                .map(|e| (
+                    e.voice.as_str(),
+                    e.notes[0].get_child("instrument").unwrap().attributes["id"].as_str()
+                ))
+                .collect::<Vec<_>>(),
+            if shared_prefix {
+                vec![("1", "I1"), ("1", "I1"), ("2", "AltOverride")]
+            } else {
+                vec![("1", "I1"), ("1", "I1"), ("2", "I2"), ("2", "AltOverride")]
+            }
+        );
+        assert!(events[0].notes[0].get_child("play").is_some());
+        assert_eq!(
+            text(
+                &events[if shared_prefix { 0 } else { 2 }].notes[0],
+                "lyric/text"
+            ),
+            "word"
+        );
     }
-    append(&mut input.parts[1].definition,element("<score-instrument id=\"AltOverride\"><instrument-name>Alternate alto</instrument-name></score-instrument>"));
-    mxml_core::xml::insert_note_child(
-        &mut input.parts[1].measures[0].events[1].notes[0],
-        element("<instrument id=\"AltOverride\"/>"),
-    );
-    let result = parse_score(merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap()).unwrap();
-    let part = &result.parts[0];
-    assert!(part.definition.get_child("part-name-display").is_none());
-    assert_eq!(
-        elements(&part.definition)
-            .filter(|p| p.name == "player")
-            .map(|p| p.attributes["id"].as_str())
-            .collect::<Vec<_>>(),
-        ["Player1", "Player2"]
-    );
-    assert_eq!(
-        elements(&part.definition)
-            .filter(|p| p.name == "midi-instrument")
-            .map(|p| p.attributes["id"].as_str())
-            .collect::<Vec<_>>(),
-        ["I1", "I2"]
-    );
-    let events = &part.measures[0].events;
-    assert_eq!(
-        events
-            .iter()
-            .map(|e| (
-                e.voice.as_str(),
-                e.notes[0].get_child("instrument").unwrap().attributes["id"].as_str()
-            ))
-            .collect::<Vec<_>>(),
-        [("1", "I1"), ("1", "I1"), ("2", "I2"), ("2", "AltOverride")]
-    );
-    assert!(events[0].notes[0].get_child("play").is_some());
-    assert_eq!(text(&events[2].notes[0], "lyric/text"), "word");
 }

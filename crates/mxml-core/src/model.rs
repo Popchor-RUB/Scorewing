@@ -816,7 +816,7 @@ mod tests {
     }
     #[test]
     fn decimal_timing_is_exact() {
-        let s=score("<note><pitch><step>C</step><octave>4</octave></pitch><duration>1.5</duration><type>quarter</type></note>","1.5");
+        let mut s=score("<note><pitch><step>C</step><octave>4</octave></pitch><duration>1.5</duration><type>quarter</type></note>","1.5");
         assert_eq!(s.parts[0].measures[0].events[0].duration, frac(1));
         let rendered = render_measure(
             &s.parts[0].measures[0],
@@ -830,6 +830,11 @@ mod tests {
             child_text(child(&rendered, "note").unwrap(), "duration").unwrap(),
             "3"
         );
+        let part = child_mut(&mut s.root, "part").unwrap();
+        remove_children(part, "measure");
+        append(part, rendered);
+        let parsed = parse_score(s.root).unwrap();
+        assert_eq!(parsed.parts[0].measures[0].events[0].duration, frac(1));
     }
     #[test]
     fn slicing_preserves_ties_and_lyrics() {
@@ -841,14 +846,14 @@ mod tests {
         assert_eq!(child_text(&right.notes[0], "type").unwrap(), "half");
         assert!(child(&right.notes[0], "dot").is_some());
         assert!(child(&right.notes[0], "lyric").is_none());
-        assert_eq!(
-            child(&left.notes[0], "tie").unwrap().attributes["type"],
-            "start"
-        );
-        assert_eq!(
-            child(&right.notes[0], "tie").unwrap().attributes["type"],
-            "stop"
-        );
+        for (event, expected) in [(&left, "start"), (&right, "stop")] {
+            assert_eq!(
+                children(&event.notes[0], "tie")
+                    .map(|tie| tie.attributes["type"].as_str())
+                    .collect::<Vec<_>>(),
+                [expected]
+            );
+        }
     }
     #[test]
     fn invalid_timing_is_contextual() {
@@ -858,25 +863,66 @@ mod tests {
         assert!(error.contains("backup crosses"));
     }
     #[test]
+    fn rejects_orphan_chords_numbered_clefs_and_zero_divisions() {
+        for (body, message) in [
+            (
+                "<note><chord/><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note>",
+                "chord tones",
+            ),
+            (
+                "<attributes><clef number=\"2\"><sign>F</sign><line>4</line></clef></attributes><note><rest/><duration>1</duration></note>",
+                "multi-staff",
+            ),
+            (
+                "<attributes><divisions>0</divisions></attributes><note><rest/><duration>1</duration></note>",
+                "positive",
+            ),
+        ] {
+            let mut s = score("", "1");
+            let part = child_mut(&mut s.root, "part").unwrap();
+            let measure = child_mut(part, "measure").unwrap();
+            let wrapper = Element::parse(format!("<body>{body}</body>").as_bytes()).unwrap();
+            measure.children.extend(wrapper.children);
+            let error = parse_score(s.root).unwrap_err().to_string();
+            assert!(error.contains(message), "{error}");
+        }
+    }
+    #[test]
     fn backup_chord_and_divisions_roundtrip() {
         let mut s=score("<note><pitch><step>C</step><octave>4</octave></pitch><duration>2</duration><voice>1</voice></note><note><chord/><pitch><step>E</step><octave>4</octave></pitch><duration>2</duration><voice>1</voice></note><backup><duration>2</duration></backup><attributes><divisions>3</divisions></attributes><note><pitch><step>G</step><octave>4</octave></pitch><duration>3</duration><voice>2</voice></note><forward><duration>3</duration></forward>","2");
         let m = &s.parts[0].measures[0];
         assert_eq!(m.events.len(), 2);
         assert_eq!(m.events[0].notes.len(), 2);
-        assert_eq!(m.events[0].duration, frac(1));
-        assert_eq!(m.events[1].start, frac(0));
+        for event in &m.events {
+            assert_eq!(event.start, frac(0));
+            assert_eq!(event.duration, frac(1));
+        }
         assert_eq!(m.length, frac(2));
+        let before = m.events.clone();
         let rendered = render_measure(m, &m.events, None, None, None).unwrap();
         let part = child_mut(&mut s.root, "part").unwrap();
         remove_children(part, "measure");
         append(part, rendered);
         let parsed = parse_score(s.root).unwrap();
-        assert_eq!(parsed.parts[0].measures[0].events[0].duration, frac(1));
+        let after = &parsed.parts[0].measures[0].events;
+        assert_eq!(before.len(), after.len());
+        for (before, after) in before.iter().zip(after) {
+            assert_eq!(before.start, after.start);
+            assert_eq!(before.duration, after.duration);
+            assert_eq!(before.voice, after.voice);
+            assert_eq!(before.notes.len(), after.notes.len());
+            for (before, after) in before.notes.iter().zip(&after.notes) {
+                assert_eq!(child(before, "pitch"), child(after, "pitch"));
+            }
+        }
         assert_eq!(parsed.parts[0].measures[0].length, frac(2));
     }
     #[test]
     fn preserves_relationship_style_at_original_endpoints() {
         let s=score("<note><pitch><step>C</step><octave>4</octave></pitch><duration>2</duration><tie type=\"stop\"/><type>half</type><notations><tied type=\"stop\" orientation=\"under\"/><slur type=\"stop\" number=\"1\"/></notations></note>","1");
+        let event = &s.parts[0].measures[0].events[0];
+        let unchanged = slice_event(event, frac(0), frac(2)).unwrap();
+        assert_eq!(unchanged.notes, event.notes);
         let left = slice_event(&s.parts[0].measures[0].events[0], frac(0), frac(1)).unwrap();
         let notation = child(&left.notes[0], "notations").unwrap();
         assert_eq!(

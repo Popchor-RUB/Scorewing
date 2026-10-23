@@ -434,6 +434,7 @@ mod tests {
     fn rejects_entities_but_accepts_external_doctype() {
         assert!(parse_xml(br#"<!DOCTYPE score-partwise [<!ENTITY data SYSTEM "file:///etc/passwd">]><score-partwise>&data;</score-partwise>"#,"test").unwrap_err().to_string().contains("entity declarations"));
         assert!(parse_xml(br#"<!DOCTYPE score-partwise SYSTEM "https://example.invalid/test.dtd"><score-partwise/>"#,"test").is_ok());
+        assert_eq!(parse_xml(br#"<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "https://example.invalid/partwise.dtd"><score-partwise/>"#, "test").unwrap().name, "score-partwise");
     }
     #[test]
     fn rejects_unsafe_paths() {
@@ -451,13 +452,42 @@ mod tests {
     fn validated_plain_and_archive_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("input.xml");
-        std::fs::write(&input, serialize_xml(&score()).unwrap()).unwrap();
+        let mut root = score();
+        let part = child_mut(&mut root, "part").unwrap();
+        let measure = child_mut(part, "measure").unwrap();
+        let note = child_mut(measure, "note").unwrap();
+        set_child(note, "duration", "4");
+        set_child(note, "type", "whole");
+        std::fs::write(&input, serialize_xml(&root).unwrap()).unwrap();
+        let original = read_score(&input).unwrap();
+        let before = &original.parts[0].measures[0].events[0];
         for ext in EXTENSIONS {
             let output = dir.path().join(format!("output.{ext}"));
-            write_score(&score(), &output, &input, false).unwrap();
-            assert_eq!(read_score(&output).unwrap().parts[0].name(), "Voice");
+            write_score(&root, &output, &input, false).unwrap();
+            let parsed = read_score(&output).unwrap();
+            assert_eq!(parsed.parts[0].name(), "Voice");
+            assert_eq!(parsed.parts[0].measures.len(), 1);
+            assert_eq!(parsed.parts[0].measures[0].events.len(), 1);
+            let after = &parsed.parts[0].measures[0].events[0];
+            assert_eq!(after.start, before.start);
+            assert_eq!(after.duration, before.duration);
+            assert_eq!(after.voice, before.voice);
+            assert_eq!(after.notes.len(), before.notes.len());
+            assert_eq!(
+                child(&after.notes[0], "pitch"),
+                child(&before.notes[0], "pitch")
+            );
+            if *ext == "mxl" {
+                let mut archive = ZipArchive::new(std::fs::File::open(&output).unwrap()).unwrap();
+                let first = archive.by_index(0).unwrap();
+                assert_eq!(first.name(), "mimetype");
+                assert_eq!(first.compression(), CompressionMethod::Stored);
+            }
         }
-        assert!(check_output(&input, &input, true).is_err());
+        assert!(check_output(&input, &input, true)
+            .unwrap_err()
+            .to_string()
+            .contains("Input replacement"));
     }
     #[test]
     fn invalid_output_preserves_existing_file() {
@@ -470,8 +500,18 @@ mod tests {
         let part = child_mut(&mut root, "part").unwrap();
         let measure = child_mut(part, "measure").unwrap();
         set_child(child_mut(measure, "note").unwrap(), "type", "invalid-type");
-        assert!(write_score(&root, &output, &input, true).is_err());
+        assert!(write_score(&root, &output, &input, true)
+            .unwrap_err()
+            .to_string()
+            .contains("schema validation"));
         assert_eq!(std::fs::read_to_string(output).unwrap(), "keep");
+        assert!(std::fs::read_dir(dir.path()).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".tmp")
+        }));
     }
     #[test]
     fn ids_and_references_are_checked() {
@@ -567,7 +607,9 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("already exists"));
-        assert_eq!(std::fs::read_to_string(output).unwrap(), "keep");
+        assert_eq!(std::fs::read_to_string(&output).unwrap(), "keep");
+        write_score(&score(), &output, &input, true).unwrap();
+        assert_eq!(read_score(&output).unwrap().parts[0].name(), "Voice");
     }
     #[test]
     fn preserves_qualified_attributes_and_mixed_text() {

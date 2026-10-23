@@ -97,6 +97,8 @@ fn monophonic_unchanged_voice_mode_keeps_chords_and_numeric_voice_order() {
     let body = n("C").xml() + &n("E").chord().xml();
     let mono = score(&[("S", vec![body.clone()])]);
     assert_eq!(split_score(&mono, "voices", None).unwrap().root, mono.root);
+    let mono = score(&[("Alto", vec![n("C").xml(), n("D").xml()])]);
+    assert_eq!(split_score(&mono, "chords", None).unwrap().root, mono.root);
     let poly = score(&[("S", vec![body + &backup(1) + &n("G").voice("2").xml()])]);
     let result = parse_score(split_score(&poly, "voices", None).unwrap().root).unwrap();
     assert_eq!(pitches(&result.parts[1], 0), [["C", "E"]]);
@@ -506,6 +508,15 @@ fn chord_marks_lyrics_instruments_players_and_unique_ids() {
     let before = original.root.clone();
     let result = parse_score(split_score(&original, "chords", None).unwrap().root).unwrap();
     assert_eq!(original.root, before);
+    let defining_ids: Vec<_> = descendants(&result.root)
+        .into_iter()
+        .filter(|node| !["part", "instrument", "midi-instrument"].contains(&node.name.as_str()))
+        .filter_map(|node| node.attributes.get("id"))
+        .collect();
+    assert_eq!(
+        defining_ids.len(),
+        defining_ids.iter().collect::<HashSet<_>>().len()
+    );
     for part in &result.parts[1..] {
         assert!(part.definition.get_child("part-name-display").is_none());
         let note = &part.measures[0].events[0].notes[0];
@@ -556,7 +567,14 @@ fn shared_note_slicing_preserves_timing_without_dangling_added_ties_or_duplicate
             .root,
     )
     .unwrap();
-    assert_eq!(result.parts[1].measures[0].events.len(), 1);
+    assert_eq!(
+        result.parts[1].measures[0]
+            .events
+            .iter()
+            .map(|e| (e.start.clone(), e.duration.clone()))
+            .collect::<Vec<_>>(),
+        [(frac(0), frac(2))]
+    );
     assert_eq!(
         result.parts[2].measures[0]
             .events
@@ -628,10 +646,17 @@ fn selective_split_and_id_collisions_and_invalid_requests() {
     assert_eq!(names(&result), ["Same", "Same 1", "Same 2", "Same"]);
     assert_eq!(result.parts[1].id(), "P1_split_1_");
     assert_eq!(result.parts[3].source, original.parts[1].source);
+    let all = parse_score(split_score(&original, "chords", None).unwrap().root).unwrap();
     assert_eq!(
-        parse_score(split_score(&original, "chords", None).unwrap().root)
-            .unwrap()
-            .parts
+        names(&all),
+        ["Same", "Same 1", "Same 2", "Same", "Same 1", "Same 2"]
+    );
+    assert_eq!(all.parts[1].id(), "P1_split_1_");
+    assert_eq!(
+        all.parts
+            .iter()
+            .map(|part| part.id())
+            .collect::<HashSet<_>>()
             .len(),
         6
     );

@@ -465,7 +465,7 @@ fn supplied_scores_mark_only_inserted_slurs_and_report_the_source_locations() {
 }
 
 #[test]
-fn disabling_fallback_slurs_preserves_ties_and_other_score_content() {
+fn disabling_fallback_slurs_rests_the_fallback_note_and_preserves_ties() {
     for source in [
         include_bytes!("fixtures/Test.mxl").as_slice(),
         include_bytes!("fixtures/Test2.mxl").as_slice(),
@@ -476,8 +476,8 @@ fn disabling_fallback_slurs_preserves_ties_and_other_score_content() {
             for choice in &mut choices {
                 choice.fallback_voice = (choice.voice != "1").then(|| "1".into());
             }
-            let mut enabled = split_score_with_fallbacks(&original, mode, None, &choices).unwrap();
-            let mut disabled = split_score_with_options(
+            let enabled = split_score_with_fallbacks(&original, mode, None, &choices).unwrap();
+            let disabled = split_score_with_options(
                 &original,
                 mode,
                 None,
@@ -492,26 +492,105 @@ fn disabling_fallback_slurs_preserves_ties_and_other_score_content() {
             assert!(descendants(&disabled.root).iter().all(|node| {
                 node.name != "slur" && node.attributes.get("color").is_none_or(|c| c != "#FF0000")
             }));
-            // Removing generated red slurs must be the only musical difference.
-            for root in [&mut enabled.root, &mut disabled.root] {
-                mxml_core::xml::visit_mut(root, &mut |node| {
-                    if node.name != "note" {
-                        return;
+            let enabled = parse_score(enabled.root).unwrap();
+            let disabled = parse_score(disabled.root).unwrap();
+            assert_eq!(disabled.parts[0].source, original.parts[0].source);
+            assert_eq!(disabled.parts.len(), enabled.parts.len());
+            for (part_index, (actual, expected)) in
+                disabled.parts.iter().zip(&enabled.parts).enumerate()
+            {
+                assert_eq!(actual.measures.len(), expected.measures.len());
+                for (measure_index, (actual, expected)) in
+                    actual.measures.iter().zip(&expected.measures).enumerate()
+                {
+                    assert_eq!(actual.events.len(), expected.events.len());
+                    for (event_index, (actual, expected)) in
+                        actual.events.iter().zip(&expected.events).enumerate()
+                    {
+                        assert_eq!(
+                            (&actual.start, &actual.duration),
+                            (&expected.start, &expected.duration)
+                        );
+                        assert_eq!(actual.notes.len(), expected.notes.len());
+                        for (actual, expected) in actual.notes.iter().zip(&expected.notes) {
+                            if part_index == disabled.parts.len() - 1
+                                && measure_index == 1
+                                && event_index == 0
+                            {
+                                assert!(actual.get_child("rest").is_some());
+                                assert!(actual.get_child("pitch").is_none());
+                                assert_eq!(
+                                    mxml_core::xml::child_text(actual, "type"),
+                                    mxml_core::xml::child_text(expected, "type")
+                                );
+                            } else {
+                                for tag in ["pitch", "rest", "tie"] {
+                                    assert_eq!(
+                                        actual.get_child(tag),
+                                        expected.get_child(tag),
+                                        "{mode}: {tag}"
+                                    );
+                                }
+                            }
+                        }
                     }
-                    node.attributes.remove("color");
-                    if let Some(notations) = node.get_mut_child("notations") {
-                        notations
-                            .children
-                            .retain(|child| child.as_element().is_none_or(|e| e.name != "slur"));
-                    }
-                    node.children.retain(|child| {
-                        child
-                            .as_element()
-                            .is_none_or(|e| e.name != "notations" || !e.children.is_empty())
-                    });
-                });
+                }
             }
-            assert_eq!(disabled.root, enabled.root, "{mode}");
+        }
+    }
+}
+
+#[test]
+fn disabled_slurs_rest_only_fallback_endpoints_in_either_direction() {
+    for native_first in [true, false] {
+        for step in ["C", "D"] {
+            for (ticks, divisions) in [(3, 2), (2, 3)] {
+                let fallback = n("C").duration(ticks);
+                let native = n(step).voice("2");
+                let (left, right) = if native_first {
+                    (native, fallback)
+                } else {
+                    (fallback, native)
+                };
+                let original =
+                    score_div(&[("S", vec![tied(left, "start"), right.xml()])], divisions);
+                let mut choices = settings(&original, "voices");
+                choices[1].fallback_voice = Some("1".into());
+                let result = split_score_with_options(
+                    &original,
+                    "voices",
+                    None,
+                    SplitOptions {
+                        fallbacks: Some(&choices),
+                        insert_fallback_slurs: false,
+                    },
+                )
+                .unwrap();
+                assert!(result.warnings.is_empty());
+                validate_score(&result.root).unwrap();
+                let output = parse_score(result.root).unwrap();
+                let lane = &output.parts[2];
+                let fallback_index = usize::from(native_first);
+                let fallback = &lane.measures[fallback_index].events[0];
+                let native = &lane.measures[1 - fallback_index].events[0];
+                assert_eq!(
+                    fallback.duration,
+                    frac(ticks.into()) / frac(divisions.into())
+                );
+                assert_eq!(native.duration, frac(1) / frac(divisions.into()));
+                assert!(native.notes[0].get_child("pitch").is_some());
+                assert_eq!(fallback.notes[0].get_child("rest").is_some(), step != "C");
+                for (measure, kind) in [(0, "start"), (1, "stop")] {
+                    let note = &lane.measures[measure].events[0].notes[0];
+                    assert!(descendants(note).iter().all(|e| e.name != "slur"));
+                    assert_eq!(
+                        note.get_child("tie")
+                            .map(|tie| tie.attributes["type"].as_str()),
+                        (step == "C").then_some(kind)
+                    );
+                }
+                assert_eq!(output.parts[0].source, original.parts[0].source);
+            }
         }
     }
 }

@@ -35,6 +35,7 @@ pub struct SplitFallback {
 pub struct SplitOptions<'a> {
     /// Explicit measure-level choices; `None` uses legacy voice sharing.
     pub fallbacks: Option<&'a [SplitFallback]>,
+    /// If false, replace mismatched-pitch fallback endpoints with rests.
     pub insert_fallback_slurs: bool,
 }
 
@@ -781,6 +782,7 @@ fn set_tie(note: &mut Element, kind: &str, enabled: bool) {
 
 fn connect_shared_voices(
     part: &Part,
+    allocation: &AllocatedLane,
     measures: &mut [(Vec<Event>, Vec<TimedElement>)],
     configured: bool,
     insert_fallback_slurs: bool,
@@ -846,10 +848,21 @@ fn connect_shared_voices(
                         {
                             set_tie(&mut left.notes[0], "start", false);
                             set_tie(&mut event.notes[0], "stop", false);
-                            if insert_fallback_slurs
-                                && left_pitches[0].is_some()
-                                && right_pitches[0].is_some()
-                            {
+                            if left_pitches[0].is_some() && right_pitches[0].is_some() {
+                                if !insert_fallback_slurs {
+                                    for (measure, event) in
+                                        [(previous_index, &mut *left), (index, &mut *event)]
+                                    {
+                                        if !allocation.native(&event.voice, measure) {
+                                            *event = rest_event(
+                                                event.start.clone(),
+                                                event.duration.clone(),
+                                                &event.voice,
+                                            )?;
+                                        }
+                                    }
+                                    return Ok(());
+                                }
                                 let number = slur_number.as_ref().ok_or_else(|| {
                                     ScoreError::new(
                                         "No free slur number at a shared voice transition",
@@ -1399,6 +1412,7 @@ pub fn split_score_with_options(
             }
             let shared_slur = match connect_shared_voices(
                 part,
+                slot,
                 &mut measures,
                 fallbacks.is_some(),
                 insert_fallback_slurs,

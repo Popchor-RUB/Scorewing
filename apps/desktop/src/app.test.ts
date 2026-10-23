@@ -178,6 +178,7 @@ test("desktop queue, errors, grouping, splitting, cancellation, and export", asy
   const slurToggle = () => document.querySelector("#insert-fallback-slurs") as unknown as HTMLInputElement;
   assert.ok(slurToggle().checked);
   assert.match(document.querySelector("#fallback-connections-hint")!.textContent, /Ties are inserted automatically to continue existing ties when pitches match/);
+  assert.match(document.querySelector("#fallback-connections-hint")!.textContent, /When disabled, the fallback note is replaced with a rest of the same duration/);
   assert.equal(slurToggle().getAttribute("aria-describedby"), "fallback-connections-hint");
   assert.match(document.querySelector(".split-preview")!.textContent, /carry compatible voices/);
   assert.match(document.querySelector(".split-preview")!.textContent, /fallback is used only when the staff’s native voices are absent for the whole measure/);

@@ -645,6 +645,10 @@ mod tests {
             .unwrap();
             assert_eq!(result.warnings.len(), usize::from(insert_fallback_slurs));
             if !insert_fallback_slurs {
+                let output = mxml_core::parse_score(result.root).unwrap();
+                let note = &output.parts[3].measures[1].events[0];
+                assert!(note.notes[0].get_child("rest").is_some());
+                assert_eq!(note.duration, score.parts[0].measures[1].events[0].duration);
                 continue;
             }
             for detail in [

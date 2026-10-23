@@ -2,7 +2,7 @@
 name = "mxml-desktop"
 version = "0.1.0"
 edition = "2021"
-description = "MusicXML instrument merging and splitting"
+description = "MusicXML arranging and MuseScore practice tracks"
 
 [[bin]]
 name = "voiceweaver-desktop"
@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 mxml-core = { path = "../../../crates/mxml-core" }
+practice-tracks = { path = "../../../crates/practice-tracks" }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"

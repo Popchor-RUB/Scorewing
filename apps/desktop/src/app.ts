@@ -1,18 +1,27 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   addGroup,
   fallbackVoice,
   movePart,
   newArrangement,
+  newPractice,
   operation,
+  practiceOptions,
   setFallbackVoice,
   stemDirection,
   type Arrangement,
   type Inspection,
   type Part,
   type StemDirection,
+  type PracticeConfig,
+  type PracticeEnvironment,
+  type PracticeOptions,
+  type PracticeProgress,
+  type PracticeResult,
 } from "./model.ts";
+import { presetValue, renderPractice } from "./practice.ts";
 
 interface QueueItem {
   key: number;
@@ -22,6 +31,9 @@ interface QueueItem {
   document?: Inspection;
   error?: string;
   arrangement: Arrangement;
+  practice?: PracticeOptions;
+  progress?: PracticeProgress;
+  result?: PracticeResult;
 }
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
@@ -33,6 +45,25 @@ let busy = false;
 let message = "";
 let messageError = false;
 let dropping = false;
+const practiceConfig: PracticeConfig = { executable: null, soundfont: null };
+let environment: PracticeEnvironment | null = null;
+let checkingEnvironment = false;
+let environmentRequest = 0;
+
+async function refreshEnvironment(): Promise<void> {
+  const request = ++environmentRequest;
+  checkingEnvironment = true;
+  render();
+  try {
+    const detected = await invoke<PracticeEnvironment>("practice_environment", { config: { ...practiceConfig } });
+    if (request === environmentRequest) environment = detected;
+  } catch (error) {
+    if (request === environmentRequest)
+      environment = { ...practiceConfig, version: null, presets: [], error: String(error) };
+  } finally {
+    if (request === environmentRequest) { checkingEnvironment = false; render(); }
+  }
+}
 
 function escape(value: string): string {
   return value.replace(
@@ -84,12 +115,14 @@ function render(): void {
   const ready = item?.status === "ready" && score && state;
   const loading = queue.some((entry) => entry.status === "loading");
   const assigned = new Set(state?.groups.flat() ?? []);
+  const museScore = score?.format === "musescore";
+  const partCount = (document: Inspection) => document.format === "musescore" ? (document.practice_parts?.length ?? 0) : document.parts.length;
   root.innerHTML = `
     <header class="header"><div class="brand"><span class="brand-icon" aria-hidden="true">♫</span><div><strong>Voiceweaver</strong><span class="tagline">A little room to rearrange.</span></div></div><button type="button" class="primary" data-action="open" data-focus="open" ${busy ? "disabled" : ""}>Open files<span aria-hidden="true"> ↗</span></button></header>
     <main class="workspace ${dropping ? "dragging" : ""}">
-      <aside class="files" aria-label="Loaded scores"><div class="section-heading"><h1>Your scores</h1><span class="count">${queue.length}</span></div><p class="hint">Drop MusicXML files anywhere in this window.</p>
-      <div class="file-list">${queue.map((file) => `<div class="file-row ${file.key === selectedKey ? "active" : ""}"><button type="button" class="file-choice" data-action="select" data-key="${file.key}" data-focus="file-${file.key}" aria-pressed="${file.key === selectedKey}" ${busy ? "disabled" : ""}><span class="file-icon" aria-hidden="true">♩</span><span><strong>${escape(file.name)}</strong><small class="${file.status === "error" ? "error-text" : ""}">${file.status === "loading" ? "Reading score…" : file.status === "error" ? "Could not read score" : `${file.document!.parts.length} instruments`}</small></span></button><button type="button" class="remove" aria-label="Remove ${escape(file.name)}" data-action="remove" data-key="${file.key}" data-focus="remove-${file.key}" ${busy || file.status === "loading" ? "disabled" : ""}>×</button></div>`).join("")}</div>
-      <div class="formats"><span class="eyebrow">SUPPORTED FORMATS</span><p>.mxml · .musicxml · .xml · .mxl</p><p>Each score is arranged separately.</p></div></aside>
+      <aside class="files" aria-label="Loaded scores"><div class="section-heading"><h1>Your scores</h1><span class="count">${queue.length}</span></div><p class="hint">Drop MusicXML or MuseScore files anywhere in this window.</p>
+      <div class="file-list">${queue.map((file) => `<div class="file-row ${file.key === selectedKey ? "active" : ""}"><button type="button" class="file-choice" data-action="select" data-key="${file.key}" data-focus="file-${file.key}" aria-pressed="${file.key === selectedKey}" ${busy ? "disabled" : ""}><span class="file-icon" aria-hidden="true">♩</span><span><strong>${escape(file.name)}</strong><small class="${file.status === "error" ? "error-text" : ""}">${file.status === "loading" ? "Reading score…" : file.status === "error" ? "Could not read score" : `${partCount(file.document!)} instruments`}</small></span></button><button type="button" class="remove" aria-label="Remove ${escape(file.name)}" data-action="remove" data-key="${file.key}" data-focus="remove-${file.key}" ${busy || file.status === "loading" ? "disabled" : ""}>×</button></div>`).join("")}</div>
+      <div class="formats"><span class="eyebrow">SUPPORTED FORMATS</span><p>.mxml · .musicxml · .xml · .mxl<br>.mscz · .mscx</p><p>Each score is arranged separately.</p></div></aside>
       <section class="editor" aria-label="Score arrangement">
       ${
         !item
@@ -97,13 +130,16 @@ function render(): void {
           : !ready
             ? `<div class="empty"><span class="eyebrow">${item.status === "loading" ? "READING YOUR SCORE" : "THIS SCORE NEEDS ATTENTION"}</span><h2>${escape(item.name)}</h2><p class="${item.status === "error" ? "error-text" : ""}">${escape(item.error ?? "Parsing instruments and checking the score…")}</p></div>`
             : `
-        <div class="score-heading"><div><span class="eyebrow">ARRANGE YOUR SCORE</span><h2>${escape(score.name)}</h2><p>${score.parts.length} instruments · Source files stay intact</p></div><span class="score-badge">MusicXML</span></div>
-        <fieldset class="operation"><legend class="sr-only">Choose an operation</legend><label class="operation-choice ${state.kind === "split" ? "chosen" : ""}"><input type="radio" name="operation" value="split" data-focus="operation-split" ${state.kind === "split" ? "checked" : ""} ${busy ? "disabled" : ""}><span><strong>Split instruments</strong><small>Separate chord tones or voices</small></span></label><label class="operation-choice ${state.kind === "merge" ? "chosen" : ""}"><input type="radio" name="operation" value="merge" data-focus="operation-merge" ${state.kind === "merge" ? "checked" : ""} ${busy ? "disabled" : ""}><span><strong>Merge instruments</strong><small>Bring parts into a single staff</small></span></label></fieldset>
+        <div class="score-heading"><div><span class="eyebrow">ARRANGE YOUR SCORE</span><h2>${escape(score.name)}</h2><p>${partCount(score)} instruments · Source files stay intact</p></div><span class="score-badge">${museScore ? "MuseScore" : "MusicXML"}</span></div>
+        <fieldset class="operation"><legend class="sr-only">Choose an operation</legend>${(["split", "merge", "practice"] as const).map((kind) => `<label class="operation-choice ${state.kind === kind ? "chosen" : ""}"><input type="radio" name="operation" value="${kind}" data-focus="operation-${kind}" aria-describedby="operation-format-hint" ${state.kind === kind ? "checked" : ""} ${busy || (kind === "practice" ? !museScore : museScore) ? "disabled" : ""}><span><strong>${kind === "split" ? "Split instruments" : kind === "merge" ? "Merge instruments" : "Create Practice Tracks"}</strong><small>${kind === "split" ? "Separate chord tones or voices" : kind === "merge" ? "Bring parts into a single staff" : "Feature each instrument in an MP3"}</small></span></label>`).join("")}</fieldset>
+        <p class="hint" id="operation-format-hint">${museScore ? "Split and merge require a MusicXML score." : "Practice tracks require a MuseScore .mscz or .mscx score."}</p>
+        ${state.kind === "practice" && item.practice ? renderPractice(score.practice_parts ?? [], item.practice, practiceConfig, environment, checkingEnvironment, busy, item.progress, item.result, escape) : `
         <div class="instrument-heading"><div><h3>${state.kind === "split" ? "Choose instruments to split" : "Choose instruments for a group"}</h3><p>${state.kind === "split" ? "Originals are kept. New staves appear immediately below each original." : "Each instrument can belong to one group. Other parts stay as they are."}</p></div><button type="button" class="text-button" data-action="select-all" data-focus="select-all" ${busy ? "disabled" : ""}>${score.parts.filter((p) => state.kind !== "merge" || !assigned.has(p.id)).every((p) => state.selected.has(p.id)) ? "Clear selection" : "Select all"}</button></div>
         <div class="instruments" role="group" aria-label="Instruments">${score.parts.map((part, index) => `<div class="instrument-entry"><label class="instrument ${state.selected.has(part.id) ? "checked" : ""} ${state.kind === "merge" && assigned.has(part.id) ? "assigned" : ""}"><input type="checkbox" data-part="${escape(part.id)}" data-focus="part-${index}" ${state.selected.has(part.id) ? "checked" : ""} ${busy || (state.kind === "merge" && assigned.has(part.id)) ? "disabled" : ""}><span class="part-number">${String(index + 1).padStart(2, "0")}</span><span class="part-name"><strong>${escape(part.name || part.id)}</strong><small>${escape(part.instrument_names.join(", ") || "Unnamed instrument")} · ${escape(part.id)}</small></span><span class="voice-count">${state.kind === "merge" && assigned.has(part.id) ? "Grouped" : `${part.voice_count} ${part.voice_count === 1 ? "voice" : "voices"}`}</span></label>${splitPreview(part, index, state)}</div>`).join("")}</div>
         ${state.kind === "split" ? `<div class="split-options"><label for="split-mode">Split by</label><select id="split-mode" data-focus="split-mode" ${busy ? "disabled" : ""}><option value="chords" ${state.mode === "chords" ? "selected" : ""}>Chord tones</option><option value="voices" ${state.mode === "voices" ? "selected" : ""}>Explicit voices</option></select><p>${state.mode === "chords" ? "Separate simultaneous notes by pitch into individual staves." : "Separate the voices already written into the score."}</p></div>` : `<div class="merge-options"><button type="button" data-action="add-group" data-focus="add-group" ${busy || state.selected.size < 2 ? "disabled" : ""}>＋ Create merge group</button><span>${state.selected.size} selected</span></div><div class="groups">${state.groups.map((group, gi) => `<section class="merge-group" aria-label="Merge group ${gi + 1}"><div class="group-heading"><h4>Group ${gi + 1}</h4><button type="button" class="text-button" data-action="remove-group" data-group="${gi}" data-focus="remove-group-${gi}" ${busy ? "disabled" : ""}>Remove group</button></div><ol>${group.map((id, pi) => `<li><span>${escape(score.parts.find((p) => p.id === id)?.name || id)} <small>${escape(id)}</small></span><label class="merge-stem" for="stem-${gi}-${pi}"><span>Voice ${pi + 1} stem<span class="sr-only"> · ${escape(id)} · Group ${gi + 1}</span></span><select id="stem-${gi}-${pi}" data-stem-part="${escape(id)}" data-focus="stem-${gi}-${pi}" ${busy ? "disabled" : ""}><option value="up" ${stemDirection(state, id, pi) === "up" ? "selected" : ""}>Up</option><option value="down" ${stemDirection(state, id, pi) === "down" ? "selected" : ""}>Down</option></select></label><span class="reorder"><button type="button" aria-label="Move ${escape(id)} up in group ${gi + 1}" data-action="up" data-group="${gi}" data-index="${pi}" data-focus="up-${gi}-${pi}" ${busy || pi === 0 ? "disabled" : ""}>↑</button><button type="button" aria-label="Move ${escape(id)} down in group ${gi + 1}" data-action="down" data-group="${gi}" data-index="${pi}" data-focus="down-${gi}-${pi}" ${busy || pi === group.length - 1 ? "disabled" : ""}>↓</button></span></li>`).join("")}</ol><p class="hint">Top to bottom sets voice order in the merged staff.</p></section>`).join("")}</div>`}
         ${state.kind === "split" ? `<div class="split-connections"><label for="insert-fallback-slurs"><input type="checkbox" id="insert-fallback-slurs" data-focus="insert-fallback-slurs" aria-describedby="fallback-connections-hint" ${state.insertFallbackSlurs ? "checked" : ""} ${busy ? "disabled" : ""}> Automatically insert slurs at fallback voice transitions</label><p id="fallback-connections-hint" class="hint">Ties are inserted automatically to continue existing ties when pitches match. When pitches differ, this option replaces a tie with a slur; the slur and its endpoint notes are marked red for review. When disabled, the fallback note is replaced with a rest of the same duration.</p></div>` : ""}
         <footer class="export-bar"><p>Export a new score.<br><span>${loading ? "Wait for queued scores to finish loading." : "Open the exported file to arrange it further."}</span></p><button type="button" class="primary" data-action="export" data-focus="export" ${busy || loading ? "disabled" : ""}>${busy ? "Exporting…" : "Export score"}<span aria-hidden="true"> →</span></button></footer>
+        `}
       `
       }
       </section>
@@ -118,6 +154,13 @@ function render(): void {
         if (select) select.value = fallback === null ? "none" : `voice:${fallback}`;
       }),
     );
+  if (ready && state.kind === "practice")
+    item.practice?.parts.forEach((part, index) => {
+      for (const field of ["foreground_sound", "background_sound"] as const) {
+        const select = root.querySelector<HTMLSelectElement>(`#${field}-${index}`);
+        if (select) select.value = presetValue(part[field]);
+      }
+    });
   if (focus)
     root
       .querySelector<HTMLElement>(`[data-focus="${CSS.escape(focus)}"]`)
@@ -153,6 +196,11 @@ async function addFiles(paths: string[]): Promise<void> {
         item.name = item.document.name;
         item.status = item.document.error ? "error" : "ready";
         item.error = item.document.error ?? undefined;
+        if (item.document.format === "musescore") {
+          item.arrangement.kind = "practice";
+          item.practice = newPractice(item.document.practice_parts ?? []);
+          if (!environment && !checkingEnvironment) void refreshEnvironment();
+        }
       } catch (error) {
         item.status = "error";
         item.error = String(error);
@@ -172,6 +220,34 @@ root.addEventListener("click", async (event) => {
   try {
     if (action === "open") {
       await addFiles(await invoke<string[]>("open_files"));
+    } else if (action === "practice-detect") {
+      await refreshEnvironment();
+    } else if (action === "practice-browse") {
+      const kind = button.dataset.kind as keyof PracticeConfig;
+      const path = await invoke<string | null>("pick_practice_path", { kind });
+      if (path) { practiceConfig[kind] = path; await refreshEnvironment(); }
+    } else if (item?.document && action === "practice-cancel") {
+      button.disabled = true;
+      try {
+        await invoke("cancel_practice_export", { id: item.document.id });
+        notify("Cancelling rendering… Completed tracks will be retained.");
+      } catch (error) { notify(`Could not cancel rendering: ${String(error)}`, true); }
+    } else if (item?.document && item.practice && action === "practice-export") {
+      const options = practiceOptions(item.practice, environment?.presets ?? []);
+      if (!environment?.executable || !environment.soundfont || environment.error)
+        throw new Error(environment?.error ?? "Configure MuseScore 4.7.x and its MS Basic SoundFont before rendering.");
+      busy = true;
+      item.result = undefined;
+      item.progress = undefined;
+      notify("Choose a folder for your practice tracks.");
+      try {
+        const result = await invoke<PracticeResult | null>("export_practice_tracks", {
+          id: item.document.id, options, config: { ...practiceConfig },
+        });
+        item.result = result ?? undefined;
+        item.progress = undefined;
+        notify(result ? `${result.cancelled ? "Rendering cancelled." : result.error ? "Rendering stopped." : "Practice tracks created."} ${result.completed.length} completed tracks retained in ${result.directory}${result.error ? `\n${result.error}` : ""}` : "Export cancelled.", !!result?.error);
+      } finally { busy = false; render(); }
     } else if (action === "select") {
       selectedKey = Number(button.dataset.key);
       message = "";
@@ -249,9 +325,29 @@ root.addEventListener("change", (event) => {
   const item = selected();
   if (!item || busy) return;
   if (input instanceof HTMLInputElement && input.name === "operation") {
-    item.arrangement.kind = input.value as "split" | "merge";
+    const museScore = item.document?.format === "musescore";
+    if (input.disabled || (input.value === "practice" ? !museScore : museScore)) return;
+    item.arrangement.kind = input.value as Arrangement["kind"];
     item.arrangement.selected.clear();
     message = "";
+  } else if (input.dataset.practicePath) {
+    practiceConfig[input.dataset.practicePath as keyof PracticeConfig] = input.value.trim() || null;
+    void refreshEnvironment();
+  } else if (item.practice && input.dataset.practiceIndex !== undefined) {
+    const part = item.practice.parts[Number(input.dataset.practiceIndex)];
+    const field = input.dataset.practiceField;
+    if (part && input instanceof HTMLInputElement && (field === "include_in_background" || field === "create_track"))
+      part[field] = input.checked;
+    else if (part && (field === "foreground_sound" || field === "background_sound")) {
+      const [bank, program] = input.value.split(":").map(Number);
+      part[field] = input.value ? { bank, program } : null;
+    }
+  } else if (item.practice && input.id === "background-reduction") {
+    item.practice.background_reduction_db = input.value === "" ? NaN : Number(input.value);
+  } else if (item.practice && input.id === "metronome-level") {
+    item.practice.metronome_db = input.value === "" ? NaN : Number(input.value);
+  } else if (item.practice && input instanceof HTMLInputElement && input.id === "practice-metronome") {
+    item.practice.metronome_enabled = input.checked;
   } else if (input instanceof HTMLInputElement && input.dataset.part) {
     if (input.checked) item.arrangement.selected.add(input.dataset.part);
     else item.arrangement.selected.delete(input.dataset.part);
@@ -274,6 +370,10 @@ root.addEventListener("change", (event) => {
 window.addEventListener("dragover", (event) => event.preventDefault());
 window.addEventListener("drop", (event) => event.preventDefault());
 render();
+void listen<PracticeProgress>("practice-progress", (event) => {
+  const item = queue.find((entry) => entry.document?.id === event.payload.id);
+  if (item && busy) { item.progress = event.payload; render(); }
+}).catch((error) => notify(`Practice progress is unavailable: ${String(error)}`, true));
 getCurrentWebviewWindow()
   .onDragDropEvent((event) => {
     dropping = event.payload.type === "enter" || event.payload.type === "over";

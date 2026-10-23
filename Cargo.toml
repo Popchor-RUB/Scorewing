@@ -1,6 +1,6 @@
 [workspace]
-members = ["crates/mxml-core", "crates/mxml-cli", "apps/desktop/src-tauri"]
-default-members = ["crates/mxml-core", "crates/mxml-cli"]
+members = ["crates/mxml-core", "crates/mxml-cli", "crates/practice-tracks", "apps/desktop/src-tauri"]
+default-members = ["crates/mxml-core", "crates/mxml-cli", "crates/practice-tracks"]
 resolver = "2"
 
 [workspace.package]

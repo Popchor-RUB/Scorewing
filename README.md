@@ -1,6 +1,6 @@
 # Voiceweaver
 
-A Rust CLI and Tauri 2 desktop app for splitting and merging choir staves in MusicXML.
+A Rust CLI and Tauri 2 desktop app for splitting and merging choir staves in MusicXML, with desktop practice-track creation for MuseScore scores.
 
 Builds produce the `voiceweaver` CLI and `voiceweaver-desktop` executable, with desktop installers branded **Voiceweaver**.
 
@@ -8,15 +8,28 @@ Open or drop `.mxml`, `.musicxml`, `.xml`, or compressed `.mxl` scores. Select a
 
 - **Merge:** create disjoint groups of at least two instruments, order their voices, and choose each voice’s up/down stem direction. Matching notes with the same stem direction, onset, duration, and tie state collapse into the earliest voice, combining lyrics and markings.
 - **Split:** select instruments and separate chord tones or explicit voices. Originals remain, with derived staves inserted immediately below them. Each selected instrument previews its additional staves and offers a fallback voice for each one.
+- **Create Practice Tracks:** open a MuseScore 4 `.mscz` or `.mscx` score, choose foreground/background MS Basic sounds for each instrument, and independently select background members and practice-track targets. Hidden parts remain selectable and multi-staff instruments remain one target.
 - Export one operation at a time. Open an exported file to continue arranging it.
 
-Only score-partwise documents with single-staff parts are supported. Multi-staff instruments such as piano and score-timewise documents are rejected with an explanation. There is no notation rendering or playback.
+MusicXML arranging supports score-partwise documents with single-staff parts. Multi-staff MusicXML instruments and score-timewise documents are rejected with an explanation. The app does not display notation or provide an audio player.
 
 In the desktop app, each split staff uses its written voice whenever that voice appears anywhere in the measure, preserving written rests and gaps. In chord mode, a compatible voice allocated to an extra chord-tone staff takes priority in its own measures. Only when all native sources are absent for the whole measure does the staff use its selected fallback; **None**, or an absent fallback voice, produces silence. Fallbacks never chain. In chord mode, the same chord-tone selection applies to the fallback voice.
 
 Ties continue automatically across fallback voice transitions when pitches match. **Automatically insert slurs at fallback voice transitions** is enabled by default; turn it off to replace the fallback note with a rest of the same duration when a tie would connect different pitches. Existing slurs are preserved. Generated slurs and their endpoint notes are marked red on the affected derived staff, with measure, voice, and pitch details shown in the export warnings.
 
 Fallback suggestions match consistent explicit up/down stems and prefer the matching voice present in the most measures where the target voice is absent. Missing or conflicting stems and tied candidates default to **None**. Suggestions are editable, and choices are kept separately for each queued file and split mode until the file is closed.
+
+## Practice tracks
+
+Install **MuseScore Studio 4.7.x** separately. Voiceweaver discovers its executable and bundled **MS Basic.sf3**; renderer settings also accept explicit paths. For a Linux AppImage, extract it with `--appimage-extract` and select the executable and matching SoundFont from that installation. Python, Muse Sounds, and online sound engines are unnecessary.
+
+Each selected target produces a 192 kbps MP3. The target uses its foreground sound at 0 dB; other selected background members use their background sounds, reduced by 6 dB by default (adjustable from 0–60 dB). Parts outside those roles are silent. Note velocity is fixed at 80 and expressive volume changes are disabled; notation, pitches, tempo, and repeats are retained. Mixer gain is not perceived loudness, and large ensembles can clip; no normalization is applied.
+
+The metronome checkbox controls **MuseScore's built-in metronome**, with an independent level from −60 to 0 dB (default −6 dB). No percussion staff or generated click notes are added. Keep MuseScore closed during exports: Voiceweaver temporarily changes only its metronome preference, restores its original value or absence afterward, and keeps a recovery journal if interrupted. Unresolved preference conflicts or unsupported preference layouts stop rendering with an explanation. Concurrent Voiceweaver jobs share a preference-store lock.
+
+Choose a destination folder to create a fresh numbered results folder. Existing files and source scores are preserved. Cancellation or a failed conversion retains completed MP3s and reports their paths. Settings remain with each queued score until it is closed. Practice tracks are currently a desktop feature; the Rust CLI remains focused on MusicXML arranging.
+
+Linux audio acceptance has been verified with MuseScore 4.7.5 and its bundled MS Basic SoundFont, including native metronome timing, gain and preference restoration. Native Windows/macOS rendering and preference restoration still require verification on those hosts; unit tests alone do not establish platform compatibility.
 
 ## Development
 

@@ -3,15 +3,21 @@ use mxml_core::{
     validate_score, write_score, Part, SplitFallback, SplitOptions, SplitResult, EXTENSIONS,
     MAX_XML_BYTES,
 };
+use practice_tracks::{
+    ExportReport, PracticeOptions, PracticePart, RendererConfig, RendererEnvironment,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 #[derive(Default)]
@@ -27,6 +33,30 @@ struct Session {
 }
 
 type SharedDocuments = Arc<Mutex<Documents>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum DocumentFormat {
+    Musicxml,
+    Musescore,
+}
+
+struct PracticeJob {
+    id: String,
+    cancelled: Arc<AtomicBool>,
+}
+
+type SharedPracticeJob = Arc<Mutex<Option<PracticeJob>>>;
+
+struct PracticeJobGuard(SharedPracticeJob);
+
+impl Drop for PracticeJobGuard {
+    fn drop(&mut self) {
+        if let Ok(mut job) = self.0.lock() {
+            *job = None;
+        }
+    }
+}
 
 #[derive(Serialize)]
 struct PartSummary {
@@ -68,6 +98,8 @@ struct Inspection {
     path: String,
     name: String,
     parts: Vec<PartSummary>,
+    format: DocumentFormat,
+    practice_parts: Vec<PracticePart>,
     error: Option<String>,
 }
 
@@ -110,15 +142,36 @@ fn lock_documents(
         .map_err(|_| "The document store is unavailable. Restart the application.".into())
 }
 
-fn supported(path: &Path) -> bool {
+fn supported_musicxml(path: &Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
+fn document_format(path: &Path) -> Option<DocumentFormat> {
+    if supported_musicxml(path) {
+        Some(DocumentFormat::Musicxml)
+    } else if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "mscx" | "mscz"))
+    {
+        Some(DocumentFormat::Musescore)
+    } else {
+        None
+    }
+}
+
+fn supported(path: &Path) -> bool {
+    document_format(path).is_some()
+}
+
 fn register_input(path: PathBuf, documents: &SharedDocuments) -> Result<(String, PathBuf), String> {
     if !supported(&path) {
-        return Err("Choose a .mxml, .musicxml, .xml, or .mxl score.".into());
+        return Err(
+            "Choose a MusicXML (.mxml, .musicxml, .xml, .mxl) or MuseScore (.mscz, .mscx) score."
+                .into(),
+        );
     }
     let context = path.to_string_lossy().into_owned();
     let path = path
@@ -162,6 +215,8 @@ fn inspect_registered(
             .to_string_lossy()
             .into_owned(),
         parts: Vec::new(),
+        format: document_format(Path::new(&context)).ok_or("Unsupported score format.")?,
+        practice_parts: Vec::new(),
         error: None,
     };
     let parsed = (|| -> Result<_, String> {
@@ -177,6 +232,10 @@ fn inspect_registered(
             .map_err(|error| error.to_string())?;
         if bytes.len() > MAX_XML_BYTES {
             return Err("The score exceeds the 64 MiB input limit.".into());
+        }
+        if result.format == DocumentFormat::Musescore {
+            let archive = practice_tracks::ScoreArchive::read_bytes(&bytes, &context)?;
+            return Ok((bytes, Vec::new(), archive.parts()?));
         }
         let score = read_score_bytes(&bytes, &context).map_err(|error| error.to_string())?;
         let parts = score
@@ -214,16 +273,17 @@ fn inspect_registered(
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        Ok((bytes, parts))
+        Ok((bytes, parts, Vec::new()))
     })();
     match parsed {
-        Ok((bytes, parts)) => {
+        Ok((bytes, parts, practice_parts)) => {
             lock_documents(documents)?
                 .sessions
                 .get_mut(&id)
                 .ok_or("The score was closed while reading it.")?
                 .bytes = Some(Arc::new(bytes));
             result.parts = parts;
+            result.practice_parts = practice_parts;
         }
         Err(error) => result.error = Some(error),
     }
@@ -248,6 +308,11 @@ async fn open_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
+            .add_filter(
+                "Scores",
+                &["mxml", "musicxml", "xml", "mxl", "mscz", "mscx"],
+            )
+            .add_filter("MuseScore scores", &["mscz", "mscx"])
             .add_filter("MusicXML scores", &["mxml", "musicxml", "xml", "mxl"])
             .blocking_pick_files()
             .unwrap_or_default()
@@ -373,7 +438,7 @@ async fn export_document(
             return Ok(None);
         };
         let output = file.into_path().map_err(|error| error.to_string())?;
-        if !supported(&output) {
+        if !supported_musicxml(&output) {
             return Err(
                 "The output filename must end with .mxml, .musicxml, .xml, or .mxl.".into(),
             );
@@ -411,15 +476,171 @@ async fn export_document(
     .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+async fn practice_environment(config: RendererConfig) -> Result<RendererEnvironment, String> {
+    tauri::async_runtime::spawn_blocking(move || practice_tracks::environment(config))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum PracticePathKind {
+    Executable,
+    Soundfont,
+}
+
+#[tauri::command]
+async fn pick_practice_path(
+    app: tauri::AppHandle,
+    kind: PracticePathKind,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let dialog = app.dialog().file();
+        let dialog = match kind {
+            PracticePathKind::Executable => dialog.set_title("Choose MuseScore 4.7 executable"),
+            PracticePathKind::Soundfont => dialog
+                .set_title("Choose the matching MS Basic SoundFont")
+                .add_filter("MS Basic SoundFont", &["sf3"]),
+        };
+        dialog
+            .blocking_pick_file()
+            .map(|file| {
+                file.into_path()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .map_err(|error| error.to_string())
+            })
+            .transpose()
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn begin_practice_job(
+    id: String,
+    jobs: &SharedPracticeJob,
+) -> Result<(Arc<AtomicBool>, PracticeJobGuard), String> {
+    let mut state = jobs
+        .lock()
+        .map_err(|_| "The practice export state is unavailable.")?;
+    if state.is_some() {
+        return Err("Another practice export is running. Finish or cancel it first.".into());
+    }
+    let cancelled = Arc::new(AtomicBool::new(false));
+    *state = Some(PracticeJob {
+        id,
+        cancelled: cancelled.clone(),
+    });
+    Ok((cancelled, PracticeJobGuard(jobs.clone())))
+}
+
+fn practice_snapshot(
+    id: &str,
+    documents: &SharedDocuments,
+) -> Result<(String, Arc<Vec<u8>>), String> {
+    let state = lock_documents(documents)?;
+    let session = state
+        .sessions
+        .get(id)
+        .ok_or("Unknown document. Open the score again.")?;
+    if document_format(Path::new(&session.context)) != Some(DocumentFormat::Musescore) {
+        return Err("Create Practice Tracks requires a .mscz or .mscx MuseScore score.".into());
+    }
+    let bytes = session
+        .bytes
+        .clone()
+        .ok_or("This score could not be parsed and cannot be exported.")?;
+    Ok((session.context.clone(), bytes))
+}
+
+#[derive(Clone, Serialize)]
+struct PracticeProgressEvent {
+    id: String,
+    #[serde(flatten)]
+    progress: practice_tracks::Progress,
+}
+
+#[tauri::command]
+async fn export_practice_tracks(
+    app: tauri::AppHandle,
+    id: String,
+    options: PracticeOptions,
+    config: RendererConfig,
+    documents: State<'_, SharedDocuments>,
+    jobs: State<'_, SharedPracticeJob>,
+) -> Result<Option<ExportReport>, String> {
+    let (context, bytes) = practice_snapshot(&id, &documents)?;
+    let recovery_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| error.to_string())?
+        .join("practice-tracks");
+    let (cancelled, guard) = begin_practice_job(id.clone(), &jobs)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        let Some(folder) = app
+            .dialog()
+            .file()
+            .set_title("Choose where to create the practice tracks folder")
+            .blocking_pick_folder()
+        else {
+            return Ok(None);
+        };
+        let output = folder.into_path().map_err(|error| error.to_string())?;
+        if cancelled.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+        practice_tracks::export_tracks(
+            &bytes,
+            &context,
+            &options,
+            &config,
+            &output,
+            &recovery_dir,
+            &cancelled,
+            |progress| {
+                let _ = app.emit(
+                    "practice-progress",
+                    PracticeProgressEvent {
+                        id: id.clone(),
+                        progress,
+                    },
+                );
+            },
+        )
+        .map(Some)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn cancel_practice_export(id: String, jobs: State<'_, SharedPracticeJob>) -> Result<(), String> {
+    let state = jobs
+        .lock()
+        .map_err(|_| "The practice export state is unavailable.")?;
+    let job = state
+        .as_ref()
+        .filter(|job| job.id == id)
+        .ok_or("No practice export is running for this score.")?;
+    job.cancelled.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(SharedDocuments::default())
+        .manage(SharedPracticeJob::default())
         .invoke_handler(tauri::generate_handler![
             inspect_file,
             open_files,
             release_document,
-            export_document
+            export_document,
+            practice_environment,
+            pick_practice_path,
+            export_practice_tracks,
+            cancel_practice_export
         ])
         .run(tauri::generate_context!())
         .expect("Failed to start Voiceweaver");
@@ -858,5 +1079,63 @@ mod tests {
                 .as_slice(),
             source
         );
+    }
+
+    #[test]
+    fn musescore_inspection_uses_an_immutable_snapshot_and_all_parts() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("practice.mscx");
+        let source = br#"<museScore version="4.70"><Score><Part id="1"><trackName>Choir</trackName><Staff id="1"/><Instrument id="voice"><Channel><program value="0"/></Channel></Instrument></Part><Part id="2"><trackName>Choir</trackName><show>0</show><Staff id="2"/><Instrument id="voice"/></Part><Staff id="1"><Measure/></Staff><Staff id="2"><Measure/></Staff></Score></museScore>"#;
+        std::fs::write(&path, source).unwrap();
+        let documents = SharedDocuments::default();
+        let inspected = inspect(path.clone(), &documents).unwrap();
+        assert!(inspected.error.is_none(), "{:?}", inspected.error);
+        assert_eq!(inspected.format, DocumentFormat::Musescore);
+        assert!(inspected.parts.is_empty());
+        assert_eq!(inspected.practice_parts.len(), 2);
+        assert_ne!(
+            inspected.practice_parts[0].key,
+            inspected.practice_parts[1].key
+        );
+        assert!(!inspected.practice_parts[1].visible);
+        std::fs::write(&path, b"changed outside VoiceWeaver").unwrap();
+        let (_, snapshot) = practice_snapshot(&inspected.id, &documents).unwrap();
+        assert_eq!(snapshot.as_slice(), source);
+    }
+
+    #[test]
+    fn practice_export_rejects_wrong_formats_and_failed_inspections() {
+        let directory = tempfile::tempdir().unwrap();
+        let documents = SharedDocuments::default();
+        let path = directory.path().join("broken.mscx");
+        std::fs::write(&path, b"invalid XML").unwrap();
+        let inspected = inspect(path, &documents).unwrap();
+        assert!(inspected.error.is_some());
+        assert!(practice_snapshot(&inspected.id, &documents).is_err());
+        let path = directory.path().join("music.xml");
+        std::fs::write(&path, FALLBACK_SCORE).unwrap();
+        let inspected = inspect(path, &documents).unwrap();
+        assert!(practice_snapshot(&inspected.id, &documents)
+            .unwrap_err()
+            .contains("requires"));
+        assert!(supported(Path::new("score.MSCZ")));
+        assert!(supported(Path::new("score.mscx")));
+        assert!(!supported_musicxml(Path::new("score.mscz")));
+    }
+
+    #[test]
+    fn only_one_practice_job_runs_and_its_guard_releases_the_slot() {
+        let jobs = SharedPracticeJob::default();
+        let (cancelled, guard) = begin_practice_job("document-1".into(), &jobs).unwrap();
+        assert!(begin_practice_job("document-2".into(), &jobs).is_err());
+        jobs.lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .cancelled
+            .store(true, Ordering::Relaxed);
+        assert!(cancelled.load(Ordering::Relaxed));
+        drop(guard);
+        assert!(begin_practice_job("document-2".into(), &jobs).is_ok());
     }
 }

@@ -30,8 +30,8 @@
     "resources": { "../../../docs/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt" },
     "targets": "all",
     "category": "Music",
-    "shortDescription": "Merge and split MusicXML instruments",
-    "longDescription": "Inspect MusicXML scores, merge instruments, and split chord tones or voices into new parts.",
+    "shortDescription": "Arrange scores and create practice tracks",
+    "longDescription": "Merge and split MusicXML instruments, and create instrument-focused MP3 practice tracks from MuseScore scores using MS Basic sounds.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -57,11 +57,11 @@ export function PracticeView({
         <Card.Title>MuseScore renderer</Card.Title>
         <Card.Description>MuseScore 4.7.x and its matching MS Basic SoundFont are required for MP3 export. You can inspect scores before configuring them.</Card.Description>
       </Card.Header>
-      <Card.Content>
+      <Card.Content className="flex flex-col gap-3">
         {(["executable", "soundfont"] as const).map((kind) => <RendererPath key={kind}
           kind={kind} value={config[kind]} placeholder={environment?.[kind] ?? "Detect automatically"}
           disabled={disabled} onChange={onConfigChange} onBrowse={onBrowse} />)}
-        <Button variant="secondary" isDisabled={disabled} data-action="practice-detect" onPress={onDetect}>
+        <Button className="self-start" variant="secondary" isDisabled={disabled} data-action="practice-detect" onPress={onDetect}>
           {checking ? "Checking renderer…" : "Check renderer and sounds"}
         </Button>
         <Description>Check renderer and sounds after changing a path.</Description>

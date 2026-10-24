@@ -9,6 +9,8 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Mutex};
+use std::time::Duration;
 
 // Keep the desktop boundary flat; these arguments have distinct ownership and lifetimes.
 #[allow(clippy::too_many_arguments)]
@@ -31,6 +33,14 @@ pub fn export_tracks(
         cancelled,
         progress,
         || MetronomePreference::begin(recovery_dir, options.metronome_enabled),
+        worker_limit(
+            std::thread::available_parallelism().ok().map(usize::from),
+            options
+                .parts
+                .iter()
+                .filter(|part| part.create_track)
+                .count(),
+        ),
     )
 }
 
@@ -45,6 +55,7 @@ fn export_with_preference(
     cancelled: &AtomicBool,
     progress: impl Fn(Progress),
     preference: impl FnOnce() -> Result<MetronomePreference>,
+    worker_count: usize,
 ) -> Result<ExportReport> {
     let original = ScoreArchive::read_bytes(bytes, context)?;
     let original_parts = original.parts()?;
@@ -111,57 +122,187 @@ fn export_with_preference(
         let mut normalized = ScoreArchive::read_bytes(&normalized_bytes, "normalized.mscz")?;
         normalized.verify_normalized(&original)?;
         normalized.merge_assets_from(&original);
-        let prepared_path = staging.path().join("practice.mscz");
-        let mp3_path = staging.path().join("rendered.mp3");
-        for (index, settings) in options.parts.iter().filter(|p| p.create_track).enumerate() {
-            check_cancelled(cancelled)?;
-            let part = original_parts
-                .iter()
-                .find(|p| p.key == settings.key)
-                .ok_or("Practice part disappeared after validation")?;
-            progress(Progress {
-                stage: format!("Rendering {}", part.name),
-                completed: index,
-                total,
-            });
-            normalized
-                .mix(options, &settings.key, &catalog)?
-                .write(&prepared_path)?;
-            if mp3_path.exists() {
-                fs::remove_file(&mp3_path).map_err(|e| e.to_string())?;
+        let jobs = options
+            .parts
+            .iter()
+            .filter(|settings| settings.create_track)
+            .map(|settings| {
+                original_parts
+                    .iter()
+                    .find(|part| part.key == settings.key)
+                    .ok_or_else(|| "Practice part disappeared after validation".to_owned())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let stopped = AtomicBool::new(false);
+        let workers = worker_count.max(1).min(total);
+        let (job_sender, job_receiver) = mpsc::sync_channel::<usize>(workers);
+        let job_receiver = Mutex::new(job_receiver);
+        let (result_sender, result_receiver) = mpsc::channel();
+        let result = std::thread::scope(|scope| {
+            let mut handles = vec![];
+            let mut error = None;
+            for worker in 0..workers {
+                let sender = result_sender.clone();
+                let receiver = &job_receiver;
+                let stopped = &stopped;
+                let normalized = &normalized;
+                let catalog = &catalog;
+                let executable = &executable;
+                let staging = staging.path();
+                let jobs = &jobs;
+                match std::thread::Builder::new()
+                    .name(format!("practice-render-{worker}"))
+                    .spawn_scoped(scope, move || {
+                        loop {
+                            let received = receiver.lock().unwrap().recv();
+                            let Ok(index) = received else { break };
+                            if stopped.load(Ordering::Relaxed) {
+                                break;
+                            }
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    let track_dir = staging.join(format!("track-{:04}", index + 1));
+                                    fs::create_dir(&track_dir).map_err(|e| {
+                                        format!("Cannot create track staging folder: {e}")
+                                    })?;
+                                    let prepared_path = track_dir.join("practice.mscz");
+                                    let mp3_path = track_dir.join("rendered.mp3");
+                                    normalized
+                                        .mix(options, &jobs[index].key, catalog)?
+                                        .write(&prepared_path)?;
+                                    check_cancelled(stopped)?;
+                                    renderer::run(
+                                        executable,
+                                        &[
+                                            OsString::from("-b"),
+                                            OsString::from("192"),
+                                            OsString::from("-o"),
+                                            mp3_path.as_os_str().into(),
+                                            prepared_path.as_os_str().into(),
+                                        ],
+                                        CONVERSION_TIMEOUT,
+                                        stopped,
+                                    )?;
+                                    renderer::validate_mp3(&mp3_path)?;
+                                    Ok::<_, String>(mp3_path)
+                                }))
+                                .unwrap_or_else(|_| {
+                                    Err("Practice-track render worker panicked.".into())
+                                });
+                            let failed = result.is_err();
+                            // Queue the cause before stopping siblings, whose cancellation is secondary.
+                            if sender.send((index, result)).is_err() {
+                                break;
+                            }
+                            if failed {
+                                stopped.store(true, Ordering::Relaxed);
+                                break;
+                            }
+                        }
+                    }) {
+                    Ok(handle) => handles.push(handle),
+                    Err(cause) => {
+                        error = Some(format!(
+                            "Cannot start practice-track render worker: {cause}"
+                        ));
+                        stopped.store(true, Ordering::Relaxed);
+                        break;
+                    }
+                }
             }
-            renderer::run(
-                &executable,
-                &[
-                    OsString::from("-b"),
-                    OsString::from("192"),
-                    OsString::from("-o"),
-                    mp3_path.as_os_str().into(),
-                    prepared_path.as_os_str().into(),
-                ],
-                CONVERSION_TIMEOUT,
-                cancelled,
-            )?;
-            renderer::validate_mp3(&mp3_path)?;
-            check_cancelled(cancelled)?;
-            let path = directory.join(format!(
-                "{:02} - {}.mp3",
-                index + 1,
-                safe_filename(&part.name)
-            ));
-            publish(&mp3_path, &path)?;
-            report.completed.push(CompletedTrack {
-                key: part.key.clone(),
-                name: part.name.clone(),
-                path: path.to_string_lossy().into_owned(),
-            });
-            progress(Progress {
-                stage: format!("Created {}", part.name),
-                completed: index + 1,
-                total,
-            });
-        }
-        Ok::<_, String>(())
+            drop(result_sender);
+            let mut job_sender = Some(job_sender);
+            let mut next = 0;
+            if error.is_none() {
+                for index in 0..workers {
+                    job_sender.as_ref().unwrap().send(index).unwrap();
+                    next += 1;
+                    progress(Progress {
+                        stage: format!("Rendering {}", jobs[index].name),
+                        completed: 0,
+                        total,
+                    });
+                }
+            } else {
+                job_sender.take();
+            }
+            loop {
+                if cancelled.load(Ordering::Relaxed) && error.is_none() {
+                    error = Some("Export cancelled.".into());
+                    stopped.store(true, Ordering::Relaxed);
+                }
+                if error.is_some() || next == total {
+                    job_sender.take();
+                }
+                match result_receiver.recv_timeout(Duration::from_millis(50)) {
+                    Ok((index, result)) => {
+                        if error.is_some() {
+                            continue;
+                        }
+                        let published = result.and_then(|mp3_path| {
+                            check_cancelled(cancelled)?;
+                            let part = jobs[index];
+                            let path = directory.join(format!(
+                                "{:02} - {}.mp3",
+                                index + 1,
+                                safe_filename(&part.name)
+                            ));
+                            publish(&mp3_path, &path)?;
+                            report.completed.push(CompletedTrack {
+                                key: part.key.clone(),
+                                name: part.name.clone(),
+                                path: path.to_string_lossy().into_owned(),
+                            });
+                            progress(Progress {
+                                stage: format!("Created {}", part.name),
+                                completed: report.completed.len(),
+                                total,
+                            });
+                            Ok(())
+                        });
+                        if let Err(cause) = published {
+                            error = Some(cause);
+                            stopped.store(true, Ordering::Relaxed);
+                            job_sender.take();
+                        } else if next < total
+                            && !stopped.load(Ordering::Relaxed)
+                            && !cancelled.load(Ordering::Relaxed)
+                        {
+                            if job_sender.as_ref().unwrap().send(next).is_err() {
+                                error = Some(
+                                    "Practice-track render workers stopped unexpectedly.".into(),
+                                );
+                                stopped.store(true, Ordering::Relaxed);
+                            } else {
+                                progress(Progress {
+                                    stage: format!("Rendering {}", jobs[next].name),
+                                    completed: report.completed.len(),
+                                    total,
+                                });
+                                next += 1;
+                            }
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            for handle in handles {
+                if handle.join().is_err() && error.is_none() {
+                    error = Some("Practice-track render worker panicked.".into());
+                }
+            }
+            if error.is_none() && report.completed.len() != total {
+                error = Some(
+                    "Practice-track render workers stopped before completing the export.".into(),
+                );
+            }
+            error.map_or(Ok(()), Err)
+        });
+        report
+            .completed
+            .sort_by_key(|track| jobs.iter().position(|part| part.key == track.key));
+        result
     })();
     if let Err(error) = rendered {
         report.cancelled = cancelled.load(Ordering::Relaxed);
@@ -181,6 +322,10 @@ fn export_with_preference(
         });
     }
     Ok(report)
+}
+
+fn worker_limit(cpu_count: Option<usize>, selected: usize) -> usize {
+    selected.min((cpu_count.unwrap_or(1) / 2).max(1))
 }
 
 fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
@@ -298,12 +443,9 @@ mod tests {
             r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo 'MuseScore Studio 4.7.5'; exit 0; fi
 if [ "$1" = "--sound-profile" ]; then cp "$5" "$4"; exit $?; fi
-counter="$(dirname "$0")/counter"
-n=0
-if [ -f "$counter" ]; then n=$(cat "$counter"); fi
-n=$((n+1))
-echo "$n" > "$counter"
-if [ "$n" -eq 2 ] && [ "{}" = "true" ]; then echo 'deliberate render failure' >&2; exit 9; fi
+track="$(basename "$(dirname "$5")")"
+touch "$(dirname "$0")/$track"
+if [ "$track" = "track-0002" ] && [ "{}" = "true" ]; then echo 'deliberate render failure' >&2; exit 9; fi
 printf '\377\373\260\000' > "$4"
 dd if=/dev/zero bs=200 count=1 >> "$4" 2>/dev/null
 "#,
@@ -380,6 +522,7 @@ dd if=/dev/zero bs=200 count=1 >> "$4" 2>/dev/null
                 }
             },
             || MetronomePreference::begin_test(&dir.path().join("recovery"), &preferences, true),
+            1,
         )
         .unwrap();
         assert_eq!(bytes, snapshot);
@@ -388,8 +531,7 @@ dd if=/dev/zero bs=200 count=1 >> "$4" 2>/dev/null
             .path()
             .join("recovery/musescore-metronome-recovery.json")
             .exists());
-        let normalized_bytes = fs::read(dir.path().join("counter")).unwrap();
-        (report, bytes, normalized_bytes, dir)
+        (report, bytes, vec![], dir)
     }
 
     #[test]
@@ -446,3 +588,6 @@ dd if=/dev/zero bs=200 count=1 >> "$4" 2>/dev/null
         assert!(!source.exists());
     }
 }
+
+#[cfg(all(test, unix))]
+mod parallel_tests;

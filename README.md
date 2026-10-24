@@ -25,11 +25,13 @@ Install **MuseScore Studio 4.7.x** separately. Voiceweaver discovers its executa
 
 Each selected target produces a 192 kbps MP3. The target uses its foreground sound at 0 dB; other selected background members use their background sounds, reduced by 6 dB by default (adjustable from 0–60 dB). Parts outside those roles are silent. Note velocity is fixed at 80 and expressive volume changes are disabled; notation, pitches, tempo, and repeats are retained. Mixer gain is not perceived loudness, and large ensembles can clip; no normalization is applied.
 
+Track rendering uses separate MuseScore processes, limited to half the available logical CPUs, rounded down, with at least one worker and no more workers than selected tracks. If CPU detection fails, exports use one worker. Each process loads its own score and sounds, so large exports on machines with many CPUs can use substantial memory. Completed tracks can appear out of order; filenames and the final track list retain the selected order.
+
 The metronome checkbox controls **MuseScore's built-in metronome**, with an independent level from −60 to 0 dB (default −6 dB). No percussion staff or generated click notes are added. Keep MuseScore closed during exports: Voiceweaver temporarily changes only its metronome preference, restores its original value or absence afterward, and keeps a recovery journal if interrupted. Unresolved preference conflicts or unsupported preference layouts stop rendering with an explanation. Concurrent Voiceweaver jobs share a preference-store lock.
 
 Choose a destination folder to create a fresh numbered results folder. Existing files and source scores are preserved. Cancellation or a failed conversion retains completed MP3s and reports their paths. Settings remain with each queued score until it is closed. Practice tracks are currently a desktop feature; the Rust CLI remains focused on MusicXML arranging.
 
-Linux audio acceptance has been verified with MuseScore 4.7.5 and its bundled MS Basic SoundFont, including native metronome timing, gain and preference restoration. Native Windows/macOS rendering and preference restoration still require verification on those hosts; unit tests alone do not establish platform compatibility.
+Linux audio acceptance has been verified with MuseScore 4.7.5 and its bundled MS Basic SoundFont, including native metronome timing, gain and preference restoration. Concurrent native rendering still requires verification. Native Windows/macOS rendering and preference restoration still require verification on those hosts; unit tests alone do not establish platform compatibility.
 
 ## Development
 

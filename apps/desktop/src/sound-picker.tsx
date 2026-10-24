@@ -1,4 +1,4 @@
-import { Button, ComboBox, Header, Input, Label, ListBox } from "@heroui/react";
+import { Button, ComboBox, Header, Input, Label, ListBox, Separator } from "@heroui/react";
 import { useRef, useState } from "react";
 import type { PresetId, SoundPreset } from "./model";
 import { soundKey, useRecentSounds } from "./recent-sounds";
@@ -34,7 +34,7 @@ export function SoundPicker({ id, label, presets, value, onChange, isDisabled }:
       onChange({ bank: preset.bank, program: preset.program });
       setQuery(null);
     }}>
-      <span>{preset.name}</span><span className="sound-picker__preset">Bank {preset.bank} · Program {preset.program}</span>
+      <Label>{preset.name}</Label>
       <ListBox.ItemIndicator />
     </ListBox.Item>
   );
@@ -72,6 +72,7 @@ export function SoundPicker({ id, label, presets, value, onChange, isDisabled }:
           renderEmptyState={() => <span className="sound-picker__empty">No instruments found</span>}
         >
           {recentPresets.length > 0 && <ListBox.Section id="recent"><Header>Recently selected</Header>{recentPresets.map(item)}</ListBox.Section>}
+          {recentPresets.length > 0 && catalog.length > 0 && <Separator />}
           {catalog.length > 0 && <ListBox.Section id="catalog"><Header>All instruments</Header>{catalog.map(item)}</ListBox.Section>}
         </ListBox>
       </ComboBox.Popover>

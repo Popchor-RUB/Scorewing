@@ -43,6 +43,7 @@ test("instrument picker supports search, keyboard selection, recents, persistenc
     const render = async (props = {}) => act(async () => root.render(createElement(Harness, props)));
     const input = (index = 0) => container.querySelectorAll("input")[index]!;
     const options = () => [...browser.document.querySelectorAll('[role="option"][data-key]')];
+    const separators = () => [...browser.document.querySelectorAll('[data-slot="separator"]')];
     const focus = async (index = 0) => act(async () => { input(index).focus(); });
     const key = async (name: string) => act(async () => { input().dispatchEvent(new browser.KeyboardEvent("keydown", { key: name, code: name, bubbles: true, cancelable: true })); });
     const type = async (text: string) => act(async () => {
@@ -66,7 +67,8 @@ test("instrument picker supports search, keyboard selection, recents, persistenc
     assert.equal(input().selectionStart, 0);
     assert.equal(input().selectionEnd, "Grand Piano".length);
     assert.equal(options().filter((option) => option.textContent.includes("Grand Piano")).length, 2);
-    assert.ok(options()[1].textContent.includes("Bank 1"), "duplicate names show their bank and program");
+    assert.deepEqual(options().map((option) => option.textContent), presets.map((preset) => preset.name), "options show only instrument names");
+    assert.equal(separators().length, 0, "a single section needs no separator");
     await type("vIo");
     assert.equal(options().length, 1);
     assert.ok(options()[0].textContent.includes("Violin"));
@@ -79,6 +81,9 @@ test("instrument picker supports search, keyboard selection, recents, persistenc
     await blur();
     await focus(1);
     assert.ok(browser.document.body.textContent.includes("Recently selected"), "history is shared across pickers");
+    assert.equal(separators().length, 1, "recent and catalog sections have a separator");
+    assert.ok(separators()[0].previousElementSibling?.textContent.includes("Recently selected"));
+    assert.ok(separators()[0].nextElementSibling?.textContent.includes("All instruments"));
     assert.ok(options()[0].textContent.includes("Violin"));
     assert.equal(options().length, presets.length, "recents are not duplicated in the catalog");
     await act(async () => input(1).blur());
@@ -87,6 +92,7 @@ test("instrument picker supports search, keyboard selection, recents, persistenc
     assert.equal(options().length, 0);
     assert.ok(browser.document.body.textContent.includes("No instruments found"));
     assert.ok(!browser.document.body.textContent.includes("Recently selected"));
+    assert.equal(separators().length, 0, "empty search results have no separator");
     await key("Escape");
     assert.equal(input().value, "Violin", "Escape restores the committed label");
     await blur();
@@ -118,8 +124,10 @@ test("instrument picker supports search, keyboard selection, recents, persistenc
     assert.ok(options()[0].textContent.includes("Organ"), "recents persist after remount");
     await type("violin");
     assert.ok(!browser.document.body.textContent.includes("Recently selected"));
+    assert.equal(separators().length, 0, "searching a single section hides the separator");
     await type("");
     assert.ok(browser.document.body.textContent.includes("Recently selected"), "clearing search restores recents");
+    assert.equal(separators().length, 1, "clearing search restores the section separator");
     await blur();
     await act(async () => (container.querySelector('[aria-label="Clear foreground sound"]') as unknown as HTMLButtonElement).click());
     assert.equal(commits.at(-1), null);

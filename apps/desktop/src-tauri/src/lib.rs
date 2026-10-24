@@ -509,14 +509,20 @@ async fn export_document(
             .file_stem()
             .unwrap_or_default()
             .to_string_lossy();
-        let Some(file) = app
-            .dialog()
-            .file()
-            .set_file_name(format!("{stem}-{suffix}.musicxml"))
-            .add_filter("MusicXML", &["musicxml", "mxml", "xml"])
-            .add_filter("Compressed MusicXML", &["mxl"])
-            .blocking_save_file()
-        else {
+        let dialog = app.dialog().file().set_file_name(format!(
+            "{stem}-{suffix}.{}",
+            if suffix == "diff" { "mxl" } else { "musicxml" }
+        ));
+        let dialog = if suffix == "diff" {
+            dialog
+                .add_filter("Compressed MusicXML", &["mxl"])
+                .add_filter("MusicXML", &["musicxml", "xml", "mxml"])
+        } else {
+            dialog
+                .add_filter("MusicXML", &["musicxml", "mxml", "xml"])
+                .add_filter("Compressed MusicXML", &["mxl"])
+        };
+        let Some(file) = dialog.blocking_save_file() else {
             return Ok(None);
         };
         let output = file.into_path().map_err(|error| error.to_string())?;
@@ -801,6 +807,15 @@ mod tests {
             Some("D")
         );
         write_score(&transformed.root, &output, &new_path, false).unwrap();
+        assert!(std::fs::read(&output).unwrap().starts_with(b"PK\x03\x04"));
+        let exported = mxml_core::read_score(&output).unwrap();
+        validate_score(&exported.root).unwrap();
+        let expected = read_score_bytes(
+            &mxml_core::serialize_xml(&transformed.root).unwrap(),
+            "expected.musicxml",
+        )
+        .unwrap();
+        assert_eq!(exported.root, expected.root);
         assert_eq!(std::fs::read(&new_path).unwrap(), newer.as_bytes());
         assert!(diff_snapshot(&state, &operation).is_err());
     }

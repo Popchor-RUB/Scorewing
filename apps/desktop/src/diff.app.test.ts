@@ -51,9 +51,9 @@ test("diff keeps both selections through cancellation/failure, exports, and rele
     await app.click('[data-action="export"]');
     assert.deepEqual(requests.at(-1), { id: "/scores/newer.musicxml", operation: { kind: "diff", older_id: "/scores/older.mxl" } });
     assert.match(app.find(".status").textContent!, /Export cancelled/);
-    result = { path: "/scores/newer-diff.musicxml", warnings: ["Deleted notes: nearest surviving note marked red."] };
+    result = { path: "/scores/newer-diff.mxl", warnings: ["Deleted notes: nearest surviving note marked red."] };
     await app.click('[data-action="export"]');
-    assert.match(app.find(".status").textContent!, /newer-diff.musicxml.*\nReview warnings:.*\nDeleted notes/);
+    assert.match(app.find(".status").textContent!, /newer-diff.mxl.*\nReview warnings:.*\nDeleted notes/);
     path = "/scores/earlier.xml";
     await app.click('[data-action="open-older"]');
     assert.ok(released.includes("/scores/older.mxl"));

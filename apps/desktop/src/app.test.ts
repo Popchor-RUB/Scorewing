@@ -1,317 +1,211 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Window } from "happy-dom";
-import type { Operation } from "./model.ts";
+import { act } from "react";
+import type { Inspection, Operation } from "./model.ts";
+import { mountTestApp } from "./test-support.ts";
 
-test("desktop queue, errors, grouping, splitting, cancellation, and export", async () => {
-  const browser = new Window({ url: "http://localhost:1420" });
-  const document = browser.document;
-  document.body.innerHTML = '<div id="app"></div>';
-  const globals = globalThis as unknown as Record<string, unknown>;
-  for (const name of [
-    "window",
-    "document",
-    "HTMLElement",
-    "HTMLInputElement",
-    "HTMLSelectElement",
-    "CSS",
-  ]) {
-    globals[name] =
-      name === "window"
-        ? browser
-        : name === "document"
-          ? document
-          : (browser as unknown as Record<string, unknown>)[name];
+function score(path: string, error: string | null = null): Inspection {
+  return {
+    id: path, path, name: path.split("/").pop()!, error, format: "musicxml",
+    parts: ["P1", "P2", "P3", "P4"].map((id) => ({
+      id, name: "Violin", instrument_names: ["Violin"], voice_count: 3,
+      split_plans: {
+        voices: [
+          { voice: "1", tone: 0, fallback_voice: null },
+          { voice: "2", tone: 0, fallback_voice: null },
+          { voice: "3", tone: 0, fallback_voice: "2" },
+        ],
+        chords: [
+          { voice: "1", tone: 0, fallback_voice: null },
+          { voice: "2", tone: 0, fallback_voice: null },
+          { voice: "2", tone: 1, fallback_voice: null },
+        ],
+      },
+    })),
+  };
+}
+
+test("browser preview still renders when native event APIs are unavailable", async () => {
+  const app = await mountTestApp(() => { throw new Error("No native commands in a browser"); });
+  const browser = app.browser as unknown as { __TAURI_INTERNALS__?: unknown };
+  const internals = browser.__TAURI_INTERNALS__;
+  const container = app.document.createElement("div");
+  app.document.body.append(container);
+  let dispose: (() => void) | undefined;
+  try {
+    delete browser.__TAURI_INTERNALS__;
+    const { mountApp } = await app.server.ssrLoadModule("/src/app.tsx");
+    await act(async () => { dispose = mountApp(container as unknown as HTMLElement); });
+    assert.ok(container.querySelector(".empty"));
+    assert.match(container.querySelector(".status")!.textContent!, /Native.*unavailable/);
+  } finally {
+    await act(async () => { dispose?.(); });
+    browser.__TAURI_INTERNALS__ = internals;
+    await app.close();
   }
-  const callbacks = new Map<number, (...args: unknown[]) => void>();
-  const listeners = new Map<string, number>();
-  let callbackId = 0;
-  let openCount = 0;
-  let cancelled = true;
-  let holdExport = false;
-  let finishExport: (() => void) | undefined;
-  let exportError: string | undefined;
-  let exportWarnings: string[] = [];
-  const exported: { id: string; operation: Operation }[] = [];
-  const pending: { finish?: () => void } = {};
+});
+
+test("single-score lifecycle preserves a score on cancellation or failure and releases native sessions", async () => {
+  let nextPath: string | null = "/scores/first.xml";
+  let finishInspection: ((inspection: Inspection) => void) | undefined;
+  let heldInspection = false;
+  let failReleaseId: string | undefined;
   const released: string[] = [];
-  (browser as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ =
-    {
-      metadata: {
-        currentWindow: { label: "main" },
-        currentWebview: { label: "main" },
-      },
-      transformCallback(callback: (...args: unknown[]) => void) {
-        callbacks.set(++callbackId, callback);
-        return callbackId;
-      },
-      unregisterCallback(id: number) {
-        callbacks.delete(id);
-      },
-      async invoke(command: string, args: Record<string, unknown>) {
-        if (command === "plugin:event|listen") {
-          listeners.set(String(args.event), Number(args.handler));
-          return listeners.size;
-        }
-        if (command === "plugin:event|unlisten") return;
-        if (command === "open_files")
-          return openCount++
-            ? ["/scores/arranged.mxl"]
-            : ["/scores/orchestra.xml", "/scores/broken.xml"];
-        if (command === "release_document") {
-          released.push(String(args.id));
-          return;
-        }
-        if (command === "inspect_file") {
-          const path = String(args.path);
-          const broken = path.includes("broken");
-          if (broken)
-            await new Promise<void>((resolve) => {
-              pending.finish = resolve;
-            });
-          return {
-            id: path,
-            path,
-            name: path.split("/").pop(),
-            error: broken ? "Part P2: invalid duration" : null,
-            parts: broken
-              ? []
-              : ["P1", "P2", "P3", "P4"].map((id) => ({
-                  id,
-                  name: "Violin",
-                  instrument_names: ["Violin"],
-                  voice_count: 3,
-                  split_plans: {
-                    voices: [
-                      { voice: "1", tone: 0, fallback_voice: null },
-                      { voice: "2", tone: 0, fallback_voice: null },
-                      { voice: "3", tone: 0, fallback_voice: "2" },
-                    ],
-                    chords: [
-                      { voice: "1", tone: 0, fallback_voice: null },
-                      { voice: "2", tone: 0, fallback_voice: null },
-                      { voice: "2", tone: 1, fallback_voice: null },
-                    ],
-                  },
-                })),
-          };
-        }
-        if (command === "export_document") {
-          exported.push(args as unknown as (typeof exported)[number]);
-          if (holdExport)
-            await new Promise<void>((resolve) => { finishExport = resolve; });
-          if (exportError) throw exportError;
-          return cancelled ? null : { path: "/scores/arranged.mxl", warnings: exportWarnings };
-        }
-        throw new Error(`Unexpected command ${command}`);
-      },
-    };
-  await import("./app.ts");
-  const settle = async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  };
-  const click = async (selector: string) => {
-    const element = document.querySelector(selector) as unknown as {
-      click(): void;
-    } | null;
-    assert.ok(element, selector);
-    element.click();
-    await settle();
-  };
-  const check = async (id: string) => click(`input[data-part="${id}"]`);
-  const choose = async (selector: string, value: string) => {
-    const select = document.querySelector(selector) as unknown as HTMLSelectElement;
-    assert.ok(select, selector);
-    select.value = value;
-    select.dispatchEvent(new browser.Event("change", { bubbles: true }) as unknown as Event);
-    await settle();
-  };
-  await click('[data-action="open"]');
-  assert.equal(document.querySelectorAll(".file-row").length, 2);
-  assert.equal(document.querySelectorAll(".instrument").length, 4);
-  assert.ok(
-    (
-      document.querySelector(
-        '[data-action="export"]',
-      ) as unknown as HTMLButtonElement
-    ).disabled,
-  );
-  assert.match(
-    document.querySelector(".export-bar")!.textContent,
-    /Wait for queued scores/,
-  );
-  pending.finish!();
-  await settle();
-  assert.match(
-    document.querySelector(".file-list")!.textContent,
-    /Could not read score/,
-  );
-  document.querySelector(".editor")!.scrollTop = 190;
-  document.querySelector(".file-list")!.scrollTop = 70;
-  browser.scrollTo(0, 230);
-  await check("P1");
-  assert.equal(document.querySelector(".editor")!.scrollTop, 190);
-  assert.equal(document.querySelector(".file-list")!.scrollTop, 70);
-  assert.equal(browser.scrollY, 230);
-  await click('input[name="operation"][value="merge"]');
-  assert.equal(document.querySelector(".editor")!.scrollTop, 190);
-  assert.equal(document.querySelector(".file-list")!.scrollTop, 70);
-  assert.equal(browser.scrollY, 230);
-  await click('[data-action="select"][data-key="2"]');
-  assert.equal(document.querySelector(".editor")!.scrollTop, 0);
-  assert.equal(document.querySelector(".file-list")!.scrollTop, 70);
-  assert.equal(browser.scrollY, 0);
-  assert.match(
-    document.querySelector(".editor")!.textContent,
-    /Part P2: invalid duration/,
-  );
-  await click('[data-action="select"][data-key="1"]');
-  await click('input[name="operation"][value="split"]');
-  await click('[data-action="export"]');
-  assert.match(
-    document.querySelector('[role="alert"]')!.textContent,
-    /Select at least one/,
-  );
-  assert.equal(exported.length, 0);
-  await check("P2");
-  assert.match(document.querySelector(".split-preview")!.textContent, /3 additional staves/);
-  const slurToggle = () => document.querySelector("#insert-fallback-slurs") as unknown as HTMLInputElement;
-  assert.ok(slurToggle().checked);
-  assert.match(document.querySelector("#fallback-connections-hint")!.textContent, /Ties are inserted automatically to continue existing ties when pitches match/);
-  assert.match(document.querySelector("#fallback-connections-hint")!.textContent, /When disabled, the fallback note is replaced with a rest of the same duration/);
-  assert.equal(slurToggle().getAttribute("aria-describedby"), "fallback-connections-hint");
-  assert.match(document.querySelector(".split-preview")!.textContent, /carry compatible voices/);
-  assert.match(document.querySelector(".split-preview")!.textContent, /fallback is used only when the staff’s native voices are absent for the whole measure/);
-  assert.match(document.querySelector('label[for="fallback-1-2"]')!.textContent, /Violin P2.*Additional staff 3.*Voice 2.*Chord tone 2.*Fallback voice/);
-  assert.deepEqual(Array.from((document.querySelector('select[data-lane="2"]') as unknown as HTMLSelectElement).options).map((option) => option.value), ["none", "voice:1", "voice:3"]);
-  await choose('select[data-lane="2"]', "voice:3");
-  await click('[data-action="export"]');
-  assert.deepEqual(exported.at(-1)?.operation, {
-    kind: "split", part_ids: ["P2"], mode: "chords",
-    insert_fallback_slurs: true,
-    fallbacks: [
-      { part_id: "P2", voice: "1", tone: 0, fallback_voice: null },
-      { part_id: "P2", voice: "2", tone: 0, fallback_voice: null },
-      { part_id: "P2", voice: "2", tone: 1, fallback_voice: "3" },
-    ],
+  const inspected: string[] = [];
+  const app = await mountTestApp(async (command, args) => {
+    if (command === "open_file") return nextPath;
+    if (command === "release_document") {
+      if (args.id === failReleaseId) { failReleaseId = undefined; throw new Error("Native session is busy"); }
+      released.push(String(args.id)); return;
+    }
+    if (command === "inspect_file") {
+      const path = String(args.path); inspected.push(path);
+      if (heldInspection) return await new Promise<Inspection>((resolve) => { finishInspection = resolve; });
+      if (path.includes("throws")) throw new Error("Unreadable replacement");
+      return score(path, path.includes("broken") ? "Part P2: invalid duration" : null);
+    }
+    throw new Error(`Unexpected command ${command}`);
   });
-  slurToggle().focus();
-  await click("#insert-fallback-slurs");
-  assert.equal(slurToggle().checked, false);
-  assert.equal(document.activeElement?.getAttribute("id"), "insert-fallback-slurs");
-  await choose("#split-mode", "voices");
-  assert.match(document.querySelector(".split-preview")!.textContent, /3 additional staves/);
-  const fallbackSelector = 'select[data-fallback-part="P2"][data-lane="2"]';
-  const fallbackSelect = () => document.querySelector(fallbackSelector) as unknown as HTMLSelectElement;
-  assert.equal(fallbackSelect().value, "voice:2");
-  assert.deepEqual(Array.from(fallbackSelect().options).map((option) => [option.value, option.textContent]), [["none", "None (silent)"], ["voice:1", "Voice 1"], ["voice:2", "Voice 2"]]);
-  assert.equal((document.querySelector('select[data-lane="0"]') as unknown as HTMLSelectElement).value, "none");
-  fallbackSelect().focus();
-  await choose(fallbackSelector, "none");
-  assert.equal(document.activeElement?.getAttribute("id"), "fallback-1-2");
-  await check("P2");
-  assert.equal(document.querySelector(".split-preview"), null);
-  await check("P2");
-  assert.equal(fallbackSelect().value, "none");
-  await choose("#split-mode", "chords");
-  assert.equal((document.querySelector('select[data-lane="2"]') as unknown as HTMLSelectElement).value, "voice:3");
-  await choose("#split-mode", "voices");
-  assert.equal(fallbackSelect().value, "none");
-  await click('[data-action="select"][data-key="2"]');
-  await click('[data-action="select"][data-key="1"]');
-  assert.equal(fallbackSelect().value, "none");
-  assert.equal(slurToggle().checked, false);
-  holdExport = true;
-  await click('[data-action="export"]');
-  assert.ok(fallbackSelect().disabled);
-  assert.ok(slurToggle().disabled);
-  finishExport!();
-  holdExport = false;
-  await settle();
-  assert.deepEqual(exported.at(-1)?.operation, {
-    kind: "split",
-    part_ids: ["P2"],
-    mode: "voices",
-    fallbacks: ["1", "2", "3"].map((voice) => ({ part_id: "P2", voice, tone: 0, fallback_voice: null })),
-    insert_fallback_slurs: false,
+  try {
+    assert.equal(app.document.querySelector('[data-action="close"]'), null);
+    assert.equal(app.find<HTMLButtonElement>('[data-action="open"]').classList.contains("button"), true);
+    const css = await app.server.transformRequest("/src/style.css");
+    assert.ok(css?.code.includes(".button--primary"), "HeroUI styles are compiled");
+    await app.click('[data-action="open"]');
+    assert.match(app.document.body.textContent!, /first.xml/);
+    await app.click('[data-part="P2"]');
+    await app.click("#insert-fallback-slurs");
+    nextPath = null;
+    await app.click('[data-action="open"]');
+    assert.equal(app.find<HTMLInputElement>("#insert-fallback-slurs").checked, false);
+    assert.equal(released.length, 0);
+    nextPath = "/scores/broken.xml";
+    await app.click('[data-action="open"]');
+    assert.match(app.find('[role="alert"]').textContent!, /invalid duration/);
+    assert.match(app.document.body.textContent!, /first.xml/);
+    assert.equal(app.find<HTMLInputElement>("#insert-fallback-slurs").checked, false);
+    assert.ok(released.includes("/scores/broken.xml"), "failed replacement session released");
+    nextPath = "/scores/throws.xml";
+    await app.click('[data-action="open"]');
+    assert.match(app.find('[role="alert"]').textContent!, /Unreadable replacement/);
+    assert.match(app.document.body.textContent!, /first.xml/);
+    failReleaseId = "/scores/first.xml";
+    nextPath = "/scores/unused.xml";
+    await app.click('[data-action="open"]');
+    assert.match(app.find('[role="alert"]').textContent!, /Native session is busy/);
+    assert.match(app.document.body.textContent!, /first.xml/);
+    assert.ok(released.includes("/scores/unused.xml"), "candidate released if previous session cannot be released");
+    failReleaseId = "/scores/first.xml";
+    await app.click('[data-action="close"]');
+    assert.match(app.find('[role="alert"]').textContent!, /Native session is busy/);
+    assert.match(app.document.body.textContent!, /first.xml/);
+    await app.event("tauri://drag-drop", { paths: ["/scores/a.xml", "/scores/b.xml"], position: { x: 0, y: 0 } });
+    assert.match(app.find('[role="alert"]').textContent!, /one score|one file|single/i);
+    assert.equal(inspected.includes("/scores/a.xml"), false);
+    heldInspection = true;
+    nextPath = "/scores/second.xml";
+    await app.click('[data-action="open"]');
+    assert.ok(app.find<HTMLButtonElement>('[data-action="open"]').disabled);
+    assert.ok(app.find<HTMLButtonElement>('[data-action="close"]').disabled);
+    await app.event("tauri://drag-drop", { paths: ["/scores/ignored.xml"], position: { x: 0, y: 0 } });
+    assert.equal(inspected.includes("/scores/ignored.xml"), false);
+    await act(async () => { finishInspection!(score(nextPath!)); });
+    await app.settle();
+    heldInspection = false;
+    assert.ok(released.includes("/scores/first.xml"));
+    assert.match(app.document.body.textContent!, /second.xml/);
+    assert.ok(app.find<HTMLInputElement>("#insert-fallback-slurs").checked, "new score resets choices");
+    assert.equal(app.document.querySelector(".split-preview"), null, "new score starts without selected parts");
+    await app.click('[data-action="close"]');
+    assert.ok(released.includes("/scores/second.xml"));
+    assert.equal(app.document.querySelector('[data-part="P1"]'), null);
+    await app.event("tauri://drag-drop", { paths: ["/scores/dropped.xml"], position: { x: 0, y: 0 } });
+    assert.match(app.document.body.textContent!, /dropped.xml/);
+    assert.equal(app.registrations.filter((event) => event === "tauri://drag-drop").length, 1);
+    assert.equal(app.registrations.filter((event) => event === "practice-progress").length, 1);
+  } finally { await app.close(); }
+  assert.equal(app.unregistered.length, app.registrations.length, "listeners cleaned up on unmount");
+});
+
+test("HeroUI split and merge controls retain choices, validate, and send unchanged export payloads", async () => {
+  const exported: { id: string; operation: Operation }[] = [];
+  let result: { path: string; warnings: string[] } | null = null;
+  let exportError: string | undefined;
+  let finishExport: (() => void) | undefined;
+  let holdExport = false;
+  const app = await mountTestApp(async (command, args) => {
+    if (command === "open_file") return "/scores/orchestra.xml";
+    if (command === "inspect_file") return score(String(args.path));
+    if (command === "release_document") return;
+    if (command === "export_document") {
+      exported.push(args as unknown as (typeof exported)[number]);
+      if (holdExport) await new Promise<void>((resolve) => { finishExport = resolve; });
+      if (exportError) throw exportError;
+      return result;
+    }
+    throw new Error(`Unexpected command ${command}`);
   });
-  assert.match(document.querySelector(".status")!.textContent, /cancelled/);
-  cancelled = false;
-  exportWarnings = ['Part "Violin", measure 1, position 0, voice 2, notes [C#4]: ambiguous tie assignment', 'Part "Violin", measure 8, position 1, voice 7, notes [Eb4]: ambiguous slur assignment', 'Part "Violin", measure 2, position 0, voice 1, notes [A4]; from Part "Violin", measure 1, position 0, voice 3, notes [E4]: inserted slur instead of a tie at a voice transition with different pitches'];
-  await click('[data-action="export"]');
-  assert.equal(document.querySelector(".status")!.textContent, `Exported /scores/arranged.mxl\nReview warnings — affected passages are marked red:\n${exportWarnings.join("\n")}`);
-  exportWarnings = [];
-  exportError = "Cannot write output file";
-  await click('[data-action="export"]');
-  assert.equal(document.querySelector('[role="alert"]')!.textContent, exportError);
-  assert.equal((document.querySelector('[data-action="export"]') as unknown as HTMLButtonElement).disabled, false);
-  exportError = undefined;
-  await click('input[name="operation"][value="merge"]');
-  assert.equal(document.querySelector("#insert-fallback-slurs"), null);
-  await check("P1");
-  await check("P2");
-  await click('[data-action="add-group"]');
-  assert.ok(
-    (
-      document.querySelector(
-        'input[data-part="P1"]',
-      ) as unknown as HTMLInputElement
-    ).disabled,
-  );
-  await click('[data-action="down"][data-index="0"]');
-  await check("P3");
-  await check("P4");
-  await click('[data-action="add-group"]');
-  assert.equal(document.querySelectorAll(".merge-group").length, 2);
-  assert.equal((document.querySelector('select[data-stem-part="P1"]') as unknown as HTMLSelectElement).value, "down");
-  await choose('select[data-stem-part="P1"]', "up");
-  await choose('select[data-stem-part="P3"]', "down");
-  await click('[data-action="up"][data-group="1"][data-index="1"]');
-  assert.equal((document.querySelector('select[data-stem-part="P3"]') as unknown as HTMLSelectElement).value, "down");
-  cancelled = false;
-  holdExport = true;
-  await click('[data-action="export"]');
-  assert.ok((document.querySelector('select[data-stem-part="P1"]') as unknown as HTMLSelectElement).disabled);
-  finishExport!();
-  holdExport = false;
-  await settle();
-  assert.deepEqual(exported.at(-1)?.operation, {
-    kind: "merge",
-    groups: [
-      ["P2", "P1"],
-      ["P4", "P3"],
-    ],
-    stems: [["up", "up"], ["up", "down"]],
-  });
-  assert.match(document.querySelector(".status")!.textContent, /Exported/);
-  await click('[data-action="open"]');
-  assert.equal(document.querySelectorAll(".file-row").length, 3);
-  await click('[data-action="select"][data-key="3"]');
-  await check("P2");
-  await choose("#split-mode", "voices");
-  assert.equal(fallbackSelect().value, "voice:2", "a new file starts with its own suggestions");
-  assert.ok(slurToggle().checked, "a new file defaults to automatic slurs");
-  await click('[data-action="select"][data-key="1"]');
-  await click('[data-action="remove"][data-key="2"]');
-  assert.deepEqual(released, ["/scores/broken.xml"]);
-  assert.equal(document.querySelectorAll(".file-row").length, 2);
-  const drop = callbacks.get(listeners.get("tauri://drag-drop")!);
-  assert.ok(drop, "native drag-drop listener registered");
-  drop({
-    payload: {
-      paths: ["/scores/dropped.musicxml"],
-      position: { x: 20, y: 20 },
-    },
-  });
-  await settle();
-  assert.equal(document.querySelectorAll(".file-row").length, 3);
-  drop({
-    payload: {
-      paths: ["/scores/dropped.musicxml"],
-      position: { x: 20, y: 20 },
-    },
-  });
-  await settle();
-  assert.equal(document.querySelectorAll(".file-row").length, 3);
-  await browser.happyDOM.close();
+  try {
+    await app.click('[data-action="open"]');
+    await app.click('[data-action="export"]');
+    assert.match(app.find('[role="alert"]').textContent!, /Select at least one/);
+    assert.equal(exported.length, 0);
+    await app.click('[data-part="P2"]');
+    assert.match(app.find(".split-preview").textContent!, /3 additional staves/);
+    assert.match(app.find(".options-card").textContent!, /Matching pitches continue existing ties/);
+    await app.choose("#fallback-P2-2-1", "Voice 3");
+    await app.click('[data-action="export"]');
+    assert.deepEqual(exported.at(-1)?.operation, {
+      kind: "split", part_ids: ["P2"], mode: "chords", insert_fallback_slurs: true,
+      fallbacks: [
+        { part_id: "P2", voice: "1", tone: 0, fallback_voice: null },
+        { part_id: "P2", voice: "2", tone: 0, fallback_voice: null },
+        { part_id: "P2", voice: "2", tone: 1, fallback_voice: "3" },
+      ],
+    });
+    await app.click("#insert-fallback-slurs");
+    await app.choose("#split-mode", "Explicit voices");
+    await app.choose("#fallback-P2-3-0", "None (silent)");
+    await app.click('[data-part="P2"]');
+    await app.click('[data-part="P2"]');
+    holdExport = true;
+    await app.click('[data-action="export"]');
+    assert.ok(app.find<HTMLButtonElement>('[data-action="open"]').disabled);
+    assert.ok(app.find<HTMLButtonElement>('[data-action="close"]').disabled);
+    assert.ok(app.find<HTMLInputElement>("#insert-fallback-slurs").disabled);
+    await act(async () => { finishExport!(); });
+    holdExport = false; await app.settle();
+    assert.deepEqual(exported.at(-1)?.operation, {
+      kind: "split", part_ids: ["P2"], mode: "voices", insert_fallback_slurs: false,
+      fallbacks: ["1", "2", "3"].map((voice) => ({ part_id: "P2", voice, tone: 0, fallback_voice: null })),
+    });
+    assert.match(app.find(".status").textContent!, /cancelled/);
+    result = { path: "/scores/arranged.mxl", warnings: ["Ambiguous tie assignment; affected passage marked red"] };
+    await app.click('[data-action="export"]');
+    assert.match(app.find(".status").textContent!, /Exported.*arranged.mxl/s);
+    assert.match(app.find(".status").textContent!, /Ambiguous tie assignment/);
+    exportError = "Cannot write output file";
+    await app.click('[data-action="export"]');
+    assert.match(app.find('[role="alert"]').textContent!, /Cannot write output file/);
+    assert.equal(app.find<HTMLButtonElement>('[data-action="export"]').disabled, false);
+    exportError = undefined;
+    await app.click('input[type="radio"][value="merge"]');
+    await app.click('[data-part="P1"]');
+    await app.click('[data-part="P2"]');
+    await app.click('[data-action="add-group"]');
+    await app.click('[data-action="down"][data-group="0"][data-index="0"]');
+    await app.click('[data-part="P3"]');
+    await app.click('[data-part="P4"]');
+    await app.click('[data-action="add-group"]');
+    assert.equal(app.document.querySelectorAll(".merge-group").length, 2);
+    await app.choose("#stem-P1", "Up");
+    await app.choose("#stem-P3", "Down");
+    await app.click('[data-action="up"][data-group="1"][data-index="1"]');
+    await app.click('[data-action="export"]');
+    assert.deepEqual(exported.at(-1)?.operation, {
+      kind: "merge", groups: [["P2", "P1"], ["P4", "P3"]], stems: [["up", "up"], ["up", "down"]],
+    });
+    await app.click('[data-action="remove-group"][data-group="1"]');
+    assert.equal(app.document.querySelectorAll(".merge-group").length, 1);
+  } finally { await app.close(); }
 });

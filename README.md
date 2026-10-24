@@ -4,7 +4,7 @@ A Rust CLI and Tauri 2 desktop app for splitting and merging choir staves in Mus
 
 Builds produce the `voiceweaver` CLI and `voiceweaver-desktop` executable, with desktop installers branded **Voiceweaver**.
 
-Open or drop `.mxml`, `.musicxml`, `.xml`, or compressed `.mxl` scores. Select a queued file to see its instruments, then choose **Merge** or **Split** and export a new score. Files are independent; merging across files is not supported.
+Open or drop one `.mxml`, `.musicxml`, `.xml`, or compressed `.mxl` score, then choose **Merge** or **Split** and export a new score. Use **Close score** to return to the start, or **Open another score** to replace it. Closing or replacing a score discards its editing choices; cancelling the picker or failing to load a replacement keeps the current score.
 
 - **Merge:** create disjoint groups of at least two instruments, order their voices, and choose each voice’s up/down stem direction. Matching notes with the same stem direction, onset, duration, and tie state collapse into the earliest voice, combining lyrics and markings.
 - **Split:** select instruments and separate chord tones or explicit voices. Originals remain, with derived staves inserted immediately below them. Each selected instrument previews its additional staves and offers a fallback voice for each one.
@@ -17,7 +17,7 @@ In the desktop app, each split staff uses its written voice whenever that voice 
 
 Ties continue automatically across fallback voice transitions when pitches match. **Automatically insert slurs at fallback voice transitions** is enabled by default; turn it off to replace the fallback note with a rest of the same duration when a tie would connect different pitches. Existing slurs are preserved. Generated slurs and their endpoint notes are marked red on the affected derived staff, with measure, voice, and pitch details shown in the export warnings.
 
-Fallback suggestions match consistent explicit up/down stems and prefer the matching voice present in the most measures where the target voice is absent. Missing or conflicting stems and tied candidates default to **None**. Suggestions are editable, and choices are kept separately for each queued file and split mode until the file is closed.
+Fallback suggestions match consistent explicit up/down stems and prefer the matching voice present in the most measures where the target voice is absent. Missing or conflicting stems and tied candidates default to **None**. Suggestions are editable, and choices are kept separately for each split mode until the score is closed or replaced.
 
 ## Practice tracks
 
@@ -29,7 +29,9 @@ Track rendering uses separate MuseScore processes, limited to half the available
 
 The metronome checkbox controls **MuseScore's built-in metronome**, with an independent level from −60 to 0 dB (default −6 dB). No percussion staff or generated click notes are added. Keep MuseScore closed during exports: Voiceweaver temporarily changes only its metronome preference, restores its original value or absence afterward, and keeps a recovery journal if interrupted. Unresolved preference conflicts or unsupported preference layouts stop rendering with an explanation. Concurrent Voiceweaver jobs share a preference-store lock.
 
-Choose a destination folder to create a fresh numbered results folder. Existing files and source scores are preserved. Cancellation or a failed conversion retains completed MP3s and reports their paths. Settings remain with each queued score until it is closed. Practice tracks are currently a desktop feature; the Rust CLI remains focused on MusicXML arranging.
+Foreground and background instrument fields open the full sound catalog on focus. Type to filter, use arrow keys to navigate, and press Enter to select. The five most recently selected sounds appear above the unfiltered catalog, shared across selectors and remembered between app sessions.
+
+Choose a destination folder to create a fresh numbered results folder. Existing files and source scores are preserved. Cancellation or a failed conversion retains completed MP3s and reports their paths. Score-specific settings remain until the score is closed or replaced; renderer paths and recent instruments survive score changes. Practice tracks are currently a desktop feature; the Rust CLI remains focused on MusicXML arranging.
 
 Linux audio acceptance has been verified with MuseScore 4.7.5 and its bundled MS Basic SoundFont, including native metronome timing, gain and preference restoration. Concurrent native rendering still requires verification. Native Windows/macOS rendering and preference restoration still require verification on those hosts; unit tests alone do not establish platform compatibility.
 
@@ -53,7 +55,7 @@ npm ci
 npm run dev
 ```
 
-Run `npm run tauri dev` instead to open the native desktop app with its Rust backend (requires the platform prerequisites in the setup guide). The browser preview can exercise the HeroUI button; score operations require Tauri. The visible **Test HeroUI** button changes to **HeroUI works** when pressed. Its React mount sits alongside the existing score editor. Styles load through `src/main.ts` → `src/style.css`, which imports Tailwind before HeroUI; no provider is needed.
+Run `npm run tauri dev` instead to open the native desktop app with its Rust backend (requires the platform prerequisites in the setup guide). The editor uses React and HeroUI components throughout; native score operations require Tauri. Styles load through `src/main.ts` → `src/style.css`, which imports Tailwind before HeroUI. UI tests mock native commands and exercise the editor and searchable sound selectors.
 
 For local release builds, run `tools/build-linux.sh`, `tools/build-macos.sh`, or `powershell -File tools/build-windows.ps1`. These scripts report missing prerequisites and never install dependencies. Linux prefers the prepared devcontainer; macOS and Windows build natively. The macOS script ad-hoc signs the app and installs it in `/Applications`. See [local compilation prerequisites](docs/SETUP.md#local-compilation-without-installing-dependencies).
 
@@ -73,7 +75,7 @@ Split scans the entire score, retains original staves, and adds numbered derived
 
 Ambiguous tie or slur assignments produce review warnings and still export a best-effort split. Assigned notes and timing are preserved; uncertain or incomplete connections are omitted from derived staves. Affected passages are colored red on the retained original and corresponding split staves in the exported score. The input file is unchanged. The desktop app lists warnings alongside the export path; the CLI prints warnings to stderr and exits successfully after writing. The core split functions return `SplitResult { root, warnings }`.
 
-Source replacement is refused, including aliases and hard links. GUI exports protect all queued sources. Existing outputs require confirmation in the GUI or `--force` in the CLI.
+Source replacement is refused, including aliases and hard links. GUI exports protect loaded sources. Existing outputs require confirmation in the GUI or `--force` in the CLI.
 
 Generated scores must pass structural, identifier/reference, and bundled official MusicXML 4.0 schema checks before atomic publication. Failed operations leave existing files intact. XML entities, unsafe archive paths, symbolic archive members, and inputs above 64 MiB are rejected; no external DTD or network lookup is required.
 

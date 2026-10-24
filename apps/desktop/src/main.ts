@@ -1,10 +1,5 @@
 import "./style.css";
-import { createElement } from "react";
-import { createRoot } from "react-dom/client";
-import { HeroUISmoke } from "./heroui-smoke.tsx";
+import { mountApp } from "./app.tsx";
 
-createRoot(document.getElementById("heroui-smoke")!).render(
-  createElement(HeroUISmoke),
-);
-
-void import("./app.ts").catch(console.error);
+const dispose = mountApp(document.getElementById("app")!);
+if (import.meta.hot) import.meta.hot.dispose(dispose);

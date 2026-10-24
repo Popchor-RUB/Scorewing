@@ -304,7 +304,7 @@ async fn inspect_file(
 }
 
 #[tauri::command]
-async fn open_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+async fn open_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
@@ -314,15 +314,13 @@ async fn open_files(app: tauri::AppHandle) -> Result<Vec<String>, String> {
             )
             .add_filter("MuseScore scores", &["mscz", "mscx"])
             .add_filter("MusicXML scores", &["mxml", "musicxml", "xml", "mxl"])
-            .blocking_pick_files()
-            .unwrap_or_default()
-            .into_iter()
+            .blocking_pick_file()
             .map(|file| {
                 file.into_path()
                     .map(|path| path.to_string_lossy().into_owned())
                     .map_err(|error| error.to_string())
             })
-            .collect()
+            .transpose()
     })
     .await
     .map_err(|error| error.to_string())?
@@ -634,7 +632,7 @@ pub fn run() {
         .manage(SharedPracticeJob::default())
         .invoke_handler(tauri::generate_handler![
             inspect_file,
-            open_files,
+            open_file,
             release_document,
             export_document,
             practice_environment,

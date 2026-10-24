@@ -14,6 +14,7 @@ import { RecentSoundsProvider } from "./sound-picker.tsx";
 
 interface ScoreSession {
   document: Inspection;
+  older?: Inspection;
   arrangement: Arrangement;
   practice?: PracticeOptions;
   progress?: PracticeProgress;
@@ -96,11 +97,19 @@ export function mountApp(container: HTMLElement): () => void {
     await invoke("release_document", { id });
   }
 
+  async function releaseSession(session: ScoreSession) {
+    if (session.older) {
+      await release(session.older.id);
+      session.older = undefined;
+    }
+    await release(session.document.id);
+  }
+
   function releaseAfterDispose() {
     if (!disposed || !current) return;
-    const id = current.document.id;
+    const session = current;
     current = null;
-    void release(id).catch(console.error);
+    void releaseSession(session).catch(console.error);
   }
 
   async function replaceScore(path: string) {
@@ -110,7 +119,7 @@ export function mountApp(container: HTMLElement): () => void {
       if (candidate.error) throw new Error(candidate.error);
       if (disposed) return;
       if (current) {
-        await release(current.document.id);
+        await releaseSession(current);
         current = null;
       }
       if (disposed) return;
@@ -157,13 +166,43 @@ export function mountApp(container: HTMLElement): () => void {
     fileBusy = true;
     render();
     try {
-      await release(current.document.id);
+      await releaseSession(current);
       current = null;
       message = "";
       messageError = false;
       window.scrollTo(0, 0);
     } catch (error) { notify(`Could not close score: ${String(error)}`, true); }
     finally { fileBusy = false; if (disposed) releaseAfterDispose(); render(); }
+  }
+
+  async function openOlder() {
+    if (!current || busy() || disposed) return;
+    const session = current;
+    let candidate: Inspection | undefined;
+    fileBusy = true;
+    render();
+    try {
+      const path = await invoke<string | null>("open_file");
+      if (!path || disposed) return;
+      candidate = await invoke<Inspection>("inspect_file", { path });
+      if (candidate.error) throw new Error(candidate.error);
+      if (candidate.format === "musescore") throw new Error("Choose an older MusicXML (.mxml, .musicxml, .xml, .mxl) score.");
+      if (disposed || current !== session) return;
+      if (session.older) await release(session.older.id);
+      session.older = candidate;
+      candidate = undefined;
+      message = "";
+      messageError = false;
+    } catch (error) { notify(`Could not open older version: ${String(error)}`, true); }
+    finally {
+      if (candidate) {
+        try { await release(candidate.id); }
+        catch (error) { notify(`Could not release the unused score: ${String(error)}`, true); }
+      }
+      fileBusy = false;
+      if (disposed) releaseAfterDispose();
+      render();
+    }
   }
 
   async function browse(kind: keyof PracticeConfig) {
@@ -188,14 +227,14 @@ export function mountApp(container: HTMLElement): () => void {
     const session = current;
     try {
       const options = session.practice ? practiceOptions(session.practice, environment?.presets ?? []) : null;
-      const request = options ? null : operation(session.arrangement, session.document.parts);
+      const request = options ? null : operation(session.arrangement, session.document.parts, session.older?.id);
       if (options && (!environment?.executable || !environment.soundfont || environment.error))
         throw new Error(environment?.error ?? "Configure MuseScore 4.7.x and its MS Basic SoundFont before rendering.");
       exporting = true;
       cancelling = false;
       session.result = undefined;
       session.progress = undefined;
-      notify(options ? "Choose a folder for your practice tracks." : "Choose where to save your arranged score.");
+      notify(options ? "Choose a folder for your practice tracks." : session.arrangement.kind === "diff" ? "Choose where to save your marked newer version." : "Choose where to save your arranged score.");
       if (options) {
         const result = await invoke<PracticeResult | null>("export_practice_tracks", {
           id: session.document.id, options, config: { ...config },
@@ -210,7 +249,7 @@ export function mountApp(container: HTMLElement): () => void {
         });
         if (!disposed && current === session) notify(result ? [
           `Exported ${result.path}`,
-          ...(result.warnings.length ? ["Review warnings — affected passages are marked red:", ...result.warnings] : []),
+          ...(result.warnings.length ? [session.arrangement.kind === "diff" ? "Review warnings:" : "Review warnings — affected passages are marked red:", ...result.warnings] : []),
         ].join("\n") : "Export cancelled.");
       }
     } catch (error) { notify(String(error), true); }
@@ -303,6 +342,19 @@ export function mountApp(container: HTMLElement): () => void {
     </>;
   }
 
+  function diffView(session: ScoreSession) {
+    return <Card className="diff-card"><Card.Header>
+      <Card.Title>See what changed.</Card.Title>
+      <Card.Description>Export the newer version with changed notes, lyrics, dynamics, chord symbols, ties, and slurs marked red. Deleted content marks nearby surviving music.</Card.Description>
+    </Card.Header><Card.Content className="space-y-5">
+      <div><Label>Newer version</Label><p className="wrap-anywhere">{session.document.name}</p><Description>{session.document.path}</Description></div>
+      <div><Label>Older version</Label><p className="wrap-anywhere">{session.older?.name ?? "Choose a version to compare against."}</p>{session.older && <Description>{session.older.path}</Description>}</div>
+      <Button variant="secondary" data-action="open-older" isDisabled={busy()} onPress={() => void openOlder()}>{session.older ? "Replace older version" : "Choose older version"}</Button>
+      <Description>Sound-equivalent pitches such as C♯ and D♭ compare as equal. Both source files stay intact.</Description>
+      <Button data-action="export" isDisabled={busy() || !session.older} onPress={() => void exportScore()}>{exporting ? "Exporting…" : "Export marked newer version"}</Button>
+    </Card.Content></Card>;
+  }
+
   function render() {
     if (disposed) return;
     const session = current;
@@ -327,18 +379,18 @@ export function mountApp(container: HTMLElement): () => void {
               if ((kind === "practice") !== museScore) return;
               arrangement.kind = kind as Arrangement["kind"]; arrangement.selected.clear(); message = "";
             })}>
-            {(["split", "merge", "practice"] as const).map((kind) => <Radio key={kind} value={kind} isDisabled={kind === "practice" ? !museScore : museScore}>
-              <Radio.Content><Radio.Control><Radio.Indicator /></Radio.Control><Label>{kind === "split" ? "Split instruments" : kind === "merge" ? "Merge instruments" : "Create Practice Tracks"}</Label></Radio.Content>
-              <Description>{kind === "split" ? "Give every line its own staff" : kind === "merge" ? "Bring parts into a single staff" : "Your instrument in the foreground"}</Description>
+            {(["split", "merge", "diff", "practice"] as const).map((kind) => <Radio key={kind} value={kind} isDisabled={kind === "practice" ? !museScore : museScore}>
+              <Radio.Content><Radio.Control><Radio.Indicator /></Radio.Control><Label>{kind === "split" ? "Split instruments" : kind === "merge" ? "Merge instruments" : kind === "diff" ? "Diff versions" : "Create Practice Tracks"}</Label></Radio.Content>
+              <Description>{kind === "split" ? "Give every line its own staff" : kind === "merge" ? "Bring parts into a single staff" : kind === "diff" ? "Mark changes in the newer score" : "Your instrument in the foreground"}</Description>
             </Radio>)}
           </RadioGroup>
-          <Description id="operation-format-hint">{museScore ? "Split and merge require a MusicXML score." : "Practice tracks require a MuseScore .mscz or .mscx score."}</Description>
+          <Description id="operation-format-hint">{museScore ? "Split, merge, and diff require a MusicXML score." : "Practice tracks require a MuseScore .mscz or .mscx score."}</Description>
           {session.practice ? <PracticeView parts={score!.practice_parts ?? []} options={session.practice} config={config} environment={environment} checking={checking}
             busy={busy()} rendering={exporting} cancelling={cancelling} progress={session.progress} result={session.result} onOptionsChange={render}
             onConfigChange={(kind, value) => {
               if (busy()) return;
               config[kind] = value.trim() || null; environment = null; ++environmentRequest; checking = false; render();
-            }} onBrowse={(kind) => void browse(kind)} onDetect={() => void refreshEnvironment()} onExport={() => void exportScore()} onCancel={() => void cancelExport()} /> : arrangementView(session)}
+            }} onBrowse={(kind) => void browse(kind)} onDetect={() => void refreshEnvironment()} onExport={() => void exportScore()} onCancel={() => void cancelExport()} /> : session.arrangement.kind === "diff" ? diffView(session) : arrangementView(session)}
         </div>}
       </section></main>
       <div className={`status mx-auto max-w-6xl px-5 pb-6 text-sm whitespace-pre-line wrap-anywhere sm:px-7 ${messageError ? "text-danger" : "text-muted"}`} role={messageError ? "alert" : "status"} aria-live="polite">{message || "Your music stays on this device."}</div>

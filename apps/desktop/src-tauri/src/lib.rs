@@ -1,7 +1,7 @@
 use mxml_core::{
-    check_output, merge_score_with_stems, read_score_bytes, split_plan, split_score_with_options,
-    validate_score, write_score, Part, SplitFallback, SplitOptions, SplitResult, EXTENSIONS,
-    MAX_XML_BYTES,
+    check_output, diff_score, merge_score_with_stems, read_score_bytes, split_plan,
+    split_score_with_options, validate_score, write_score, Part, SplitFallback, SplitOptions,
+    SplitResult, EXTENSIONS, MAX_XML_BYTES,
 };
 use practice_tracks::{
     ExportReport, PracticeOptions, PracticePart, RendererConfig, RendererEnvironment,
@@ -115,6 +115,9 @@ enum Operation {
     Merge {
         groups: Vec<Vec<String>>,
         stems: Vec<Vec<String>>,
+    },
+    Diff {
+        older_id: String,
     },
 }
 
@@ -384,10 +387,61 @@ fn prepare_export(
                 warnings: Vec::new(),
             })
         }
+        Operation::Diff { .. } => return Err("Diff requires an older document snapshot.".into()),
     }
     .map_err(|error| error.to_string())?;
     validate_score(&transformed.root).map_err(|error| error.to_string())?;
     Ok(transformed)
+}
+
+fn prepare_diff_export(
+    newer: &[u8],
+    newer_context: &str,
+    older: &[u8],
+    older_context: &str,
+) -> Result<SplitResult, String> {
+    let newer = read_score_bytes(newer, newer_context).map_err(|error| error.to_string())?;
+    let older = read_score_bytes(older, older_context).map_err(|error| error.to_string())?;
+    let result = diff_score(&older, &newer).map_err(|error| error.to_string())?;
+    validate_score(&result.root).map_err(|error| error.to_string())?;
+    Ok(SplitResult {
+        root: result.root,
+        warnings: result.warnings,
+    })
+}
+
+fn diff_snapshot(state: &Documents, operation: &Operation) -> Result<Option<Session>, String> {
+    let Operation::Diff { older_id } = operation else {
+        return Ok(None);
+    };
+    let session = state
+        .sessions
+        .get(older_id)
+        .ok_or("Unknown older version. Choose it again.")?;
+    if !supported_musicxml(Path::new(&session.context)) {
+        return Err("The older version must be a MusicXML score.".into());
+    }
+    let bytes = session
+        .bytes
+        .clone()
+        .ok_or("The older version could not be parsed and cannot be compared.")?;
+    Ok(Some(Session {
+        path: session.path.clone(),
+        context: session.context.clone(),
+        bytes: Some(bytes),
+    }))
+}
+
+fn protect_export_sources(
+    state: &Documents,
+    output: &Path,
+    sources: &[PathBuf],
+) -> Result<(), String> {
+    protect_sources(state, output)?;
+    for source in sources {
+        check_output(source, output, true).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -404,7 +458,7 @@ async fn export_document(
     documents: State<'_, SharedDocuments>,
 ) -> Result<Option<ExportResult>, String> {
     let documents = documents.inner().clone();
-    let (input, context, bytes) = {
+    let (input, context, bytes, older) = {
         let state = lock_documents(&documents)?;
         let session = state
             .sessions
@@ -417,10 +471,26 @@ async fn export_document(
                 .bytes
                 .clone()
                 .ok_or("This score could not be parsed and cannot be exported.")?,
+            diff_snapshot(&state, &operation)?,
         )
     };
     tauri::async_runtime::spawn_blocking(move || {
-        let transformed = prepare_export(&bytes, &context, operation)?;
+        let mut sources = vec![input.clone(), PathBuf::from(&context)];
+        let suffix = if older.is_some() { "diff" } else { "arranged" };
+        let transformed = if let Some(older) = older {
+            if !supported_musicxml(Path::new(&context)) {
+                return Err("The newer version must be a MusicXML score.".into());
+            }
+            sources.extend([older.path, PathBuf::from(&older.context)]);
+            prepare_diff_export(
+                &bytes,
+                &context,
+                older.bytes.as_ref().unwrap(),
+                &older.context,
+            )?
+        } else {
+            prepare_export(&bytes, &context, operation)?
+        };
         let stem = Path::new(&context)
             .file_stem()
             .unwrap_or_default()
@@ -428,7 +498,7 @@ async fn export_document(
         let Some(file) = app
             .dialog()
             .file()
-            .set_file_name(format!("{stem}-arranged.musicxml"))
+            .set_file_name(format!("{stem}-{suffix}.musicxml"))
             .add_filter("MusicXML", &["musicxml", "mxml", "xml"])
             .add_filter("Compressed MusicXML", &["mxl"])
             .blocking_save_file()
@@ -443,7 +513,7 @@ async fn export_document(
         }
         {
             let state = lock_documents(&documents)?;
-            protect_sources(&state, &output)?;
+            protect_export_sources(&state, &output, &sources)?;
         }
         let overwrite = output.exists();
         if overwrite
@@ -462,7 +532,7 @@ async fn export_document(
         }
         // A new queued score must be protected even if opened while this export was preparing.
         let state = lock_documents(&documents)?;
-        protect_sources(&state, &output)?;
+        protect_export_sources(&state, &output, &sources)?;
         write_score(&transformed.root, &output, &input, overwrite)
             .map_err(|error| error.to_string())?;
         Ok(Some(ExportResult {
@@ -647,6 +717,85 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diff_export_uses_snapshots_and_protects_both_inputs_after_release() {
+        let directory = tempfile::tempdir().unwrap();
+        let old_path = directory.path().join("old.musicxml");
+        let new_path = directory.path().join("new.musicxml");
+        std::fs::write(&old_path, FALLBACK_SCORE).unwrap();
+        let newer = String::from_utf8(FALLBACK_SCORE.to_vec())
+            .unwrap()
+            .replacen("<step>C</step>", "<step>D</step>", 1);
+        std::fs::write(&new_path, newer.as_bytes()).unwrap();
+        let documents = SharedDocuments::default();
+        let old = inspect(old_path.clone(), &documents).unwrap();
+        let new = inspect(new_path.clone(), &documents).unwrap();
+        let operation = Operation::Diff {
+            older_id: old.id.clone(),
+        };
+        let mut state = lock_documents(&documents).unwrap();
+        let snapshot = diff_snapshot(&state, &operation).unwrap().unwrap();
+        let new_bytes = state.sessions[&new.id].bytes.clone().unwrap();
+        std::fs::write(&old_path, b"changed on disk").unwrap();
+        state.sessions.clear();
+        let sources = vec![old_path.clone(), new_path.clone()];
+        assert!(protect_export_sources(&state, &old_path, &sources).is_err());
+        assert!(protect_export_sources(&state, &new_path, &sources).is_err());
+        let alias = directory.path().join("old-alias.musicxml");
+        std::fs::hard_link(&old_path, &alias).unwrap();
+        assert!(protect_export_sources(&state, &alias, &sources).is_err());
+        let output = directory.path().join("diff.mxl");
+        assert!(protect_export_sources(&state, &output, &sources).is_ok());
+        let transformed = prepare_diff_export(
+            &new_bytes,
+            &new.path,
+            snapshot.bytes.as_ref().unwrap(),
+            &snapshot.context,
+        )
+        .unwrap();
+        let score = mxml_core::parse_score(transformed.root.clone()).unwrap();
+        assert_eq!(
+            score.parts[0].measures[0].events[0].notes[0].attributes["color"],
+            "#FF0000"
+        );
+        assert_eq!(
+            mxml_core::xml::child_text(
+                mxml_core::xml::child(&score.parts[0].measures[0].events[0].notes[0], "pitch")
+                    .unwrap(),
+                "step"
+            )
+            .as_deref(),
+            Some("D")
+        );
+        write_score(&transformed.root, &output, &new_path, false).unwrap();
+        assert_eq!(std::fs::read(&new_path).unwrap(), newer.as_bytes());
+        assert!(diff_snapshot(&state, &operation).is_err());
+    }
+
+    #[test]
+    fn diff_rejects_unparsed_wrong_format_or_missing_older_versions() {
+        let mut state = Documents::default();
+        let request = Operation::Diff {
+            older_id: "older".into(),
+        };
+        assert!(diff_snapshot(&state, &request).is_err());
+        state.sessions.insert(
+            "older".into(),
+            Session {
+                path: "older.musicxml".into(),
+                context: "older.musicxml".into(),
+                bytes: None,
+            },
+        );
+        assert!(diff_snapshot(&state, &request).is_err());
+        state.sessions.get_mut("older").unwrap().context = "older.mscz".into();
+        assert!(diff_snapshot(&state, &request)
+            .err()
+            .unwrap()
+            .contains("MusicXML"));
+        assert!(prepare_diff_export(FALLBACK_SCORE, "new.xml", b"broken", "old.xml").is_err());
+    }
 
     const FALLBACK_SCORE: &[u8] = concat!(
         "<score-partwise version=\"4.0\"><part-list><score-part id=\"P1\"><part-name>Choir</part-name></score-part></part-list><part id=\"P1\">",

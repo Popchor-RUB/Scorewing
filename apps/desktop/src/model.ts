@@ -100,10 +100,11 @@ export type Operation =
       fallbacks: SplitFallback[];
       insert_fallback_slurs: boolean;
     }
-  | { kind: "merge"; groups: string[][]; stems: StemDirection[][] };
+  | { kind: "merge"; groups: string[][]; stems: StemDirection[][] }
+  | { kind: "diff"; older_id: string };
 
 export interface Arrangement {
-  kind: "split" | "merge" | "practice";
+  kind: "split" | "merge" | "practice" | "diff";
   mode: "chords" | "voices";
   selected: Set<string>;
   groups: string[][];
@@ -178,9 +179,13 @@ export function movePart(group: string[], index: number, offset: -1 | 1): void {
   [group[index], group[next]] = [group[next], group[index]];
 }
 
-export function operation(arrangement: Arrangement, parts: Part[]): Operation {
+export function operation(arrangement: Arrangement, parts: Part[], olderId?: string): Operation {
   if (arrangement.kind === "practice")
     throw new Error("Use practice track export for MuseScore files.");
+  if (arrangement.kind === "diff") {
+    if (!olderId) throw new Error("Choose an older MusicXML version to compare.");
+    return { kind: "diff", older_id: olderId };
+  }
   const known = new Set(parts.map((part) => part.id));
   if (arrangement.kind === "split") {
     const part_ids = parts

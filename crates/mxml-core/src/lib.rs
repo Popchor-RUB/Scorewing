@@ -1,9 +1,11 @@
+pub mod diff;
 pub mod io;
 pub mod merge;
 pub mod model;
 pub mod split;
 pub mod xml;
 
+pub use diff::{diff_score, DiffResult};
 pub use io::*;
 pub use merge::{merge_score, merge_score_with_stems};
 pub use model::*;

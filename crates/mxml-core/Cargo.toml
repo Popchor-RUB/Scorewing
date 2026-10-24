@@ -15,3 +15,4 @@ libxml = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 tempfile = "3"
 same-file = "1"
+similar = { version = "2.7", default-features = false }

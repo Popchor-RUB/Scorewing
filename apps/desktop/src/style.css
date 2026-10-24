@@ -1,2 +1,20 @@
 @import "tailwindcss";
 @import "@heroui/styles";
+
+.dancing-note {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: note-dance 1.4s ease-in-out infinite;
+}
+
+.dancing-note:nth-of-type(3) { animation-delay: -.45s; }
+.dancing-note:nth-of-type(4) { animation-delay: -.9s; }
+
+@keyframes note-dance {
+  0%, 100% { transform: translateY(0) rotate(-7deg); }
+  50% { transform: translateY(-16px) rotate(7deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dancing-note { animation: none; }
+}

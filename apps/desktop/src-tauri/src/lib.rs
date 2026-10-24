@@ -19,6 +19,7 @@ use std::{
 };
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Default)]
 struct Documents {
@@ -708,9 +709,25 @@ fn cancel_practice_export(id: String, jobs: State<'_, SharedPracticeJob>) -> Res
     Ok(())
 }
 
+fn validate_export_directory(directory: &Path) -> Result<(), String> {
+    if !directory.is_absolute() || !directory.is_dir() {
+        return Err("The exported folder no longer exists or is not an absolute directory.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_practice_export_folder(app: tauri::AppHandle, directory: String) -> Result<(), String> {
+    validate_export_directory(Path::new(&directory))?;
+    app.opener()
+        .open_path(directory, None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(SharedDocuments::default())
         .manage(SharedPracticeJob::default())
         .invoke_handler(tauri::generate_handler![
@@ -722,7 +739,8 @@ pub fn run() {
             practice_environment,
             pick_practice_path,
             export_practice_tracks,
-            cancel_practice_export
+            cancel_practice_export,
+            open_practice_export_folder
         ])
         .run(tauri::generate_context!())
         .expect("Failed to start Voiceweaver");
@@ -809,6 +827,20 @@ mod tests {
             .unwrap()
             .contains("MusicXML"));
         assert!(prepare_diff_export(FALLBACK_SCORE, "new.xml", b"broken", "old.xml").is_err());
+    }
+
+    #[test]
+    fn export_folder_requires_an_existing_absolute_directory() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("Practice tracks – 音楽 (2)");
+        std::fs::create_dir(&directory).unwrap();
+        assert!(validate_export_directory(&directory).is_ok());
+        assert!(validate_export_directory(&temporary.path().join("missing")).is_err());
+        assert!(validate_export_directory(Path::new(".")).is_err());
+        assert!(validate_export_directory(Path::new("https://example.com")).is_err());
+        let file = directory.join("track.mp3");
+        std::fs::write(&file, b"audio").unwrap();
+        assert!(validate_export_directory(&file).is_err());
     }
 
     const FALLBACK_SCORE: &[u8] = concat!(

@@ -189,6 +189,7 @@ test("HeroUI split and merge controls retain choices, validate, and send unchang
     result = { path: "/scores/arranged.mxl", warnings: ["Ambiguous tie assignment; affected passage marked red"] };
     await app.click('[data-action="export"]');
     assert.match(app.find(".status").textContent!, /Exported.*arranged.mxl/s);
+    assert.equal(app.document.querySelector('[role="dialog"]'), null);
     assert.match(app.find(".status").textContent!, /Ambiguous tie assignment/);
     exportError = "Cannot write output file";
     await app.click('[data-action="export"]');

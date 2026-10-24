@@ -10,6 +10,7 @@ import {
   type PracticeEnvironment, type PracticeOptions, type PracticeProgress, type PracticeResult,
 } from "./model.ts";
 import { PracticeView } from "./practice-view.tsx";
+import { PracticeExportModal } from "./practice-export-modal.tsx";
 import { RecentSoundsProvider } from "./sound-picker.tsx";
 import { readRecentScores, rememberScore } from "./recent-scores.ts";
 import { RecentScoreButton } from "./recent-score-button.tsx";
@@ -65,6 +66,7 @@ export function mountApp(container: HTMLElement): () => void {
   let disposed = false;
   let message = "";
   let messageError = false;
+  let completedExport: PracticeResult | null = null;
   const config: PracticeConfig = { executable: null, soundfont: null };
   let recentScores = readRecentScores();
   let environment: PracticeEnvironment | null = null;
@@ -132,6 +134,7 @@ export function mountApp(container: HTMLElement): () => void {
         document: candidate, arrangement,
         practice: candidate.format === "musescore" ? newPractice(candidate.practice_parts ?? []) : undefined,
       };
+      completedExport = null;
       recentScores = rememberScore(recentScores, candidate.path);
       candidate = undefined;
       message = "";
@@ -173,6 +176,7 @@ export function mountApp(container: HTMLElement): () => void {
       await releaseSession(current);
       current = null;
       message = "";
+      completedExport = null;
       messageError = false;
       window.scrollTo(0, 0);
     } catch (error) { notify(`Could not close score: ${String(error)}`, true); }
@@ -236,6 +240,7 @@ export function mountApp(container: HTMLElement): () => void {
         throw new Error(environment?.error ?? "Configure MuseScore 4.7.x and its MS Basic SoundFont before rendering.");
       exporting = true;
       cancelling = false;
+      completedExport = null;
       session.result = undefined;
       session.progress = undefined;
       notify(options ? "Choose a folder for your practice tracks." : session.arrangement.kind === "diff" ? "Choose where to save your marked newer version." : "Choose where to save your arranged score.");
@@ -245,6 +250,7 @@ export function mountApp(container: HTMLElement): () => void {
         });
         if (!disposed && current === session) {
           session.result = result ?? undefined;
+          if (result && !result.cancelled && !result.error) completedExport = result;
           notify(result ? `${result.cancelled ? "Rendering cancelled." : result.error ? "Rendering stopped." : "Practice tracks created."} ${result.completed.length} completed tracks retained in ${result.directory}${result.error ? `\n${result.error}` : ""}` : "Export cancelled.", !!result?.error);
         }
       } else {
@@ -398,6 +404,7 @@ export function mountApp(container: HTMLElement): () => void {
         </div>}
       </section></main>
       <div className={`status mx-auto max-w-6xl px-5 pb-6 text-sm whitespace-pre-line wrap-anywhere sm:px-7 ${messageError ? "text-danger" : "text-muted"}`} role={messageError ? "alert" : "status"} aria-live="polite">{message || (session ? "Your music stays on this device." : "")}</div>
+      {completedExport && <PracticeExportModal result={completedExport} onClose={() => { completedExport = null; render(); }} />}
       {dropping && <div className="drop-overlay pointer-events-none fixed inset-4 z-50 grid place-items-center bg-overlay" aria-hidden="true"><Surface className="p-6"><p>Drop one score to open it</p><Description>MusicXML · MuseScore</Description></Surface></div>}
     </div></RecentSoundsProvider>);
   }

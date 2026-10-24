@@ -97,6 +97,7 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     });
     await app.settle();
     assert.match(app.find(".practice-results").textContent!, /Rendering cancelled/);
+    assert.equal(app.document.querySelector('[role="dialog"]'), null);
     assert.match(app.find(".practice-results").textContent!, /Violin.mp3/);
     assert.equal(app.find<HTMLButtonElement>('[data-action="practice-export"]').disabled, false);
     await app.event("practice-progress", { id: "/scores/first.mscz", stage: "Stale progress", completed: 2, total: 2 });
@@ -107,10 +108,12 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     });
     await app.settle();
     assert.match(app.find(".practice-results").textContent!, /Renderer timed out/);
+    assert.equal(app.document.querySelector('[role="dialog"]'), null);
     assert.match(app.find(".practice-results").textContent!, /1 completed track/);
     await app.click('[data-action="practice-export"]');
     await act(async () => { finish!(null); }); await app.settle();
     assert.match(app.find(".status").textContent!, /Export cancelled/);
+    assert.equal(app.document.querySelector('[role="dialog"]'), null);
     exportError = "Renderer launch failed";
     await app.click('[data-action="practice-export"]');
     assert.match(app.find('[role="alert"]').textContent!, /Renderer launch failed/);
@@ -123,5 +126,92 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     assert.equal(app.find<HTMLInputElement>("#foreground_sound-0").value, "Violin");
     assert.equal(configs.at(-1)?.executable, "/chosen/mscore", "renderer configuration survives score replacement");
     assert.equal(app.document.querySelector(".practice-results"), null, "score-specific results are cleared");
+  } finally { await app.close(); }
+});
+
+test("successful practice exports open a dismissible completion modal with a retryable folder action", async () => {
+  let finish: (result: PracticeResult) => void;
+  let openResolve: () => void;
+  let openReject: (error: Error) => void;
+  const opened: unknown[] = [];
+  const app = await mountTestApp(async (command, args) => {
+    if (command === "open_file") return "/scores/practice.mscz";
+    if (command === "release_document") return;
+    if (command === "inspect_file") return {
+      id: "practice", name: "practice.mscz", path: "/scores/practice.mscz", format: "musescore", parts: [], error: null,
+      practice_parts: [{ key: "one", name: "Violin", visible: true, original_instruments: [], existing_preset: { bank: 0, program: 40 } }],
+    };
+    if (command === "practice_environment") return {
+      executable: "/bin/mscore", soundfont: "/sounds/MS Basic.sf3", version: "4.7.5", error: null,
+      presets: [{ bank: 0, program: 40, name: "Violin" }],
+    };
+    if (command === "export_practice_tracks") return new Promise<PracticeResult>((resolve) => { finish = resolve; });
+    if (command === "open_practice_export_folder") {
+      opened.push(args.directory);
+      return new Promise<void>((resolve, reject) => { openResolve = resolve; openReject = reject; });
+    }
+    throw new Error(`Unexpected command ${command}`);
+  });
+  const result = (directory: string): PracticeResult => ({
+    directory, completed: [{ key: "one", name: "Violin", path: `${directory}/Violin.mp3` }], error: null, cancelled: false,
+  });
+  const complete = async (directory: string) => {
+    await app.click('[data-action="practice-export"]');
+    assert.equal(app.document.querySelector('[role="dialog"]'), null, "rendering has no completion modal");
+    await act(async () => finish(result(directory)));
+    await app.settle();
+  };
+  try {
+    await app.click('[data-action="open"]');
+    const directory = "/output/Practice tracks – 音楽 (2)";
+    await complete(directory);
+    const dialog = app.find('[role="dialog"]');
+    assert.match(dialog.textContent!, /Practice tracks created/);
+    assert.match(dialog.textContent!, /1 completed track saved in/);
+    assert.equal(app.find(".practice-export-path").textContent, directory);
+    assert.equal(app.find(".practice-export-hero").getAttribute("aria-hidden"), "true");
+    assert.ok(app.document.activeElement?.closest('[role="dialog"]'), "focus moves into the modal");
+    assert.equal(opened.length, 0, "the file browser opens only on request");
+    await app.click('[data-action="practice-open-folder"]');
+    assert.deepEqual(opened, [directory]);
+    assert.ok(app.find<HTMLButtonElement>('[data-action="practice-open-folder"]').disabled);
+    await app.click('[data-action="practice-open-folder"]');
+    assert.equal(opened.length, 1, "duplicate clicks do not start another request");
+    await act(async () => openReject(new Error("File browser unavailable")));
+    await app.settle();
+    assert.match(app.find('[role="dialog"] [role="alert"]').textContent!, /File browser unavailable/);
+    assert.equal(app.find(".practice-export-path").textContent, directory);
+    assert.equal(app.find<HTMLButtonElement>('[data-action="practice-open-folder"]').disabled, false);
+    await app.click('[data-action="practice-open-folder"]');
+    await act(async () => openResolve());
+    await app.settle();
+    assert.equal(app.document.querySelector('[role="dialog"] [role="alert"]'), null);
+    assert.ok(app.find('[role="dialog"]'), "opening a folder keeps the modal visible");
+    await app.click('[data-action="practice-export-done"]');
+    assert.equal(app.document.querySelector('[role="dialog"]'), null);
+    assert.equal(app.document.activeElement?.getAttribute("data-action"), "practice-export", "focus returns to the export action");
+    assert.ok(app.find(".practice-results"), "dismissing keeps the export results");
+    await app.click("#practice-metronome");
+    await app.event("practice-progress", { id: "practice", completed: 1, total: 1, stage: "Late event" });
+    assert.equal(app.document.querySelector('[role="dialog"]'), null, "rerenders do not reopen a dismissed modal");
+
+    await complete("C:\\Users\\Music\\Practice tracks (3)");
+    assert.equal(app.find(".practice-export-path").textContent, "C:\\Users\\Music\\Practice tracks (3)");
+    await act(async () => { app.document.activeElement?.dispatchEvent(new app.browser.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await app.settle();
+    assert.equal(app.document.querySelector('[role="dialog"]'), null, "Escape dismisses the modal");
+    await app.click('[data-action="close"]');
+    await app.click('[data-action="open"]');
+    assert.equal(app.document.querySelector('[role="dialog"]'), null, "a new score has no old completion state");
+
+    await complete("/Users/Music/Practice tracks");
+    await app.click('[aria-label="Close practice track completion"]');
+    assert.equal(app.document.querySelector('[role="dialog"]'), null);
+    await app.click('[data-action="practice-export"]');
+    await app.remount();
+    await act(async () => finish(result("/output/disposed")));
+    await app.settle();
+    assert.equal(app.document.querySelector('[role="dialog"]'), null, "a disposed session cannot show completion");
+    assert.doesNotMatch(app.document.body.textContent!, /disposed/);
   } finally { await app.close(); }
 });

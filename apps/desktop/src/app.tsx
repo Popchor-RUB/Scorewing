@@ -11,6 +11,8 @@ import {
 } from "./model.ts";
 import { PracticeView } from "./practice-view.tsx";
 import { RecentSoundsProvider } from "./sound-picker.tsx";
+import { readRecentScores, rememberScore } from "./recent-scores.ts";
+import { RecentScoreButton } from "./recent-score-button.tsx";
 
 interface ScoreSession {
   document: Inspection;
@@ -64,6 +66,7 @@ export function mountApp(container: HTMLElement): () => void {
   let message = "";
   let messageError = false;
   const config: PracticeConfig = { executable: null, soundfont: null };
+  let recentScores = readRecentScores();
   let environment: PracticeEnvironment | null = null;
   let checking = false;
   let environmentRequest = 0;
@@ -129,6 +132,7 @@ export function mountApp(container: HTMLElement): () => void {
         document: candidate, arrangement,
         practice: candidate.format === "musescore" ? newPractice(candidate.practice_parts ?? []) : undefined,
       };
+      recentScores = rememberScore(recentScores, candidate.path);
       candidate = undefined;
       message = "";
       messageError = false;
@@ -369,7 +373,7 @@ export function mountApp(container: HTMLElement): () => void {
       <main className="workspace mx-auto max-w-6xl p-5 sm:p-7"><section className="editor min-w-0" aria-label="Score arrangement">
         {!session ? <div className="empty flex min-h-96 flex-col items-center justify-center gap-6 py-12 text-center"><div className="text-6xl" aria-hidden="true">♫</div><Description>MAKE SPACE FOR YOUR MUSIC</Description><h1 className="text-4xl font-semibold sm:text-6xl">Every voice.<br />A little clearer.</h1>
           <p className="max-w-md text-muted">Split a staff, bring parts together, or make a practice track that lets your instrument shine.</p>
-          <Button data-action="open" isDisabled={busy()} onPress={() => void openScore()}>{fileBusy ? "Reading your score…" : "Choose a score"}<span aria-hidden="true"> →</span></Button>
+          <RecentScoreButton paths={recentScores} disabled={busy()} reading={fileBusy} onOpen={(paths) => void openScore(paths)} />
           <div className="drop-hint flex flex-col gap-1"><Description>or drop one score anywhere here</Description><Description>MusicXML · .mxl · MuseScore .mscz / .mscx</Description></div>
         </div> : <div className="score-workspace space-y-6" key={score!.id}>
           <div className="score-heading flex flex-wrap items-center justify-between gap-4"><div className="min-w-0 space-y-3"><Description>YOUR MUSIC, YOUR ARRANGEMENT</Description><h1 className="text-3xl font-semibold wrap-anywhere">{score!.name}</h1><Description>{museScore ? (score!.practice_parts?.length ?? 0) : score!.parts.length} instruments <span aria-hidden="true">·</span> Source files stay intact</Description></div><Chip>{museScore ? "MuseScore" : "MusicXML"}</Chip></div>

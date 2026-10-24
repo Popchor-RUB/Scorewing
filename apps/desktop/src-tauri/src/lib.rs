@@ -307,6 +307,19 @@ async fn inspect_file(
 }
 
 #[tauri::command]
+async fn existing_score_paths(paths: Vec<String>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .take(10)
+            .filter(|path| Path::new(path).is_file())
+            .collect()
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn open_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
@@ -702,6 +715,7 @@ pub fn run() {
         .manage(SharedPracticeJob::default())
         .invoke_handler(tauri::generate_handler![
             inspect_file,
+            existing_score_paths,
             open_file,
             release_document,
             export_document,
@@ -813,6 +827,30 @@ mod tests {
     fn inspect(path: PathBuf, documents: &SharedDocuments) -> Result<Inspection, String> {
         let (id, path) = register_input(path, documents)?;
         inspect_registered(id, path, documents)
+    }
+
+    #[test]
+    fn recent_scores_include_only_existing_files_in_order_and_limit_checks() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("first.xml");
+        let second = directory.path().join("second.mscz");
+        let deleted = directory.path().join("deleted.xml");
+        for path in [&first, &second, &deleted] {
+            std::fs::write(path, b"score").unwrap();
+        }
+        std::fs::remove_file(&deleted).unwrap();
+        let paths = [&second, &deleted, directory.path(), &first]
+            .map(|path| path.to_string_lossy().into_owned())
+            .to_vec();
+        assert_eq!(
+            tauri::async_runtime::block_on(existing_score_paths(paths)).unwrap(),
+            vec![second.to_string_lossy(), first.to_string_lossy()]
+        );
+        let mut paths = vec![deleted.to_string_lossy().into_owned(); 10];
+        paths.push(first.to_string_lossy().into_owned());
+        assert!(tauri::async_runtime::block_on(existing_score_paths(paths))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

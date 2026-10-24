@@ -99,6 +99,10 @@ export async function mountTestApp(invoke: Invoke) {
   };
   return {
     browser, document, find, click, input, choose, settle, event, registrations, unregistered, server,
+    async remount() {
+      await act(async () => { dispose?.(); dispose = mountApp(document.querySelector("#app") as unknown as HTMLElement); });
+      await settle();
+    },
     async close() {
       try { await act(async () => { dispose?.(); }); }
       finally { await server.close(); await browser.happyDOM.close(); }

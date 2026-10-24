@@ -68,11 +68,13 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
   });
   try {
     assert.equal(app.document.querySelector('[data-action="close"]'), null);
+    assert.equal(app.find(".status").textContent, "", "landing page has no device slogan");
     assert.equal(app.find<HTMLButtonElement>('[data-action="open"]').classList.contains("button"), true);
     const css = await app.server.transformRequest("/src/style.css");
     assert.ok(css?.code.includes(".button--primary"), "HeroUI styles are compiled");
     await app.click('[data-action="open"]');
     assert.match(app.document.body.textContent!, /first.xml/);
+    assert.equal(app.find(".status").textContent, "Your music stays on this device.");
     for (const checkbox of app.document.querySelectorAll(".card .checkbox"))
       assert.ok(checkbox.classList.contains("checkbox--secondary"), "checkboxes on cards use the surface variant");
     assert.ok(app.find(".select").classList.contains("select--secondary"), "selects on cards use the surface variant");
@@ -121,6 +123,7 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
     assert.equal(app.document.querySelector(".split-preview"), null, "new score starts without selected parts");
     await app.click('[data-action="close"]');
     assert.ok(released.includes("/scores/second.xml"));
+    assert.equal(app.find(".status").textContent, "", "returning to the landing page clears the slogan");
     assert.equal(app.document.querySelector('[data-part="P1"]'), null);
     await app.event("tauri://drag-drop", { paths: ["/scores/dropped.xml"], position: { x: 0, y: 0 } });
     assert.match(app.document.body.textContent!, /dropped.xml/);

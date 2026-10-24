@@ -361,7 +361,7 @@ export function mountApp(container: HTMLElement): () => void {
     const score = session?.document;
     const museScore = score?.format === "musescore";
     root.render(<RecentSoundsProvider><div className="app-shell min-h-dvh bg-background text-foreground">
-      <header className="app-header mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 p-5 sm:p-7"><div className="brand flex items-center gap-3"><span aria-hidden="true">♫</span><div><strong>Voiceweaver</strong><Description>A little room to rearrange.</Description></div></div>
+      <header className="app-header mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 p-5 sm:p-7"><div className="brand flex items-center gap-3"><span aria-hidden="true">♫</span><div className="flex flex-col gap-1"><strong>Voiceweaver</strong><Description>A little room to rearrange.</Description></div></div>
         <div className="file-actions flex flex-wrap gap-3">{session && <Button variant="ghost" data-action="close" isDisabled={busy()} onPress={() => void closeScore()}>Close score</Button>}
           <Button data-action="open" variant={session ? "secondary" : "primary"} isDisabled={busy()} onPress={() => void openScore()}>{fileBusy ? "Opening…" : session ? "Open another score" : "Open score"}<span aria-hidden="true"> ↗</span></Button>
         </div>
@@ -370,7 +370,7 @@ export function mountApp(container: HTMLElement): () => void {
         {!session ? <div className="empty flex min-h-96 flex-col items-center justify-center gap-6 py-12 text-center"><div className="text-6xl" aria-hidden="true">♫</div><Description>MAKE SPACE FOR YOUR MUSIC</Description><h1 className="text-4xl font-semibold sm:text-6xl">Every voice.<br />A little clearer.</h1>
           <p className="max-w-md text-muted">Split a staff, bring parts together, or make a practice track that lets your instrument shine.</p>
           <Button data-action="open" isDisabled={busy()} onPress={() => void openScore()}>{fileBusy ? "Reading your score…" : "Choose a score"}<span aria-hidden="true"> →</span></Button>
-          <div className="drop-hint"><Description>or drop one score anywhere here</Description><Description>MusicXML · .mxl · MuseScore .mscz / .mscx</Description></div>
+          <div className="drop-hint flex flex-col gap-1"><Description>or drop one score anywhere here</Description><Description>MusicXML · .mxl · MuseScore .mscz / .mscx</Description></div>
         </div> : <div className="score-workspace space-y-6" key={score!.id}>
           <div className="score-heading flex flex-wrap items-center justify-between gap-4"><div className="min-w-0 space-y-3"><Description>YOUR MUSIC, YOUR ARRANGEMENT</Description><h1 className="text-3xl font-semibold wrap-anywhere">{score!.name}</h1><Description>{museScore ? (score!.practice_parts?.length ?? 0) : score!.parts.length} instruments <span aria-hidden="true">·</span> Source files stay intact</Description></div><Chip>{museScore ? "MuseScore" : "MusicXML"}</Chip></div>
           <Description>Closing or replacing this score discards its editing choices.</Description>
@@ -393,7 +393,7 @@ export function mountApp(container: HTMLElement): () => void {
             }} onBrowse={(kind) => void browse(kind)} onDetect={() => void refreshEnvironment()} onExport={() => void exportScore()} onCancel={() => void cancelExport()} /> : session.arrangement.kind === "diff" ? diffView(session) : arrangementView(session)}
         </div>}
       </section></main>
-      <div className={`status mx-auto max-w-6xl px-5 pb-6 text-sm whitespace-pre-line wrap-anywhere sm:px-7 ${messageError ? "text-danger" : "text-muted"}`} role={messageError ? "alert" : "status"} aria-live="polite">{message || "Your music stays on this device."}</div>
+      <div className={`status mx-auto max-w-6xl px-5 pb-6 text-sm whitespace-pre-line wrap-anywhere sm:px-7 ${messageError ? "text-danger" : "text-muted"}`} role={messageError ? "alert" : "status"} aria-live="polite">{message || (session ? "Your music stays on this device." : "")}</div>
       {dropping && <div className="drop-overlay pointer-events-none fixed inset-4 z-50 grid place-items-center bg-overlay" aria-hidden="true"><Surface className="p-6"><p>Drop one score to open it</p><Description>MusicXML · MuseScore</Description></Surface></div>}
     </div></RecentSoundsProvider>);
   }

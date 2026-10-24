@@ -73,6 +73,9 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
     assert.ok(css?.code.includes(".button--primary"), "HeroUI styles are compiled");
     await app.click('[data-action="open"]');
     assert.match(app.document.body.textContent!, /first.xml/);
+    for (const checkbox of app.document.querySelectorAll(".card .checkbox"))
+      assert.ok(checkbox.classList.contains("checkbox--secondary"), "checkboxes on cards use the surface variant");
+    assert.ok(app.find(".select").classList.contains("select--secondary"), "selects on cards use the surface variant");
     await app.click('[data-part="P2"]');
     await app.click("#insert-fallback-slurs");
     nextPath = null;

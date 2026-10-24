@@ -47,6 +47,12 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     assert.equal(app.find<HTMLInputElement>('input[type="radio"][value="practice"]').checked, true);
     assert.equal(app.find<HTMLInputElement>('input[type="radio"][value="split"]').disabled, true);
     assert.equal(app.document.querySelectorAll(".practice-part").length, 2);
+    for (const [selector, variant] of [[".card .checkbox", "checkbox--secondary"], [".card .combo-box .input", "input--secondary"], [".card .number-field", "number-field--secondary"], [".practice-path .input", "input--secondary"]]) {
+      const controls = app.document.querySelectorAll(selector);
+      assert.ok(controls.length, `Missing ${selector}`);
+      for (const control of controls)
+        assert.ok(control.classList.contains(variant), `${selector} uses the surface variant`);
+    }
     assert.match(app.find(".practice-parts").textContent!, /Hidden in score/);
     assert.equal(app.find<HTMLInputElement>('[data-practice-index="0"][data-practice-field="create_track"] input, input[data-practice-index="0"][data-practice-field="create_track"]').checked, true);
     assert.match(app.find(".practice-environment").textContent!, /was not found/);

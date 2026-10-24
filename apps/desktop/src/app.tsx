@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { Button, Card, Checkbox, Label, ListBox, Radio, RadioGroup, Select } from "@heroui/react";
+import { Button, Card, Checkbox, Chip, Description, Label, ListBox, Radio, RadioGroup, Select, Surface } from "@heroui/react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
@@ -25,7 +25,7 @@ function Choice({ id, label, value, options, disabled, onChange }: {
   options: { key: string; label: string }[]; disabled: boolean;
   onChange: (value: string) => void;
 }) {
-  return <Select id={id} className="score-select" isDisabled={disabled} value={value}
+  return <Select variant="secondary" id={id} className="score-select min-w-0 w-full" isDisabled={disabled} value={value}
     onChange={(key) => { if (key !== null) onChange(String(key)); }}>
     <Label>{label}</Label>
     <Select.Trigger><Select.Value /><Select.Indicator /></Select.Trigger>
@@ -40,7 +40,7 @@ function SplitPreview({ part, state, busy, onChange }: {
 }) {
   const lanes = part.split_plans[state.mode];
   const voices = [...new Set([...part.split_plans.voices, ...lanes].map((lane) => lane.voice))];
-  return <section className="split-preview" aria-label={`Split preview for ${part.name || part.id} ${part.id}`}>
+  return <section className="split-preview mb-5" aria-label={`Split preview for ${part.name || part.id} ${part.id}`}><Surface variant="secondary" className="space-y-3 p-4">
     <p><strong>{lanes.length} additional {lanes.length === 1 ? "staff" : "staves"}</strong> · Original staff retained</p>
     {state.mode === "chords" && <p>Chord-tone staffs may also carry compatible voices in measures without that chord tone.</p>}
     <p>A fallback is used only when the staff’s native voices are absent for the whole measure.</p>
@@ -49,7 +49,7 @@ function SplitPreview({ part, state, busy, onChange }: {
       value={fallbackVoice(state, part.id, lane) === null ? "none" : `voice:${fallbackVoice(state, part.id, lane)}`}
       options={[{ key: "none", label: "None (silent)" }, ...voices.filter((voice) => voice !== lane.voice).map((voice) => ({ key: `voice:${voice}`, label: `Voice ${voice}` }))]}
       disabled={busy} onChange={(value) => { setFallbackVoice(state, part.id, lane, value === "none" ? null : value.slice(6)); onChange(); }} />)}
-  </section>;
+  </Surface></section>;
 }
 
 export function mountApp(container: HTMLElement): () => void {
@@ -247,59 +247,59 @@ export function mountApp(container: HTMLElement): () => void {
     const allSelected = available.length > 0 && available.every((part) => state.selected.has(part.id));
     return <>
       <Card className="arrangement-card">
-        <Card.Header className="section-heading"><div><span className="eyebrow">01 / INSTRUMENTS</span>
+        <Card.Header className="section-heading flex-row flex-wrap items-center justify-between gap-4"><div className="min-w-0"><Description>01 / INSTRUMENTS</Description>
           <Card.Title>{state.kind === "split" ? "Make room for every voice." : "Bring your parts together."}</Card.Title>
           <Card.Description>{state.kind === "split" ? "Choose instruments to split. Originals stay in place; new staves appear below them." : "Choose two or more instruments for a group. Other parts stay as they are."}</Card.Description>
-        </div><Button variant="ghost" data-action="select-all" isDisabled={busy() || !available.length} onPress={() => update(({ arrangement }) => {
+        </div><Button variant="secondary" data-action="select-all" isDisabled={busy() || !available.length} onPress={() => update(({ arrangement }) => {
           arrangement.selected = allSelected ? new Set() : new Set(available.map((part) => part.id));
         })}>{allSelected ? "Clear selection" : "Select all"}</Button></Card.Header>
-        <Card.Content><div className="instruments" role="group" aria-label="Instruments">
+        <Card.Content><div className="instruments grid gap-4" role="group" aria-label="Instruments">
           {score.parts.map((part, index) => <div className="instrument-entry" key={part.id}>
-            <Checkbox className="instrument" data-part={part.id} isSelected={state.selected.has(part.id)}
+            <Checkbox variant="secondary" className="instrument w-full" data-part={part.id} isSelected={state.selected.has(part.id)}
               isDisabled={busy() || (state.kind === "merge" && assigned.has(part.id))}
               onChange={(selected) => update(({ arrangement }) => { if (selected) arrangement.selected.add(part.id); else arrangement.selected.delete(part.id); })}>
               <Checkbox.Content><Checkbox.Control><Checkbox.Indicator /></Checkbox.Control>
-                <span className="part-number" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
-                <Label className="part-name"><strong>{part.name || part.id}</strong><small>{part.instrument_names.join(", ") || "Unnamed instrument"} · {part.id}</small></Label>
-                <span className="voice-count">{state.kind === "merge" && assigned.has(part.id) ? "Grouped" : `${part.voice_count} ${part.voice_count === 1 ? "voice" : "voices"}`}</span>
+                <span className="part-number hidden text-sm text-muted sm:inline" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+                <Label className="part-name min-w-0"><strong>{part.name || part.id}</strong><Description>{part.instrument_names.join(", ") || "Unnamed instrument"} · {part.id}</Description></Label>
+                <span className="voice-count text-sm text-muted">{state.kind === "merge" && assigned.has(part.id) ? "Grouped" : `${part.voice_count} ${part.voice_count === 1 ? "voice" : "voices"}`}</span>
               </Checkbox.Content>
             </Checkbox>
             {state.kind === "split" && state.selected.has(part.id) && <SplitPreview part={part} state={state} busy={busy()} onChange={render} />}
           </div>)}
         </div></Card.Content>
       </Card>
-      {state.kind === "split" ? <Card className="options-card"><Card.Header><span className="eyebrow">02 / SPLIT SETTINGS</span><Card.Title>A staff for each line.</Card.Title></Card.Header>
-        <Card.Content className="settings-grid"><div><Choice id="split-mode" label="Split by" value={state.mode} disabled={busy()}
+      {state.kind === "split" ? <Card className="options-card"><Card.Header><Description>02 / SPLIT SETTINGS</Description><Card.Title>A staff for each line.</Card.Title></Card.Header>
+        <Card.Content className="settings-grid grid gap-6 md:grid-cols-2"><div className="space-y-3"><Choice id="split-mode" label="Split by" value={state.mode} disabled={busy()}
           options={[{ key: "chords", label: "Chord tones" }, { key: "voices", label: "Explicit voices" }]}
           onChange={(mode) => update(({ arrangement }) => { arrangement.mode = mode as Arrangement["mode"]; })} />
-          <p className="hint">{state.mode === "chords" ? "Separate simultaneous notes by pitch into individual staves." : "Separate the voices already written into the score."}</p></div>
-          <div><Checkbox id="insert-fallback-slurs" isSelected={state.insertFallbackSlurs} isDisabled={busy()}
+          <Description>{state.mode === "chords" ? "Separate simultaneous notes by pitch into individual staves." : "Separate the voices already written into the score."}</Description></div>
+          <div className="space-y-3"><Checkbox variant="secondary" id="insert-fallback-slurs" isSelected={state.insertFallbackSlurs} isDisabled={busy()}
             onChange={(selected) => update(({ arrangement }) => { arrangement.insertFallbackSlurs = selected; })}>
             <Checkbox.Content><Checkbox.Control><Checkbox.Indicator /></Checkbox.Control><Label>Automatically insert slurs at fallback voice transitions</Label></Checkbox.Content>
-          </Checkbox><p className="hint">Matching pitches continue existing ties. When pitches differ, this option uses a slur and marks its endpoint notes red for review. When disabled, the fallback note becomes a rest of the same duration.</p></div>
-        </Card.Content></Card> : <Card className="options-card"><Card.Header className="section-heading"><div><span className="eyebrow">02 / MERGE GROUPS</span><Card.Title>Arrange the voices.</Card.Title><Card.Description>{state.selected.size} instruments selected</Card.Description></div>
+          </Checkbox><Description>Matching pitches continue existing ties. When pitches differ, this option uses a slur and marks its endpoint notes red for review. When disabled, the fallback note becomes a rest of the same duration.</Description></div>
+        </Card.Content></Card> : <Card className="options-card"><Card.Header className="section-heading flex-row flex-wrap items-center justify-between gap-4"><div><Description>02 / MERGE GROUPS</Description><Card.Title>Arrange the voices.</Card.Title><Card.Description>{state.selected.size} instruments selected</Card.Description></div>
           <Button data-action="add-group" variant="secondary" isDisabled={busy() || state.selected.size < 2} onPress={() => update(({ arrangement }) => {
             const error = addGroup(arrangement, score.parts);
             message = error ?? "Merge group created. Reorder its instruments if needed."; messageError = !!error;
           })}>＋ Create merge group</Button></Card.Header>
-          <Card.Content><div className="groups">{state.groups.length === 0 && <p className="hint">Select at least two instruments above to create your first group.</p>}
-            {state.groups.map((group, gi) => <section className="merge-group" aria-label={`Merge group ${gi + 1}`} key={gi}>
-              <div className="section-heading"><h4>Group {gi + 1}</h4><Button variant="ghost" data-action="remove-group" data-group={gi} isDisabled={busy()} onPress={() => update(({ arrangement }) => { arrangement.groups.splice(gi, 1); })}>Remove group</Button></div>
-              <ol>{group.map((id, pi) => <li key={id}><span className="group-part"><strong>{score.parts.find((part) => part.id === id)?.name || id}</strong><small>{id} · Voice {pi + 1}</small></span>
+          <Card.Content><div className="groups space-y-6">{state.groups.length === 0 && <Description>Select at least two instruments above to create your first group.</Description>}
+            {state.groups.map((group, gi) => <section className="merge-group space-y-4" aria-label={`Merge group ${gi + 1}`} key={gi}>
+              <div className="section-heading flex flex-wrap items-center justify-between gap-4"><h4 className="font-semibold">Group {gi + 1}</h4><Button variant="secondary" data-action="remove-group" data-group={gi} isDisabled={busy()} onPress={() => update(({ arrangement }) => { arrangement.groups.splice(gi, 1); })}>Remove group</Button></div>
+              <ol className="space-y-3">{group.map((id, pi) => <li key={id}><Surface variant="secondary" className="flex flex-wrap items-center gap-4 p-4"><div className="group-part min-w-0 flex-1"><strong>{score.parts.find((part) => part.id === id)?.name || id}</strong><Description>{id} · Voice {pi + 1}</Description></div>
                 <Choice id={`stem-${id}`} label={`Voice ${pi + 1} stem · ${id} · Group ${gi + 1}`} value={stemDirection(state, id, pi)}
                   disabled={busy()} options={[{ key: "up", label: "Up" }, { key: "down", label: "Down" }]}
                   onChange={(value) => update(({ arrangement }) => { arrangement.stems.set(id, value as "up" | "down"); })} />
-                <span className="reorder"><Button isIconOnly variant="tertiary" aria-label={`Move ${id} up in group ${gi + 1}`} data-action="up" data-group={gi} data-index={pi} isDisabled={busy() || pi === 0}
+                <span className="reorder flex gap-2"><Button isIconOnly variant="secondary" aria-label={`Move ${id} up in group ${gi + 1}`} data-action="up" data-group={gi} data-index={pi} isDisabled={busy() || pi === 0}
                   onPress={() => update(({ arrangement }) => movePart(arrangement.groups[gi], pi, -1))}>↑</Button>
-                  <Button isIconOnly variant="tertiary" aria-label={`Move ${id} down in group ${gi + 1}`} data-action="down" data-group={gi} data-index={pi} isDisabled={busy() || pi === group.length - 1}
+                  <Button isIconOnly variant="secondary" aria-label={`Move ${id} down in group ${gi + 1}`} data-action="down" data-group={gi} data-index={pi} isDisabled={busy() || pi === group.length - 1}
                     onPress={() => update(({ arrangement }) => movePart(arrangement.groups[gi], pi, 1))}>↓</Button></span>
-              </li>)}</ol><p className="hint">Top to bottom sets voice order in the merged staff.</p>
+              </Surface></li>)}</ol><Description>Top to bottom sets voice order in the merged staff.</Description>
             </section>)}
           </div></Card.Content>
         </Card>}
-      <footer className="export-bar"><div><strong>Your arrangement, ready to play.</strong><p>Export a new score. Your source stays intact.</p></div>
+      <footer className="export-bar sticky bottom-4 z-10"><Surface className="flex flex-wrap items-center justify-between gap-4 p-4"><div><strong>Your arrangement, ready to play.</strong><Description>Export a new score. Your source stays intact.</Description></div>
         <Button data-action="export" isDisabled={busy()} onPress={() => void exportScore()}>{exporting ? "Exporting…" : "Export score"}<span aria-hidden="true"> →</span></Button>
-      </footer>
+      </Surface></footer>
     </>;
   }
 
@@ -308,30 +308,31 @@ export function mountApp(container: HTMLElement): () => void {
     const session = current;
     const score = session?.document;
     const museScore = score?.format === "musescore";
-    root.render(<RecentSoundsProvider><div className="app-shell">
-      <header className="app-header"><div className="brand"><span className="brand-icon" aria-hidden="true">♫</span><div><strong>Voiceweaver</strong><span className="tagline">A little room to rearrange.</span></div></div>
-        <div className="file-actions">{session && <Button variant="ghost" data-action="close" isDisabled={busy()} onPress={() => void closeScore()}>Close score</Button>}
+    root.render(<RecentSoundsProvider><div className="app-shell min-h-dvh bg-background text-foreground">
+      <header className="app-header mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 p-5 sm:p-7"><div className="brand flex items-center gap-3"><span aria-hidden="true">♫</span><div><strong>Voiceweaver</strong><Description>A little room to rearrange.</Description></div></div>
+        <div className="file-actions flex flex-wrap gap-3">{session && <Button variant="ghost" data-action="close" isDisabled={busy()} onPress={() => void closeScore()}>Close score</Button>}
           <Button data-action="open" variant={session ? "secondary" : "primary"} isDisabled={busy()} onPress={() => void openScore()}>{fileBusy ? "Opening…" : session ? "Open another score" : "Open score"}<span aria-hidden="true"> ↗</span></Button>
         </div>
       </header>
-      <main className="workspace"><section className="editor" aria-label="Score arrangement">
-        {!session ? <div className="empty"><div className="score-mark" aria-hidden="true">♫</div><span className="eyebrow">MAKE SPACE FOR YOUR MUSIC</span><h1>Every voice.<br />A little clearer.</h1>
-          <p>Split a staff, bring parts together, or make a practice track that lets your instrument shine.</p>
+      <main className="workspace mx-auto max-w-6xl p-5 sm:p-7"><section className="editor min-w-0" aria-label="Score arrangement">
+        {!session ? <div className="empty flex min-h-96 flex-col items-center justify-center gap-6 py-12 text-center"><div className="text-6xl" aria-hidden="true">♫</div><Description>MAKE SPACE FOR YOUR MUSIC</Description><h1 className="text-4xl font-semibold sm:text-6xl">Every voice.<br />A little clearer.</h1>
+          <p className="max-w-md text-muted">Split a staff, bring parts together, or make a practice track that lets your instrument shine.</p>
           <Button data-action="open" isDisabled={busy()} onPress={() => void openScore()}>{fileBusy ? "Reading your score…" : "Choose a score"}<span aria-hidden="true"> →</span></Button>
-          <div className="drop-hint"><span>or drop one score anywhere here</span><small>MusicXML · .mxl · MuseScore .mscz / .mscx</small></div>
-        </div> : <div className="score-workspace" key={score!.id}>
-          <div className="score-heading"><div><span className="eyebrow">YOUR MUSIC, YOUR ARRANGEMENT</span><h1>{score!.name}</h1><p>{museScore ? (score!.practice_parts?.length ?? 0) : score!.parts.length} instruments <span aria-hidden="true">·</span> Source files stay intact</p></div><span className="score-badge">{museScore ? "MuseScore" : "MusicXML"}</span></div>
-          <p className="close-hint">Closing or replacing this score discards its editing choices.</p>
+          <div className="drop-hint"><Description>or drop one score anywhere here</Description><Description>MusicXML · .mxl · MuseScore .mscz / .mscx</Description></div>
+        </div> : <div className="score-workspace space-y-6" key={score!.id}>
+          <div className="score-heading flex flex-wrap items-center justify-between gap-4"><div className="min-w-0 space-y-3"><Description>YOUR MUSIC, YOUR ARRANGEMENT</Description><h1 className="text-3xl font-semibold wrap-anywhere">{score!.name}</h1><Description>{museScore ? (score!.practice_parts?.length ?? 0) : score!.parts.length} instruments <span aria-hidden="true">·</span> Source files stay intact</Description></div><Chip>{museScore ? "MuseScore" : "MusicXML"}</Chip></div>
+          <Description>Closing or replacing this score discards its editing choices.</Description>
           <RadioGroup className="operation" aria-label="Choose an operation" aria-describedby="operation-format-hint" value={session.arrangement.kind} isDisabled={busy()}
             onChange={(kind) => update(({ arrangement }) => {
               if ((kind === "practice") !== museScore) return;
               arrangement.kind = kind as Arrangement["kind"]; arrangement.selected.clear(); message = "";
             })}>
-            {(["split", "merge", "practice"] as const).map((kind) => <Radio key={kind} value={kind} className="operation-choice" isDisabled={kind === "practice" ? !museScore : museScore}>
-              <Radio.Content><Radio.Control><Radio.Indicator /></Radio.Control><Label><strong>{kind === "split" ? "Split instruments" : kind === "merge" ? "Merge instruments" : "Create Practice Tracks"}</strong><small>{kind === "split" ? "Give every line its own staff" : kind === "merge" ? "Bring parts into a single staff" : "Your instrument in the foreground"}</small></Label></Radio.Content>
+            {(["split", "merge", "practice"] as const).map((kind) => <Radio key={kind} value={kind} isDisabled={kind === "practice" ? !museScore : museScore}>
+              <Radio.Content><Radio.Control><Radio.Indicator /></Radio.Control><Label>{kind === "split" ? "Split instruments" : kind === "merge" ? "Merge instruments" : "Create Practice Tracks"}</Label></Radio.Content>
+              <Description>{kind === "split" ? "Give every line its own staff" : kind === "merge" ? "Bring parts into a single staff" : "Your instrument in the foreground"}</Description>
             </Radio>)}
           </RadioGroup>
-          <p className="hint format-hint" id="operation-format-hint">{museScore ? "Split and merge require a MusicXML score." : "Practice tracks require a MuseScore .mscz or .mscx score."}</p>
+          <Description id="operation-format-hint">{museScore ? "Split and merge require a MusicXML score." : "Practice tracks require a MuseScore .mscz or .mscx score."}</Description>
           {session.practice ? <PracticeView parts={score!.practice_parts ?? []} options={session.practice} config={config} environment={environment} checking={checking}
             busy={busy()} rendering={exporting} cancelling={cancelling} progress={session.progress} result={session.result} onOptionsChange={render}
             onConfigChange={(kind, value) => {
@@ -340,8 +341,8 @@ export function mountApp(container: HTMLElement): () => void {
             }} onBrowse={(kind) => void browse(kind)} onDetect={() => void refreshEnvironment()} onExport={() => void exportScore()} onCancel={() => void cancelExport()} /> : arrangementView(session)}
         </div>}
       </section></main>
-      <div className={`status ${messageError ? "error-text" : ""}`} role={messageError ? "alert" : "status"} aria-live="polite">{message || "Your music stays on this device."}</div>
-      {dropping && <div className="drop-overlay" aria-hidden="true"><div>Drop one score to open it<span>MusicXML · MuseScore</span></div></div>}
+      <div className={`status mx-auto max-w-6xl px-5 pb-6 text-sm whitespace-pre-line wrap-anywhere sm:px-7 ${messageError ? "text-danger" : "text-muted"}`} role={messageError ? "alert" : "status"} aria-live="polite">{message || "Your music stays on this device."}</div>
+      {dropping && <div className="drop-overlay pointer-events-none fixed inset-4 z-50 grid place-items-center bg-overlay" aria-hidden="true"><Surface className="p-6"><p>Drop one score to open it</p><Description>MusicXML · MuseScore</Description></Surface></div>}
     </div></RecentSoundsProvider>);
   }
 

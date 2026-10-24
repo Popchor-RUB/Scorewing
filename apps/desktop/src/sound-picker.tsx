@@ -1,4 +1,4 @@
-import { Button, ComboBox, Header, Input, Label, ListBox, Separator } from "@heroui/react";
+import { Button, ComboBox, Description, Header, Input, Label, ListBox, Separator } from "@heroui/react";
 import { useRef, useState } from "react";
 import type { PresetId, SoundPreset } from "./model";
 import { soundKey, useRecentSounds } from "./recent-sounds";
@@ -39,8 +39,10 @@ export function SoundPicker({ id, label, presets, value, onChange, isDisabled }:
     </ListBox.Item>
   );
 
-  return <div className="sound-picker">
+  return <div className="sound-picker min-w-0 space-y-2">
     <ComboBox
+      className="w-full"
+      variant="secondary"
       id={id}
       isDisabled={isDisabled}
       selectedKey={key}
@@ -67,9 +69,9 @@ export function SoundPicker({ id, label, presets, value, onChange, isDisabled }:
         />
         <ComboBox.Trigger aria-label={`Show ${label.toLocaleLowerCase()} instruments`} />
       </ComboBox.InputGroup>
-      <ComboBox.Popover className="sound-picker__popover">
+      <ComboBox.Popover>
         <ListBox
-          renderEmptyState={() => <span className="sound-picker__empty">No instruments found</span>}
+          renderEmptyState={() => <span className="p-5 text-muted">No instruments found</span>}
         >
           {recentPresets.length > 0 && <ListBox.Section id="recent"><Header>Recently selected</Header>{recentPresets.map(item)}</ListBox.Section>}
           {recentPresets.length > 0 && catalog.length > 0 && <Separator />}
@@ -77,7 +79,7 @@ export function SoundPicker({ id, label, presets, value, onChange, isDisabled }:
         </ListBox>
       </ComboBox.Popover>
     </ComboBox>
-    {value && <Button className="sound-picker__clear" variant="ghost" size="sm" isDisabled={isDisabled} onPress={() => { onChange(null); setQuery(null); }} aria-label={`Clear ${label.toLocaleLowerCase()}`}>Clear</Button>}
-    {value && !selected && <span className="sound-picker__unavailable">This sound is unavailable in the current catalog. Choose an instrument or clear it.</span>}
+    {value && <Button variant="secondary" size="sm" isDisabled={isDisabled} onPress={() => { onChange(null); setQuery(null); }} aria-label={`Clear ${label.toLocaleLowerCase()}`}>Clear</Button>}
+    {value && !selected && <Description className="text-danger">This sound is unavailable in the current catalog. Choose an instrument or clear it.</Description>}
   </div>;
 }

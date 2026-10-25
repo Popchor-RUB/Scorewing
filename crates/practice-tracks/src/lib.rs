@@ -79,6 +79,7 @@ pub struct RendererEnvironment {
 pub struct Progress {
     pub stage: String,
     pub completed: usize,
+    pub running: usize,
     pub total: usize,
 }
 

@@ -95,6 +95,7 @@ fn export_with_preference(
         progress(Progress {
             stage: "Preparing score".into(),
             completed: 0,
+            running: 0,
             total,
         });
         check_cancelled(cancelled)?;
@@ -213,13 +214,16 @@ fn export_with_preference(
             drop(result_sender);
             let mut job_sender = Some(job_sender);
             let mut next = 0;
+            let mut running = 0;
             if error.is_none() {
                 for index in 0..workers {
                     job_sender.as_ref().unwrap().send(index).unwrap();
                     next += 1;
+                    running += 1;
                     progress(Progress {
                         stage: format!("Rendering {}", jobs[index].name),
                         completed: 0,
+                        running,
                         total,
                     });
                 }
@@ -236,7 +240,14 @@ fn export_with_preference(
                 }
                 match result_receiver.recv_timeout(Duration::from_millis(50)) {
                     Ok((index, result)) => {
+                        running -= 1;
                         if error.is_some() {
+                            progress(Progress {
+                                stage: "Stopping exports".into(),
+                                completed: report.completed.len(),
+                                running,
+                                total,
+                            });
                             continue;
                         }
                         let published = result.and_then(|mp3_path| {
@@ -256,6 +267,7 @@ fn export_with_preference(
                             progress(Progress {
                                 stage: format!("Created {}", part.name),
                                 completed: report.completed.len(),
+                                running,
                                 total,
                             });
                             Ok(())
@@ -264,6 +276,12 @@ fn export_with_preference(
                             error = Some(cause);
                             stopped.store(true, Ordering::Relaxed);
                             job_sender.take();
+                            progress(Progress {
+                                stage: "Stopping exports".into(),
+                                completed: report.completed.len(),
+                                running,
+                                total,
+                            });
                         } else if next < total
                             && !stopped.load(Ordering::Relaxed)
                             && !cancelled.load(Ordering::Relaxed)
@@ -274,9 +292,11 @@ fn export_with_preference(
                                 );
                                 stopped.store(true, Ordering::Relaxed);
                             } else {
+                                running += 1;
                                 progress(Progress {
                                     stage: format!("Rendering {}", jobs[next].name),
                                     completed: report.completed.len(),
+                                    running,
                                     total,
                                 });
                                 next += 1;
@@ -314,13 +334,19 @@ fn export_with_preference(
             None => restoration,
         });
     }
-    if report.error.is_none() {
-        progress(Progress {
-            stage: "Practice tracks complete".into(),
-            completed: total,
-            total,
-        });
-    }
+    progress(Progress {
+        stage: if report.cancelled {
+            "Rendering cancelled"
+        } else if report.error.is_some() {
+            "Rendering stopped"
+        } else {
+            "Practice tracks complete"
+        }
+        .into(),
+        completed: report.completed.len(),
+        running: 0,
+        total,
+    });
     Ok(report)
 }
 

@@ -1,14 +1,62 @@
-import { useState } from "react";
-import { Button, Description, Modal } from "@heroui/react";
+import { useEffect, useState } from "react";
+import { Button, Description, Modal, ProgressBar } from "@heroui/react";
 import { invoke } from "@tauri-apps/api/core";
-import type { PracticeResult } from "./model.ts";
+import type { PracticeProgress, PracticeResult } from "./model.ts";
+import { advancePracticeProgress } from "./practice-progress.ts";
 
-export function PracticeExportModal({ result, onClose }: { result: PracticeResult; onClose: () => void }) {
+function PracticeProgressContent({ progress, total: selectedTotal, cancelling, onCancel }: {
+  progress?: PracticeProgress;
+  total: number;
+  cancelling: boolean;
+  onCancel: () => void;
+}) {
+  const { completed = 0, running = 0, total = selectedTotal } = progress ?? {};
+  const [percentage, setPercentage] = useState(0);
+  const value = advancePracticeProgress(percentage, completed, running, total, 0);
+
+  useEffect(() => {
+    setPercentage((value) => advancePracticeProgress(value, completed, running, total, 0));
+    if (!running || cancelling) return;
+    let previous = performance.now();
+    const timer = window.setInterval(() => {
+      const now = performance.now();
+      const elapsed = now - previous;
+      previous = now;
+      setPercentage((value) => advancePracticeProgress(value, completed, running, total, elapsed));
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [completed, running, total, cancelling]);
+
+  return <>
+    <Modal.Header><Modal.Heading>Exporting practice tracks</Modal.Heading></Modal.Header>
+    <Modal.Body className="practice-progress space-y-3">
+      <p role="status">{cancelling ? "Cancelling…" : progress?.stage ?? "Choose a folder for your practice tracks."} · {completed} / {total} tracks completed</p>
+      <p>{running} {running === 1 ? "export" : "exports"} currently running</p>
+      <ProgressBar aria-label="Practice track rendering" value={value}>
+        <ProgressBar.Track><ProgressBar.Fill className="duration-100 ease-linear" /></ProgressBar.Track>
+      </ProgressBar>
+    </Modal.Body>
+    <Modal.Footer>
+      <Button variant="secondary" isDisabled={cancelling} data-action="practice-cancel" onPress={onCancel}>
+        {cancelling ? "Cancelling…" : "Cancel rendering"}
+      </Button>
+    </Modal.Footer>
+  </>;
+}
+
+export function PracticeExportModal({ result, progress, total, cancelling, onCancel, onClose }: {
+  result: PracticeResult | null;
+  progress?: PracticeProgress;
+  total: number;
+  cancelling: boolean;
+  onCancel: () => void;
+  onClose: () => void;
+}) {
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState("");
 
   async function openFolder() {
-    if (opening) return;
+    if (opening || !result) return;
     setOpening(true);
     setError("");
     try { await invoke("open_practice_export_folder", { directory: result.directory }); }
@@ -16,9 +64,11 @@ export function PracticeExportModal({ result, onClose }: { result: PracticeResul
     finally { setOpening(false); }
   }
 
-  return <Modal.Backdrop isOpen onOpenChange={(open) => { if (!open) onClose(); }}>
+  return <Modal.Backdrop isOpen isDismissable={!!result} isKeyboardDismissDisabled={!result}
+    onOpenChange={(open) => { if (!open && result) onClose(); }}>
     <Modal.Container size="md" scroll="inside">
       <Modal.Dialog>
+        {result ? <>
         <Modal.CloseTrigger aria-label="Close practice track completion" />
         <Modal.Header>
           <svg className="practice-export-hero w-full text-accent" aria-hidden="true" focusable="false" viewBox="0 0 360 160">
@@ -57,6 +107,7 @@ export function PracticeExportModal({ result, onClose }: { result: PracticeResul
             {opening ? "Opening…" : "Open folder"}
           </Button>
         </Modal.Footer>
+        </> : <PracticeProgressContent progress={progress} total={total} cancelling={cancelling} onCancel={onCancel} />}
       </Modal.Dialog>
     </Modal.Container>
   </Modal.Backdrop>;

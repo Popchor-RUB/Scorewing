@@ -94,7 +94,7 @@ export interface PracticeResult {
   error: string | null;
   cancelled: boolean;
 }
-export interface PracticeProgress { id: string; stage: string; completed: number; total: number }
+export interface PracticeProgress { id: string; stage: string; completed: number; running: number; total: number }
 
 export function newPractice(parts: PracticePart[]): PracticeOptions {
   return {

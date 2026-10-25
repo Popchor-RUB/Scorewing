@@ -122,6 +122,7 @@ printf '%s' "$n" >> "$4"
         progress: impl Fn(Progress),
     ) -> ExportReport {
         let finished = AtomicBool::new(false);
+        let running = std::cell::Cell::new(0);
         thread::scope(|scope| {
             scope.spawn(|| {
                 let deadline = Instant::now() + Duration::from_secs(20);
@@ -145,7 +146,12 @@ printf '%s' "$n" >> "$4"
                 &self.config,
                 self.dir.path(),
                 cancelled,
-                progress,
+                |p| {
+                    assert!(p.running <= workers);
+                    assert!(p.completed + p.running <= self.options.parts.len());
+                    running.set(p.running);
+                    progress(p);
+                },
                 || {
                     MetronomePreference::begin_test(
                         &self.dir.path().join("recovery"),
@@ -156,6 +162,7 @@ printf '%s' "$n" >> "$4"
                 workers,
             );
             finished.store(true, Ordering::Release);
+            assert_eq!(running.get(), 0, "finished exports have no active jobs");
             report.unwrap()
         })
     }
@@ -286,6 +293,22 @@ fn two_workers_overlap_bound_concurrency_and_publish_in_completion_order() {
         .all(|pair| pair[0].completed <= pair[1].completed));
     assert_eq!(events.last().unwrap().stage, "Practice tracks complete");
     assert_eq!(events.last().unwrap().completed, 3);
+    assert_eq!(
+        events
+            .iter()
+            .map(|p| (p.completed, p.running))
+            .collect::<Vec<_>>(),
+        [
+            (0, 0),
+            (0, 1),
+            (0, 2),
+            (1, 1),
+            (1, 2),
+            (2, 1),
+            (3, 0),
+            (3, 0)
+        ]
+    );
     assert_eq!(
         fs::read_to_string(fixture.dir.path().join("normalizations")).unwrap(),
         "normalized\n"

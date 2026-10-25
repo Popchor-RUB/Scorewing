@@ -1,8 +1,8 @@
-import { Button, Card, Checkbox, Description, Input, Label, NumberField, ProgressBar, Surface, TextField } from "@heroui/react";
+import { Button, Card, Checkbox, Description, Input, Label, NumberField, Surface, TextField } from "@heroui/react";
 import { useEffect, useState } from "react";
 import type {
   PracticeConfig, PracticeEnvironment, PracticeOptions, PracticePart,
-  PracticeProgress, PracticeResult,
+  PracticeResult,
 } from "./model.ts";
 import { SoundPicker } from "./sound-picker.tsx";
 
@@ -14,15 +14,12 @@ export interface PracticeViewProps {
   checking: boolean;
   busy: boolean;
   rendering: boolean;
-  cancelling: boolean;
-  progress?: PracticeProgress;
   result?: PracticeResult;
   onOptionsChange: () => void;
   onConfigChange: (kind: keyof PracticeConfig, value: string) => void;
   onBrowse: (kind: keyof PracticeConfig) => void;
   onDetect: () => void;
   onExport: () => void;
-  onCancel: () => void;
 }
 
 function RendererPath({ kind, value, placeholder, disabled, onChange, onBrowse }: {
@@ -47,8 +44,8 @@ function RendererPath({ kind, value, placeholder, disabled, onChange, onBrowse }
 }
 
 export function PracticeView({
-  parts, options, config, environment, checking, busy, rendering, cancelling,
-  progress, result, onOptionsChange, onConfigChange, onBrowse, onDetect, onExport, onCancel,
+  parts, options, config, environment, checking, busy, rendering,
+  result, onOptionsChange, onConfigChange, onBrowse, onDetect, onExport,
 }: PracticeViewProps) {
   const disabled = busy || checking;
   return <div className="practice-view grid gap-6">
@@ -152,12 +149,6 @@ export function PracticeView({
       </Card.Content>
     </Card>
 
-    {progress && <Surface className="practice-progress space-y-3 p-4" role="status">
-      <p>{progress.stage} · {progress.completed} / {progress.total} tracks completed</p>
-      <ProgressBar aria-label="Practice track rendering" value={progress.completed} maxValue={Math.max(progress.total, 1)}>
-        <ProgressBar.Track><ProgressBar.Fill /></ProgressBar.Track>
-      </ProgressBar>
-    </Surface>}
     {result && <Card className="practice-results" aria-label="Practice track results">
       <Card.Header><Card.Title>{result.cancelled ? "Rendering cancelled" : result.error ? "Rendering stopped" : "Practice tracks created"}</Card.Title></Card.Header>
       <Card.Content>
@@ -169,9 +160,6 @@ export function PracticeView({
     <footer className="export-bar sticky bottom-4 z-10"><Surface className="flex flex-wrap items-center justify-between gap-4 p-4">
       <p>Create MP3 practice tracks.<br /><span>192 kbps · Source score stays intact</span></p>
       <div className="button-row flex flex-wrap gap-3">
-        {rendering && <Button variant="secondary" isDisabled={cancelling} data-action="practice-cancel" onPress={onCancel}>
-          {cancelling ? "Cancelling…" : "Cancel rendering"}
-        </Button>}
         <Button variant="primary" isDisabled={disabled} data-action="practice-export" onPress={onExport}>
           {rendering ? "Rendering…" : "Create Practice Tracks"}
         </Button>

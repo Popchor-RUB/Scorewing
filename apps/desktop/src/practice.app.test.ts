@@ -86,12 +86,16 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     assert.ok(app.find<HTMLInputElement>("#foreground_sound-0").disabled);
     assert.ok(app.find<HTMLButtonElement>('[data-action="open"]').disabled);
     assert.ok(app.find<HTMLButtonElement>('[data-action="close"]').disabled);
-    await app.event("practice-progress", { id: "/scores/unrelated.mscz", stage: "Wrong score", completed: 1, total: 2 });
+    await app.event("practice-progress", { id: "/scores/unrelated.mscz", stage: "Wrong score", completed: 1, running: 1, total: 2 });
     assert.doesNotMatch(app.document.body.textContent!, /Wrong score/);
-    await app.event("practice-progress", { id: "/scores/first.mscz", stage: "Rendering Violin", completed: 1, total: 2 });
+    await app.event("practice-progress", { id: "/scores/first.mscz", stage: "Rendering Violin", completed: 1, running: 1, total: 2 });
     assert.match(app.find(".practice-progress").textContent!, /Rendering Violin.*1.*2/s);
+    assert.ok(app.find(".practice-progress").closest('[role="dialog"]'));
+    assert.match(app.find(".practice-progress").textContent!, /1 export currently running/);
     await app.click('[data-action="practice-cancel"]');
     assert.equal(cancelId, "/scores/first.mscz");
+    assert.match(app.find('[role="dialog"]').textContent!, /Cancelling…/);
+    assert.ok(app.find<HTMLButtonElement>('[data-action="practice-cancel"]').disabled);
     await act(async () => {
       finish!({ directory: "/output/first", completed: [{ key: "one", name: "Violin", path: "/output/first/Violin.mp3" }], error: null, cancelled: true });
     });
@@ -100,7 +104,7 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     assert.equal(app.document.querySelector('[role="dialog"]'), null);
     assert.match(app.find(".practice-results").textContent!, /Violin.mp3/);
     assert.equal(app.find<HTMLButtonElement>('[data-action="practice-export"]').disabled, false);
-    await app.event("practice-progress", { id: "/scores/first.mscz", stage: "Stale progress", completed: 2, total: 2 });
+    await app.event("practice-progress", { id: "/scores/first.mscz", stage: "Stale progress", completed: 2, running: 0, total: 2 });
     assert.doesNotMatch(app.document.body.textContent!, /Stale progress/);
     await app.click('[data-action="practice-export"]');
     await act(async () => {
@@ -129,7 +133,7 @@ test("practice UI configures sounds, validates exports, reports progress and ret
   } finally { await app.close(); }
 });
 
-test("successful practice exports open a dismissible completion modal with a retryable folder action", async () => {
+test("successful practice exports open a dismissible completion modal with a retryable folder action", async (t) => {
   let finish: (result: PracticeResult) => void;
   let openResolve: () => void;
   let openReject: (error: Error) => void;
@@ -155,11 +159,46 @@ test("successful practice exports open a dismissible completion modal with a ret
   const result = (directory: string): PracticeResult => ({
     directory, completed: [{ key: "one", name: "Violin", path: `${directory}/Violin.mp3` }], error: null, cancelled: false,
   });
+  let now = 0;
+  let tick: (() => void) | undefined;
+  const timerWindow = app.browser as unknown as Window;
+  const setInterval = timerWindow.setInterval.bind(timerWindow);
+  const clearInterval = timerWindow.clearInterval.bind(timerWindow);
+  t.mock.method(performance, "now", () => now);
+  t.mock.method(timerWindow, "setInterval", (callback: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (delay !== 100) return setInterval(callback, delay, ...args);
+    assert.equal(typeof callback, "function");
+    tick = callback as () => void;
+    return 123456;
+  });
+  t.mock.method(timerWindow, "clearInterval", (id?: number) => {
+    if (id === 123456) tick = undefined;
+    else clearInterval(id);
+  });
+  const advance = async (ms: number) => {
+    now += ms;
+    await act(async () => tick?.());
+    await app.settle();
+  };
+  const percentage = () => Number(app.find('[role="progressbar"]').getAttribute("aria-valuenow"));
   const complete = async (directory: string) => {
     await app.click('[data-action="practice-export"]');
-    assert.equal(app.document.querySelector('[role="dialog"]'), null, "rendering has no completion modal");
+    assert.match(app.find('[role="dialog"]').textContent!, /Exporting practice tracks.*Choose a folder.*0 exports currently running/s);
+    assert.equal(percentage(), 0, "each export starts at zero");
+    await act(async () => { app.document.activeElement?.dispatchEvent(new app.browser.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await app.settle();
+    assert.ok(app.find('[role="dialog"]'), "Escape cannot dismiss a running export");
+    await app.event("practice-progress", { id: "practice", completed: 0, running: 1, total: 1, stage: "Rendering Violin" });
+    await advance(1000);
+    assert.equal(percentage(), 10, "progress moves before a track completes");
+    await advance(20_000);
+    assert.equal(percentage(), 99, "estimated progress waits for successful completion");
+    await app.event("practice-progress", { id: "practice", completed: 1, running: 0, total: 1, stage: "Practice tracks complete" });
+    assert.equal(percentage(), 99);
+    assert.equal(tick, undefined, "no active jobs leaves no timer");
     await act(async () => finish(result(directory)));
     await app.settle();
+    assert.equal(app.document.querySelector('[role="progressbar"]'), null);
   };
   try {
     await app.click('[data-action="open"]');
@@ -192,7 +231,7 @@ test("successful practice exports open a dismissible completion modal with a ret
     assert.equal(app.document.activeElement?.getAttribute("data-action"), "practice-export", "focus returns to the export action");
     assert.ok(app.find(".practice-results"), "dismissing keeps the export results");
     await app.click("#practice-metronome");
-    await app.event("practice-progress", { id: "practice", completed: 1, total: 1, stage: "Late event" });
+    await app.event("practice-progress", { id: "practice", completed: 1, running: 0, total: 1, stage: "Late event" });
     assert.equal(app.document.querySelector('[role="dialog"]'), null, "rerenders do not reopen a dismissed modal");
 
     await complete("C:\\Users\\Music\\Practice tracks (3)");
@@ -208,7 +247,10 @@ test("successful practice exports open a dismissible completion modal with a ret
     await app.click('[aria-label="Close practice track completion"]');
     assert.equal(app.document.querySelector('[role="dialog"]'), null);
     await app.click('[data-action="practice-export"]');
+    await app.event("practice-progress", { id: "practice", completed: 0, running: 1, total: 1, stage: "Rendering Violin" });
+    assert.ok(tick);
     await app.remount();
+    assert.equal(tick, undefined, "unmount clears the progress timer");
     await act(async () => finish(result("/output/disposed")));
     await app.settle();
     assert.equal(app.document.querySelector('[role="dialog"]'), null, "a disposed session cannot show completion");

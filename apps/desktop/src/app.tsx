@@ -494,15 +494,17 @@ export function mountApp(container: HTMLElement): () => void {
           </RadioGroup>
           <Description id="operation-format-hint">{museScore ? "Split, merge, and diff convert visible MuseScore instruments and staves to MusicXML." : "Practice tracks require a MuseScore .mscz or .mscx score."}</Description>
           {session.arrangement.kind === "practice" && session.practice ? <PracticeView parts={score!.practice_parts ?? []} options={session.practice} config={config} environment={environment} checking={checking}
-            busy={busy()} rendering={exporting} cancelling={cancelling} progress={session.progress} result={session.result} onOptionsChange={render}
+            busy={busy()} rendering={exporting} result={session.result} onOptionsChange={render}
             onConfigChange={(kind, value) => {
               if (busy()) return;
               config[kind] = value.trim() || null; environment = null; ++environmentRequest; checking = false; render();
-            }} onBrowse={(kind) => void browse(kind)} onDetect={() => void refreshEnvironment()} onExport={() => void exportScore()} onCancel={() => void cancelExport()} /> : session.arrangement.kind === "diff" ? diffView(session) : arrangementView(session)}
+            }} onBrowse={(kind) => void browse(kind)} onDetect={() => void refreshEnvironment()} onExport={() => void exportScore()} /> : session.arrangement.kind === "diff" ? diffView(session) : arrangementView(session)}
         </div>}
       </section></main>
       <div className={`status mx-auto max-w-6xl px-5 pb-6 text-sm whitespace-pre-line wrap-anywhere sm:px-7 ${messageError ? "text-danger" : "text-muted"}`} role={messageError ? "alert" : "status"} aria-live="polite">{message || (session ? "Your music stays on this device." : "")}</div>
-      {completedExport && <PracticeExportModal result={completedExport} onClose={() => { completedExport = null; render(); }} />}
+      {(completedExport || (exporting && session?.arrangement.kind === "practice")) && <PracticeExportModal result={completedExport}
+        progress={session?.progress} total={session?.practice?.parts.filter((part) => part.create_track).length ?? 0}
+        cancelling={cancelling} onCancel={() => void cancelExport()} onClose={() => { completedExport = null; render(); }} />}
       {pendingPair && <DiffPairModal pair={pendingPair} busy={busy()} closing={releasedPairIds.size > 0} error={pairError} onSwap={() => { if (!busy() && pendingPair) { pendingPair = [pendingPair[1], pendingPair[0]]; render(); } }} onCancel={() => void cancelPair()} onCompare={() => void comparePair()} />}
       {dropping && <div className="drop-overlay pointer-events-none fixed inset-4 z-50 grid place-items-center bg-overlay" aria-hidden="true"><Surface className="p-6"><p>Drop one score to open it or two to compare</p><Description>MusicXML · MuseScore</Description></Surface></div>}
     </div></RecentSoundsProvider>);

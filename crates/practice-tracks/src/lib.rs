@@ -1,6 +1,7 @@
 //! MuseScore practice mixes. Scores are prepared in copies and rendered by MuseScore 4.7.
 pub mod archive;
 pub mod catalog;
+mod conversion;
 mod preferences;
 pub mod renderer;
 pub mod service;
@@ -10,6 +11,7 @@ use std::path::PathBuf;
 
 pub use archive::ScoreArchive;
 pub use catalog::SoundCatalog;
+pub use conversion::convert_musicxml;
 pub use renderer::environment;
 pub use service::export_tracks;
 

@@ -13,7 +13,7 @@ test("practice UI configures sounds, validates exports, reports progress and ret
   const requests: { id: string; options: PracticeOptions; config: PracticeConfig }[] = [];
   const configs: PracticeConfig[] = [];
   const app = await mountTestApp(async (command, args) => {
-    if (command === "open_file") return nextPath;
+    if (command === "open_files") return nextPath ? [nextPath] : null;
     if (command === "release_document") return;
     if (command === "inspect_file") {
       const path = String(args.path);
@@ -45,7 +45,7 @@ test("practice UI configures sounds, validates exports, reports progress and ret
   try {
     await app.click('[data-action="open"]');
     assert.equal(app.find<HTMLInputElement>('input[type="radio"][value="practice"]').checked, true);
-    assert.equal(app.find<HTMLInputElement>('input[type="radio"][value="split"]').disabled, true);
+    assert.equal(app.find<HTMLInputElement>('input[type="radio"][value="split"]').disabled, false);
     assert.equal(app.document.querySelectorAll(".practice-part").length, 2);
     for (const [selector, variant] of [[".card .checkbox", "checkbox--secondary"], [".card .combo-box .input", "input--secondary"], [".card .number-field", "number-field--secondary"], [".practice-path .input", "input--secondary"]]) {
       const controls = app.document.querySelectorAll(selector);
@@ -135,7 +135,7 @@ test("successful practice exports open a dismissible completion modal with a ret
   let openReject: (error: Error) => void;
   const opened: unknown[] = [];
   const app = await mountTestApp(async (command, args) => {
-    if (command === "open_file") return "/scores/practice.mscz";
+    if (command === "open_files") return ["/scores/practice.mscz"];
     if (command === "release_document") return;
     if (command === "inspect_file") return {
       id: "practice", name: "practice.mscz", path: "/scores/practice.mscz", format: "musescore", parts: [], error: null,

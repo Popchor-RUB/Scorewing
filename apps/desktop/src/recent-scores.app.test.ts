@@ -23,7 +23,7 @@ test("landing split button checks recent files, reopens them, and handles keyboa
   let holdInspection = false;
   let finishInspection: ((value: Inspection) => void) | undefined;
   const app = await mountTestApp(async (command, args) => {
-    if (command === "open_file") { pickerCalls++; return picked; }
+    if (command === "open_files") { pickerCalls++; return picked ? [picked] : null; }
     if (command === "release_document") return;
     if (command === "existing_score_paths") {
       checked.push(args.paths as string[]);

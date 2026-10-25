@@ -53,7 +53,7 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
   const released: string[] = [];
   const inspected: string[] = [];
   const app = await mountTestApp(async (command, args) => {
-    if (command === "open_file") return nextPath;
+    if (command === "open_files") return nextPath ? [nextPath] : null;
     if (command === "release_document") {
       if (args.id === failReleaseId) { failReleaseId = undefined; throw new Error("Native session is busy"); }
       released.push(String(args.id)); return;
@@ -104,8 +104,8 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
     await app.click('[data-action="close"]');
     assert.match(app.find('[role="alert"]').textContent!, /Native session is busy/);
     assert.match(app.document.body.textContent!, /first.xml/);
-    await app.event("tauri://drag-drop", { paths: ["/scores/a.xml", "/scores/b.xml"], position: { x: 0, y: 0 } });
-    assert.match(app.find('[role="alert"]').textContent!, /one score|one file|single/i);
+    await app.event("tauri://drag-drop", { paths: ["/scores/a.xml", "/scores/b.xml", "/scores/c.xml"], position: { x: 0, y: 0 } });
+    assert.match(app.find('[role="alert"]').textContent!, /one score.*two scores/i);
     assert.equal(inspected.includes("/scores/a.xml"), false);
     heldInspection = true;
     nextPath = "/scores/second.xml";
@@ -140,7 +140,7 @@ test("HeroUI split and merge controls retain choices, validate, and send unchang
   let finishExport: (() => void) | undefined;
   let holdExport = false;
   const app = await mountTestApp(async (command, args) => {
-    if (command === "open_file") return "/scores/orchestra.xml";
+    if (command === "open_files") return ["/scores/orchestra.xml"];
     if (command === "inspect_file") return score(String(args.path));
     if (command === "release_document") return;
     if (command === "export_document") {

@@ -21,9 +21,43 @@ export interface Inspection {
   path: string;
   name: string;
   parts: Part[];
+  modified_ms?: number | null;
   error: string | null;
   format?: "musicxml" | "musescore";
   practice_parts?: PracticePart[];
+}
+
+/** Infer direction using source metadata, before conversion changes any timestamps. */
+export function orderScorePair(first: Inspection, second: Inspection): [Inspection, Inspection] {
+  const marked = (score: Inspection) => /old|alt|outdated/i.test(score.name);
+  if (marked(first) !== marked(second)) return marked(first) ? [first, second] : [second, first];
+  const version = (name: string) => {
+    const stem = name.replace(/\.[^.]+$/, "");
+    if ([...stem.matchAll(/(?<![\da-z])v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?!\d)/gi)].length !== 1) return null;
+    const matches = [...stem.matchAll(/(?<![\da-z])v?((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?:-([\da-z-]+(?:\.[\da-z-]+)*))?(?:\+[\da-z-]+(?:\.[\da-z-]+)*)?(?![\da-z])/gi)];
+    if (matches.length !== 1) return null;
+    const [, core, prerelease] = matches[0];
+    const pre = prerelease?.split(".") ?? [];
+    if (pre.some((part) => /^\d+$/.test(part) && part.length > 1 && part.startsWith("0"))) return null;
+    return { core: core.split(".").map(BigInt), pre };
+  };
+  const a = version(first.name), b = version(second.name);
+  if (a && b) {
+    const compare = (x: bigint | string, y: bigint | string) => x < y ? -1 : x > y ? 1 : 0;
+    let direction = 0;
+    for (let i = 0; i < 3 && !direction; i++) direction = compare(a.core[i], b.core[i]);
+    if (!direction && (!a.pre.length || !b.pre.length)) direction = a.pre.length ? -1 : b.pre.length ? 1 : 0;
+    for (let i = 0; !direction && i < Math.max(a.pre.length, b.pre.length); i++) {
+      const x = a.pre[i], y = b.pre[i];
+      if (x === undefined || y === undefined) { direction = x === undefined ? -1 : 1; break; }
+      const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
+      direction = xn && yn ? compare(BigInt(x), BigInt(y)) : xn !== yn ? (xn ? -1 : 1) : compare(x, y);
+    }
+    if (direction) return direction < 0 ? [first, second] : [second, first];
+  }
+  if (first.modified_ms != null && second.modified_ms != null && first.modified_ms !== second.modified_ms)
+    return first.modified_ms < second.modified_ms ? [first, second] : [second, first];
+  return [first, second];
 }
 
 export interface PresetId { bank: number; program: number }

@@ -5,7 +5,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   addGroup, fallbackVoice, movePart, newArrangement, newPractice, operation,
-  practiceOptions, setFallbackVoice, stemDirection,
+  practiceOptions, setFallbackVoice, stemDirection, orderScorePair,
   type Arrangement, type Inspection, type Part, type PracticeConfig,
   type PracticeEnvironment, type PracticeOptions, type PracticeProgress, type PracticeResult,
 } from "./model.ts";
@@ -14,6 +14,7 @@ import { PracticeExportModal } from "./practice-export-modal.tsx";
 import { RecentSoundsProvider } from "./sound-picker.tsx";
 import { readRecentScores, rememberScore } from "./recent-scores.ts";
 import { RecentScoreButton } from "./recent-score-button.tsx";
+import { DiffPairModal } from "./diff-pair-modal.tsx";
 
 interface ScoreSession {
   document: Inspection;
@@ -67,6 +68,9 @@ export function mountApp(container: HTMLElement): () => void {
   let message = "";
   let messageError = false;
   let completedExport: PracticeResult | null = null;
+  let pendingPair: [Inspection, Inspection] | null = null;
+  const releasedPairIds = new Set<string>();
+  let pairError = "";
   const config: PracticeConfig = { executable: null, soundfont: null };
   let recentScores = readRecentScores();
   let environment: PracticeEnvironment | null = null;
@@ -111,10 +115,88 @@ export function mountApp(container: HTMLElement): () => void {
   }
 
   function releaseAfterDispose() {
-    if (!disposed || !current) return;
+    if (!disposed) return;
+    if (pendingPair) {
+      const pair = pendingPair;
+      pendingPair = null;
+      pair.filter((score) => !releasedPairIds.has(score.id)).forEach((score) => { void release(score.id).catch(console.error); });
+    }
+    if (!current) return;
     const session = current;
     current = null;
     void releaseSession(session).catch(console.error);
+  }
+
+  async function prepare(score: Inspection): Promise<Inspection> {
+    if (score.format !== "musescore") return score;
+    const prepared = await invoke<Inspection>("prepare_musicxml", { id: score.id, executable: config.executable ?? undefined });
+    if (prepared.error) throw new Error(prepared.error);
+    return prepared;
+  }
+
+  async function inspectPair(paths: string[]) {
+    const candidates: Inspection[] = [];
+    try {
+      for (const path of paths) {
+        const score = await invoke<Inspection>("inspect_file", { path });
+        candidates.push(score);
+        if (score.error) throw new Error(score.error);
+        if (disposed) return;
+      }
+      pendingPair = orderScorePair(candidates[0], candidates[1]);
+      releasedPairIds.clear();
+      candidates.length = 0;
+      pairError = "";
+      message = "";
+    } catch (error) { notify(`Could not open scores: ${String(error)}`, true); }
+    finally {
+      const results = await Promise.allSettled(candidates.map((score) => release(score.id)));
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") notify(`Could not release an unused score: ${String(failed.reason)}`, true);
+    }
+  }
+
+  async function cancelPair() {
+    if (!pendingPair || busy()) return;
+    fileBusy = true;
+    render();
+    try {
+      const results = await Promise.allSettled(pendingPair.filter((score) => !releasedPairIds.has(score.id)).map(async (score) => {
+        await release(score.id);
+        releasedPairIds.add(score.id);
+      }));
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+      pendingPair = null;
+      pairError = "";
+    } catch (error) { pairError = `Could not close comparison: ${String(error)}`; }
+    finally { fileBusy = false; if (disposed) releaseAfterDispose(); render(); }
+  }
+
+  async function comparePair() {
+    if (!pendingPair || releasedPairIds.size || busy() || disposed) return;
+    fileBusy = true;
+    pairError = "";
+    render();
+    try {
+      const older = await prepare(pendingPair[0]);
+      const newer = await prepare(pendingPair[1]);
+      if (disposed) return;
+      if (current) { await releaseSession(current); current = null; }
+      if (disposed) return;
+      const arrangement = newArrangement();
+      arrangement.kind = "diff";
+      current = {
+        document: newer, older, arrangement,
+        practice: newer.format === "musescore" ? newPractice(newer.practice_parts ?? []) : undefined,
+      };
+      pendingPair = null;
+      completedExport = null;
+      recentScores = rememberScore(rememberScore(recentScores, older.path), newer.path);
+      message = ""; messageError = false;
+      window.scrollTo(0, 0);
+    } catch (error) { pairError = `Could not prepare comparison: ${String(error)}`; }
+    finally { fileBusy = false; if (disposed) releaseAfterDispose(); render(); }
   }
 
   async function replaceScore(path: string) {
@@ -152,13 +234,15 @@ export function mountApp(container: HTMLElement): () => void {
 
   async function openScore(paths?: string[]) {
     if (disposed) return;
-    if (busy()) { notify("Finish the current operation before opening another score.", true); return; }
-    if (paths && paths.length !== 1) { notify("Drop one score at a time.", true); return; }
+    if (busy() || pendingPair) { notify("Finish the current operation before opening another score.", true); return; }
     fileBusy = true;
     render();
     try {
-      const path = paths ? paths[0] : await invoke<string | null>("open_file");
-      if (path && !disposed) await replaceScore(path);
+      const selected = paths ?? await invoke<string[] | null>("open_files");
+      if (!selected || disposed) return;
+      if (selected.length < 1 || selected.length > 2) { notify("Choose one score to open or two scores to compare.", true); return; }
+      if (selected.length === 2) await inspectPair(selected);
+      else await replaceScore(selected[0]);
     } catch (error) { notify(String(error), true); }
     finally {
       fileBusy = false;
@@ -194,7 +278,7 @@ export function mountApp(container: HTMLElement): () => void {
       if (!path || disposed) return;
       candidate = await invoke<Inspection>("inspect_file", { path });
       if (candidate.error) throw new Error(candidate.error);
-      if (candidate.format === "musescore") throw new Error("Choose an older MusicXML (.mxml, .musicxml, .xml, .mxl) score.");
+      candidate = await prepare(candidate);
       if (disposed || current !== session) return;
       if (session.older) await release(session.older.id);
       session.older = candidate;
@@ -211,6 +295,23 @@ export function mountApp(container: HTMLElement): () => void {
       if (disposed) releaseAfterDispose();
       render();
     }
+  }
+
+  async function changeOperation(kind: Arrangement["kind"]) {
+    if (!current || busy() || disposed) return;
+    const session = current;
+    if (kind === "practice" && !session.practice) return;
+    fileBusy = true;
+    render();
+    try {
+      if (kind !== "practice") session.document = await prepare(session.document);
+      if (disposed) return;
+      session.arrangement.kind = kind;
+      session.arrangement.selected.clear();
+      message = ""; messageError = false;
+    } catch (error) { notify(`Could not prepare score: ${String(error)}`, true); }
+    finally { fileBusy = false; if (disposed) releaseAfterDispose(); render(); }
+    if (kind === "practice" && !environment && !checking) void refreshEnvironment();
   }
 
   async function browse(kind: keyof PracticeConfig) {
@@ -231,10 +332,10 @@ export function mountApp(container: HTMLElement): () => void {
   }
 
   async function exportScore() {
-    if (!current || busy() || disposed || (current.practice && checking)) return;
+    if (!current || busy() || disposed || (current.arrangement.kind === "practice" && checking)) return;
     const session = current;
     try {
-      const options = session.practice ? practiceOptions(session.practice, environment?.presets ?? []) : null;
+      const options = session.arrangement.kind === "practice" && session.practice ? practiceOptions(session.practice, environment?.presets ?? []) : null;
       const request = options ? null : operation(session.arrangement, session.document.parts, session.older?.id);
       if (options && (!environment?.executable || !environment.soundfont || environment.error))
         throw new Error(environment?.error ?? "Configure MuseScore 4.7.x and its MS Basic SoundFont before rendering.");
@@ -271,7 +372,7 @@ export function mountApp(container: HTMLElement): () => void {
   }
 
   async function cancelExport() {
-    if (!current?.practice || !exporting || cancelling || disposed) return;
+    if (!current?.practice || current.arrangement.kind !== "practice" || !exporting || cancelling || disposed) return;
     const session = current;
     cancelling = true;
     render();
@@ -380,22 +481,19 @@ export function mountApp(container: HTMLElement): () => void {
         {!session ? <div className="empty flex min-h-96 flex-col items-center justify-center gap-6 py-12 text-center"><div className="text-6xl" aria-hidden="true">♫</div><Description>MAKE SPACE FOR YOUR MUSIC</Description><h1 className="text-4xl font-semibold sm:text-6xl">Every voice.<br />A little clearer.</h1>
           <p className="max-w-md text-muted">Split a staff, bring parts together, or make a practice track that lets your instrument shine.</p>
           <RecentScoreButton paths={recentScores} disabled={busy()} reading={fileBusy} onOpen={(paths) => void openScore(paths)} />
-          <div className="drop-hint flex flex-col gap-1"><Description>or drop one score anywhere here</Description><Description>MusicXML · .mxl · MuseScore .mscz / .mscx</Description></div>
+          <div className="drop-hint flex flex-col gap-1"><Description>Drop one score to open it, or drop or select two scores to compare versions.</Description><Description>MusicXML · .mxl · MuseScore .mscz / .mscx — formats can be mixed</Description></div>
         </div> : <div className="score-workspace space-y-6" key={score!.id}>
           <div className="score-heading flex flex-wrap items-center justify-between gap-4"><div className="min-w-0 space-y-3"><Description>YOUR MUSIC, YOUR ARRANGEMENT</Description><h1 className="text-3xl font-semibold wrap-anywhere">{score!.name}</h1><Description>{museScore ? (score!.practice_parts?.length ?? 0) : score!.parts.length} instruments <span aria-hidden="true">·</span> Source files stay intact</Description></div><Chip>{museScore ? "MuseScore" : "MusicXML"}</Chip></div>
           <Description>Closing or replacing this score discards its editing choices.</Description>
           <RadioGroup className="operation" aria-label="Choose an operation" aria-describedby="operation-format-hint" value={session.arrangement.kind} isDisabled={busy()}
-            onChange={(kind) => update(({ arrangement }) => {
-              if ((kind === "practice") !== museScore) return;
-              arrangement.kind = kind as Arrangement["kind"]; arrangement.selected.clear(); message = "";
-            })}>
-            {(["split", "merge", "diff", "practice"] as const).map((kind) => <Radio key={kind} value={kind} isDisabled={kind === "practice" ? !museScore : museScore}>
+            onChange={(kind) => void changeOperation(kind as Arrangement["kind"])}>
+            {(["split", "merge", "diff", "practice"] as const).map((kind) => <Radio key={kind} value={kind} isDisabled={kind === "practice" && !museScore}>
               <Radio.Content><Radio.Control><Radio.Indicator /></Radio.Control><Label>{kind === "split" ? "Split instruments" : kind === "merge" ? "Merge instruments" : kind === "diff" ? "Diff versions" : "Create Practice Tracks"}</Label></Radio.Content>
               <Description>{kind === "split" ? "Give every line its own staff" : kind === "merge" ? "Bring parts into a single staff" : kind === "diff" ? "Mark changes in the newer score" : "Your instrument in the foreground"}</Description>
             </Radio>)}
           </RadioGroup>
-          <Description id="operation-format-hint">{museScore ? "Split, merge, and diff require a MusicXML score." : "Practice tracks require a MuseScore .mscz or .mscx score."}</Description>
-          {session.practice ? <PracticeView parts={score!.practice_parts ?? []} options={session.practice} config={config} environment={environment} checking={checking}
+          <Description id="operation-format-hint">{museScore ? "Split, merge, and diff convert visible MuseScore instruments and staves to MusicXML." : "Practice tracks require a MuseScore .mscz or .mscx score."}</Description>
+          {session.arrangement.kind === "practice" && session.practice ? <PracticeView parts={score!.practice_parts ?? []} options={session.practice} config={config} environment={environment} checking={checking}
             busy={busy()} rendering={exporting} cancelling={cancelling} progress={session.progress} result={session.result} onOptionsChange={render}
             onConfigChange={(kind, value) => {
               if (busy()) return;
@@ -405,7 +503,8 @@ export function mountApp(container: HTMLElement): () => void {
       </section></main>
       <div className={`status mx-auto max-w-6xl px-5 pb-6 text-sm whitespace-pre-line wrap-anywhere sm:px-7 ${messageError ? "text-danger" : "text-muted"}`} role={messageError ? "alert" : "status"} aria-live="polite">{message || (session ? "Your music stays on this device." : "")}</div>
       {completedExport && <PracticeExportModal result={completedExport} onClose={() => { completedExport = null; render(); }} />}
-      {dropping && <div className="drop-overlay pointer-events-none fixed inset-4 z-50 grid place-items-center bg-overlay" aria-hidden="true"><Surface className="p-6"><p>Drop one score to open it</p><Description>MusicXML · MuseScore</Description></Surface></div>}
+      {pendingPair && <DiffPairModal pair={pendingPair} busy={busy()} closing={releasedPairIds.size > 0} error={pairError} onSwap={() => { if (!busy() && pendingPair) { pendingPair = [pendingPair[1], pendingPair[0]]; render(); } }} onCancel={() => void cancelPair()} onCompare={() => void comparePair()} />}
+      {dropping && <div className="drop-overlay pointer-events-none fixed inset-4 z-50 grid place-items-center bg-overlay" aria-hidden="true"><Surface className="p-6"><p>Drop one score to open it or two to compare</p><Description>MusicXML · MuseScore</Description></Surface></div>}
     </div></RecentSoundsProvider>);
   }
 

@@ -31,6 +31,8 @@ struct Session {
     path: PathBuf,
     context: String,
     bytes: Option<Arc<Vec<u8>>>,
+    musicxml: Option<Arc<Vec<u8>>>,
+    modified_ms: Option<u64>,
 }
 
 type SharedDocuments = Arc<Mutex<Documents>>;
@@ -93,6 +95,36 @@ fn split_preview(part: &Part, mode: &str) -> Result<Vec<LaneSummary>, String> {
         .collect())
 }
 
+fn summarize_part(part: &Part) -> Result<PartSummary, String> {
+    let voices: HashSet<_> = part
+        .measures
+        .iter()
+        .flat_map(|measure| &measure.events)
+        .map(|event| &event.voice)
+        .collect();
+    Ok(PartSummary {
+        id: part.id().into(),
+        name: part.name(),
+        instrument_names: part
+            .definition
+            .children
+            .iter()
+            .filter_map(|node| node.as_element())
+            .filter(|node| node.name == "score-instrument")
+            .filter_map(|node| {
+                node.get_child("instrument-name")
+                    .and_then(|name| name.get_text())
+                    .map(|text| text.into_owned())
+            })
+            .collect(),
+        voice_count: voices.len(),
+        split_plans: SplitPlans {
+            chords: split_preview(part, "chords")?,
+            voices: split_preview(part, "voices")?,
+        },
+    })
+}
+
 #[derive(Serialize)]
 struct Inspection {
     id: String,
@@ -102,6 +134,7 @@ struct Inspection {
     format: DocumentFormat,
     practice_parts: Vec<PracticePart>,
     error: Option<String>,
+    modified_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -194,6 +227,8 @@ fn register_input(path: PathBuf, documents: &SharedDocuments) -> Result<(String,
             path: path.clone(),
             context,
             bytes: None,
+            musicxml: None,
+            modified_ms: None,
         },
     );
     Ok((id, path))
@@ -222,11 +257,17 @@ fn inspect_registered(
         format: document_format(Path::new(&context)).ok_or("Unsupported score format.")?,
         practice_parts: Vec::new(),
         error: None,
+        modified_ms: None,
     };
     let parsed = (|| -> Result<_, String> {
         let file = File::open(&path)
             .map_err(|error| format!("Cannot open {}: {error}", path.display()))?;
         let metadata = file.metadata().map_err(|error| error.to_string())?;
+        result.modified_ms = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .and_then(|duration| u64::try_from(duration.as_millis()).ok());
         if metadata.len() > MAX_XML_BYTES as u64 {
             return Err("The score exceeds the 64 MiB input limit.".into());
         }
@@ -245,53 +286,105 @@ fn inspect_registered(
         let parts = score
             .parts
             .iter()
-            .map(|part| {
-                let voices: HashSet<&str> = part
-                    .measures
-                    .iter()
-                    .flat_map(|measure| &measure.events)
-                    .map(|event| event.voice.as_str())
-                    .collect();
-                let instrument_names = part
-                    .definition
-                    .children
-                    .iter()
-                    .filter_map(|child| child.as_element())
-                    .filter(|child| child.name == "score-instrument")
-                    .filter_map(|instrument| {
-                        instrument
-                            .get_child("instrument-name")
-                            .and_then(|name| name.get_text())
-                            .map(|text| text.into_owned())
-                    })
-                    .collect();
-                Ok(PartSummary {
-                    id: part.id().into(),
-                    name: part.name(),
-                    instrument_names,
-                    voice_count: voices.len(),
-                    split_plans: SplitPlans {
-                        chords: split_preview(part, "chords")?,
-                        voices: split_preview(part, "voices")?,
-                    },
-                })
-            })
+            .map(summarize_part)
             .collect::<Result<Vec<_>, String>>()?;
         Ok((bytes, parts, Vec::new()))
     })();
     match parsed {
         Ok((bytes, parts, practice_parts)) => {
-            lock_documents(documents)?
+            let mut state = lock_documents(documents)?;
+            let session = state
                 .sessions
                 .get_mut(&id)
-                .ok_or("The score was closed while reading it.")?
-                .bytes = Some(Arc::new(bytes));
+                .ok_or("The score was closed while reading it.")?;
+            session.modified_ms = result.modified_ms;
+            session.bytes = Some(Arc::new(bytes));
             result.parts = parts;
             result.practice_parts = practice_parts;
         }
         Err(error) => result.error = Some(error),
     }
     Ok(result)
+}
+
+fn prepare_registered(
+    id: String,
+    executable: Option<PathBuf>,
+    documents: &SharedDocuments,
+) -> Result<Inspection, String> {
+    let (context, bytes, cached, modified_ms) = {
+        let state = lock_documents(documents)?;
+        let session = state
+            .sessions
+            .get(&id)
+            .ok_or("Unknown document. Open the score again.")?;
+        (
+            session.context.clone(),
+            session
+                .bytes
+                .clone()
+                .ok_or("This score could not be parsed.")?,
+            session.musicxml.clone(),
+            session.modified_ms,
+        )
+    };
+    let format = document_format(Path::new(&context)).ok_or("Unsupported score format")?;
+    let musicxml = if format == DocumentFormat::Musescore {
+        match cached {
+            Some(cached) => cached,
+            None => Arc::new(practice_tracks::convert_musicxml(
+                &bytes,
+                &context,
+                executable.as_deref(),
+            )?),
+        }
+    } else {
+        bytes.clone()
+    };
+    let score =
+        read_score_bytes(&musicxml, "prepared.musicxml").map_err(|error| error.to_string())?;
+    let parts = score
+        .parts
+        .iter()
+        .map(summarize_part)
+        .collect::<Result<Vec<_>, String>>()?;
+    lock_documents(documents)?
+        .sessions
+        .get_mut(&id)
+        .ok_or("The score was closed while converting it.")?
+        .musicxml = Some(musicxml);
+    Ok(Inspection {
+        id,
+        name: Path::new(&context)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        path: context.clone(),
+        format,
+        parts,
+        modified_ms,
+        practice_parts: if format == DocumentFormat::Musescore {
+            practice_tracks::ScoreArchive::read_bytes(&bytes, &context)?.parts()?
+        } else {
+            Vec::new()
+        },
+        error: None,
+    })
+}
+
+#[tauri::command]
+async fn prepare_musicxml(
+    id: String,
+    executable: Option<String>,
+    documents: State<'_, SharedDocuments>,
+) -> Result<Inspection, String> {
+    let documents = documents.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        prepare_registered(id, executable.map(PathBuf::from), &documents)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -336,6 +429,32 @@ async fn open_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
                 file.into_path()
                     .map(|path| path.to_string_lossy().into_owned())
                     .map_err(|error| error.to_string())
+            })
+            .transpose()
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn open_files(app: tauri::AppHandle) -> Result<Option<Vec<String>>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter(
+                "Scores",
+                &["mxml", "musicxml", "xml", "mxl", "mscz", "mscx"],
+            )
+            .blocking_pick_files()
+            .map(|files| {
+                files
+                    .into_iter()
+                    .map(|file| {
+                        file.into_path()
+                            .map(|path| path.to_string_lossy().into_owned())
+                            .map_err(|error| error.to_string())
+                    })
+                    .collect()
             })
             .transpose()
     })
@@ -432,18 +551,29 @@ fn diff_snapshot(state: &Documents, operation: &Operation) -> Result<Option<Sess
         .sessions
         .get(older_id)
         .ok_or("Unknown older version. Choose it again.")?;
-    if !supported_musicxml(Path::new(&session.context)) {
-        return Err("The older version must be a MusicXML score.".into());
-    }
-    let bytes = session
-        .bytes
-        .clone()
-        .ok_or("The older version could not be parsed and cannot be compared.")?;
+    let bytes = musicxml_snapshot(session)?;
     Ok(Some(Session {
         path: session.path.clone(),
         context: session.context.clone(),
         bytes: Some(bytes),
+        musicxml: None,
+        modified_ms: session.modified_ms,
     }))
+}
+
+fn musicxml_snapshot(session: &Session) -> Result<Arc<Vec<u8>>, String> {
+    if let Some(bytes) = &session.musicxml {
+        return Ok(bytes.clone());
+    }
+    if !supported_musicxml(Path::new(&session.context)) {
+        return Err(
+            "Prepare this MuseScore score as MusicXML before arranging or comparing it.".into(),
+        );
+    }
+    session
+        .bytes
+        .clone()
+        .ok_or_else(|| "This score could not be parsed and cannot be exported.".into())
 }
 
 fn protect_export_sources(
@@ -481,10 +611,7 @@ async fn export_document(
         (
             session.path.clone(),
             session.context.clone(),
-            session
-                .bytes
-                .clone()
-                .ok_or("This score could not be parsed and cannot be exported.")?,
+            musicxml_snapshot(session)?,
             diff_snapshot(&state, &operation)?,
         )
     };
@@ -492,9 +619,6 @@ async fn export_document(
         let mut sources = vec![input.clone(), PathBuf::from(&context)];
         let suffix = if older.is_some() { "diff" } else { "arranged" };
         let transformed = if let Some(older) = older {
-            if !supported_musicxml(Path::new(&context)) {
-                return Err("The newer version must be a MusicXML score.".into());
-            }
             sources.extend([older.path, PathBuf::from(&older.context)]);
             prepare_diff_export(
                 &bytes,
@@ -740,6 +864,8 @@ pub fn run() {
             inspect_file,
             existing_score_paths,
             open_file,
+            open_files,
+            prepare_musicxml,
             release_document,
             export_document,
             practice_environment,
@@ -833,6 +959,8 @@ mod tests {
                 path: "older.musicxml".into(),
                 context: "older.musicxml".into(),
                 bytes: None,
+                musicxml: None,
+                modified_ms: None,
             },
         );
         assert!(diff_snapshot(&state, &request).is_err());
@@ -842,6 +970,91 @@ mod tests {
             .unwrap()
             .contains("MusicXML"));
         assert!(prepare_diff_export(FALLBACK_SCORE, "new.xml", b"broken", "old.xml").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn musescore_preparation_caches_visible_musicxml_and_preserves_original_snapshot() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("original.mscx");
+        let original = br#"<museScore version="4.70"><Score><Part id="1"><Staff id="1"/><trackName>Visible</trackName><Instrument id="voice"/></Part><Part id="2"><Staff id="2"/><show>0</show><trackName>Hidden</trackName><Instrument id="voice"/></Part><Staff id="1"/><Staff id="2"/></Score></museScore>"#;
+        std::fs::write(&path, original).unwrap();
+        std::fs::write(directory.path().join("converted.musicxml"), FALLBACK_SCORE).unwrap();
+        let executable = directory.path().join("fake-converter");
+        std::fs::write(&executable, "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'MuseScore Studio 4.7.0'; exit; fi\ncp \"$3\" \"$(dirname \"$0\")/captured.mscz\"\nprintf '%s' \"$2\" > \"$(dirname \"$0\")/output-path\"\ncp \"$(dirname \"$0\")/converted.musicxml\" \"$2\"\n").unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let documents = SharedDocuments::default();
+        let inspection = inspect(path.clone(), &documents).unwrap();
+        assert!(inspection.modified_ms.is_some());
+        std::fs::write(&path, b"changed after opening").unwrap();
+        let prepared =
+            prepare_registered(inspection.id.clone(), Some(executable.clone()), &documents)
+                .unwrap();
+        assert_eq!(prepared.format, DocumentFormat::Musescore);
+        assert_eq!(prepared.name, "original.mscx");
+        assert_eq!(prepared.modified_ms, inspection.modified_ms);
+        assert_eq!(prepared.practice_parts.len(), 2);
+        assert_eq!(prepared.parts.len(), 1);
+        let captured = practice_tracks::ScoreArchive::read_bytes(
+            &std::fs::read(directory.path().join("captured.mscz")).unwrap(),
+            "capture.mscz",
+        )
+        .unwrap();
+        assert_eq!(captured.parts().unwrap().len(), 1);
+        assert!(!Path::new(
+            &std::fs::read_to_string(directory.path().join("output-path")).unwrap()
+        )
+        .exists());
+        std::fs::remove_file(executable).unwrap();
+        assert!(
+            prepare_registered(inspection.id.clone(), Some("missing".into()), &documents).is_ok()
+        );
+        let state = lock_documents(&documents).unwrap();
+        let session = &state.sessions[&inspection.id];
+        assert_eq!(session.bytes.as_ref().unwrap().as_slice(), original);
+        let bytes = musicxml_snapshot(session).unwrap();
+        assert!(prepare_export(
+            &bytes,
+            "score.mscx",
+            Operation::Split {
+                part_ids: vec!["P1".into()],
+                mode: SplitMode::Voices,
+                insert_fallback_slurs: false,
+                fallbacks: prepared.parts[0]
+                    .split_plans
+                    .voices
+                    .iter()
+                    .map(|lane| FallbackSelection {
+                        part_id: "P1".into(),
+                        voice: lane.voice.clone(),
+                        tone: lane.tone,
+                        fallback_voice: lane.fallback_voice.clone(),
+                    })
+                    .collect(),
+            }
+        )
+        .is_ok());
+        assert!(prepare_diff_export(&bytes, "new.mscx", FALLBACK_SCORE, "old.xml").is_ok());
+        assert!(protect_sources(&state, &path).is_err());
+    }
+
+    #[test]
+    fn failed_conversion_keeps_original_session_and_does_not_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("input.mscx");
+        std::fs::write(&path, br#"<museScore version="4.70"><Score><Part id="1"><Staff id="1"/><Instrument id="voice"/></Part><Staff id="1"/></Score></museScore>"#).unwrap();
+        let documents = SharedDocuments::default();
+        let inspection = inspect(path, &documents).unwrap();
+        assert!(prepare_registered(
+            inspection.id.clone(),
+            Some(directory.path().join("missing")),
+            &documents
+        )
+        .is_err());
+        let state = lock_documents(&documents).unwrap();
+        assert!(state.sessions[&inspection.id].bytes.is_some());
+        assert!(state.sessions[&inspection.id].musicxml.is_none());
     }
 
     #[test]

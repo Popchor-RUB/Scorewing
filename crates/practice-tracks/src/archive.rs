@@ -138,6 +138,138 @@ impl ScoreArchive {
         self.root.get_mut_child("Score").unwrap()
     }
 
+    /// Remove explicitly hidden music before export; layout-based hiding is irrelevant.
+    pub(crate) fn visible_score(&self) -> Result<Self> {
+        let shown =
+            |node: &Element| !matches!(child_text(node, "show").as_deref(), Some("0" | "false"));
+        let mut score = self.clone();
+        let mut ordinal = 0usize;
+        let mut retained = BTreeMap::new();
+        let mut known = HashSet::new();
+        for part in children(self.master(), "Part") {
+            for staff in children(part, "Staff") {
+                ordinal += 1;
+                let id = staff
+                    .attributes
+                    .get("id")
+                    .cloned()
+                    .unwrap_or_else(|| ordinal.to_string());
+                if id.parse::<usize>().ok() != Some(ordinal) || !known.insert(id.clone()) {
+                    return Err(
+                        "Cannot safely convert non-sequential or duplicate MuseScore staff IDs"
+                            .into(),
+                    );
+                }
+                let master_visible = children(self.master(), "Staff")
+                    .find(|master| master.attributes.get("id") == Some(&id))
+                    .is_none_or(shown);
+                if shown(part) && shown(staff) && master_visible {
+                    retained.insert(id, (retained.len() + 1).to_string());
+                }
+            }
+        }
+        if retained.is_empty() {
+            return Err("The MuseScore score has no visible instruments or staves.".into());
+        }
+        let master_ids: Vec<_> = children(self.master(), "Staff")
+            .filter_map(|staff| staff.attributes.get("id"))
+            .collect();
+        if master_ids.len() != known.len()
+            || master_ids.iter().any(|id| !known.contains(*id))
+            || master_ids.iter().collect::<HashSet<_>>().len() != known.len()
+        {
+            return Err("Cannot safely map MuseScore instrument staves to master staves".into());
+        }
+        let removing = retained.len() != known.len();
+        let mut next_staff = 0usize;
+        score.master_mut().children.retain_mut(|node| {
+            let Some(node) = node.as_mut_element() else {
+                return true;
+            };
+            if node.name == "Excerpt" || node.name == "Score" {
+                return false;
+            }
+            if node.name == "Part" {
+                node.children.retain_mut(|child| {
+                    let Some(staff) = child.as_mut_element() else {
+                        return true;
+                    };
+                    if staff.name != "Staff" {
+                        return true;
+                    }
+                    next_staff += 1;
+                    let id = staff
+                        .attributes
+                        .get("id")
+                        .cloned()
+                        .unwrap_or_else(|| next_staff.to_string());
+                    if let Some(new) = retained.get(&id) {
+                        staff.attributes.insert("id".into(), new.clone());
+                        // Brackets and barline spans describe layout across the original staff set.
+                        if removing {
+                            staff.children.retain(|n| {
+                                !n.as_element().is_some_and(|e| {
+                                    matches!(e.name.as_str(), "bracket" | "barLineSpan")
+                                })
+                            });
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                });
+                return children(node, "Staff").next().is_some();
+            }
+            if node.name == "Staff" {
+                let Some(new) = node.attributes.get("id").and_then(|id| retained.get(id)) else {
+                    return false;
+                };
+                node.attributes.insert("id".into(), new.clone());
+            }
+            true
+        });
+        if removing {
+            let mut error = None;
+            visit_mut(score.master_mut(), &mut |node| {
+                if node
+                    .attributes
+                    .keys()
+                    .any(|key| matches!(key.as_str(), "track" | "track2" | "staff" | "staffId"))
+                {
+                    error = Some("Cannot remove hidden staves with explicit staff or track attribute references. Simplify these references in a copy first.".into());
+                }
+                if matches!(
+                    node.name.as_str(),
+                    "linkedTo" | "linkedMain" | "linked" | "Link"
+                ) || (matches!(node.name.as_str(), "staffMove" | "staves")
+                    && node.get_text().as_deref() != Some("0"))
+                {
+                    error = Some("Cannot remove hidden staves from linked or cross-staff notation. Unlink the staves or remove cross-staff notation in a copy first.".to_string());
+                }
+                if matches!(node.name.as_str(), "track" | "track2") {
+                    if let Some(track) = node.get_text().and_then(|text| text.parse::<usize>().ok())
+                    {
+                        let old = (track / 4 + 1).to_string();
+                        if let Some(new) = retained.get(&old) {
+                            node.children = vec![XMLNode::Text(
+                                ((new.parse::<usize>().unwrap() - 1) * 4 + track % 4).to_string(),
+                            )];
+                        } else {
+                            error = Some("Visible notation references a hidden staff; conversion would discard music.".into());
+                        }
+                    } else {
+                        error = Some("Cannot safely map a MuseScore track reference".into());
+                    }
+                }
+            });
+            if let Some(error) = error {
+                return Err(error);
+            }
+        }
+        score.audio = json!({});
+        Ok(score)
+    }
+
     pub fn parts(&self) -> Result<Vec<PracticePart>> {
         children(self.master(), "Part")
             .enumerate()
@@ -883,6 +1015,94 @@ fn resource(preset: &Preset) -> Value {
 mod tests {
     use super::*;
     use crate::PartSettings;
+
+    #[test]
+    fn conversion_filters_explicit_visibility_and_remaps_staffs_without_changing_source() {
+        let original = source();
+        let converted = original.visible_score().unwrap();
+        assert_eq!(converted.parts().unwrap().len(), 2);
+        assert_eq!(
+            children(converted.master(), "Staff")
+                .map(|staff| staff.attributes["id"].as_str())
+                .collect::<Vec<_>>(),
+            ["1", "2", "3"]
+        );
+        assert_eq!(original.parts().unwrap().len(), 3);
+        let mut single = source();
+        let part = single.master_mut().get_mut_child("Part").unwrap();
+        set_child(part.get_mut_child("Staff").unwrap(), "show", "0");
+        let single = single.visible_score().unwrap();
+        assert_eq!(
+            children(single.master().get_child("Part").unwrap(), "Staff").count(),
+            1
+        );
+        assert!(!format!("{:?}", single.master()).contains("pitch"));
+    }
+
+    #[test]
+    fn conversion_rejects_empty_and_cross_staff_scores() {
+        let mut empty = source();
+        for part in empty
+            .master_mut()
+            .children
+            .iter_mut()
+            .filter_map(XMLNode::as_mut_element)
+            .filter(|node| node.name == "Part")
+        {
+            set_child(part, "show", "0");
+        }
+        assert!(empty.visible_score().unwrap_err().contains("no visible"));
+        let mut linked = source();
+        set_child(
+            linked.master_mut().get_mut_child("Staff").unwrap(),
+            "staffMove",
+            "1",
+        );
+        assert!(linked.visible_score().unwrap_err().contains("cross-staff"));
+        let mut references = source();
+        references
+            .master_mut()
+            .get_mut_child("Part")
+            .unwrap()
+            .get_mut_child("Instrument")
+            .unwrap()
+            .attributes
+            .insert("staff".into(), "2".into());
+        assert!(references
+            .visible_score()
+            .unwrap_err()
+            .contains("attribute references"));
+    }
+
+    #[test]
+    fn conversion_supports_compressed_archives_and_ordinal_staff_ids() {
+        let original = source();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("score.mscz");
+        original.write(&path).unwrap();
+        let mut restored =
+            ScoreArchive::read_bytes(&std::fs::read(path).unwrap(), "score.mscz").unwrap();
+        for part in restored
+            .master_mut()
+            .children
+            .iter_mut()
+            .filter_map(XMLNode::as_mut_element)
+            .filter(|node| node.name == "Part")
+        {
+            for staff in part
+                .children
+                .iter_mut()
+                .filter_map(XMLNode::as_mut_element)
+                .filter(|node| node.name == "Staff")
+            {
+                staff.attributes.remove("id");
+            }
+        }
+        assert_eq!(
+            children(restored.visible_score().unwrap().master(), "Staff").count(),
+            3
+        );
+    }
 
     fn source() -> ScoreArchive {
         ScoreArchive::read_bytes(br#"<museScore version="4.70"><Score><Division>480</Division>

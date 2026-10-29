@@ -40,6 +40,15 @@ pub struct PracticePart {
     pub existing_preset: Option<PresetId>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PracticeSection {
+    pub key: String,
+    pub name: String,
+    /// One-based, inclusive written-measure positions (including pickups).
+    pub start_measure: usize,
+    pub end_measure: usize,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PartSettings {
@@ -54,9 +63,17 @@ pub struct PartSettings {
 #[serde(deny_unknown_fields)]
 pub struct PracticeOptions {
     pub parts: Vec<PartSettings>,
+    #[serde(default = "include_whole_song")]
+    pub include_whole_song: bool,
+    #[serde(default)]
+    pub section_keys: Vec<String>,
     pub background_reduction_db: f64,
     pub metronome_enabled: bool,
     pub metronome_db: f64,
+}
+
+fn include_whole_song() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

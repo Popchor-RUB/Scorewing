@@ -25,6 +25,7 @@ export interface Inspection {
   error: string | null;
   format?: "musicxml" | "musescore";
   practice_parts?: PracticePart[];
+  practice_sections?: PracticeSection[];
 }
 
 /** Infer direction using source metadata, before conversion changes any timestamps. */
@@ -76,13 +77,22 @@ export interface PracticePartOptions {
   include_in_background: boolean;
   create_track: boolean;
 }
+export interface PracticeSection {
+  key: string;
+  name: string;
+  start_measure: number;
+  end_measure: number;
+}
 export interface PracticeOptions {
   parts: PracticePartOptions[];
+  include_whole_song: boolean;
+  section_keys: string[];
   background_reduction_db: number;
   metronome_enabled: boolean;
   metronome_db: number;
 }
-export type PracticeDefaults = Partial<Pick<PracticePartOptions, "foreground_sound" | "background_sound"> & Omit<PracticeOptions, "parts">>;
+export type PracticeDefaults = Partial<Pick<PracticePartOptions, "foreground_sound" | "background_sound"> &
+  Pick<PracticeOptions, "background_reduction_db" | "metronome_enabled" | "metronome_db">>;
 export interface PracticeConfig { executable: string | null; soundfont: string | null }
 export interface PracticeEnvironment extends PracticeConfig {
   version: string | null;
@@ -99,6 +109,8 @@ export interface PracticeProgress { id: string; stage: string; completed: number
 
 export function newPractice(parts: PracticePart[], defaults: PracticeDefaults = {}): PracticeOptions {
   return {
+    include_whole_song: true,
+    section_keys: [],
     parts: parts.map((part) => ({
       key: part.key, foreground_sound: defaults.foreground_sound ?? part.existing_preset,
       background_sound: defaults.background_sound ?? part.existing_preset,
@@ -111,6 +123,8 @@ export function newPractice(parts: PracticePart[], defaults: PracticeDefaults = 
 }
 
 export function practiceOptions(options: PracticeOptions, presets: SoundPreset[]): PracticeOptions {
+  if (!options.include_whole_song && !options.section_keys.length)
+    throw new Error("Choose the whole song or at least one rehearsal section.");
   if (!options.parts.some((part) => part.create_track))
     throw new Error("Choose at least one instrument to create a practice track.");
   if (!Number.isFinite(options.background_reduction_db) || options.background_reduction_db < 0 || options.background_reduction_db > 60)

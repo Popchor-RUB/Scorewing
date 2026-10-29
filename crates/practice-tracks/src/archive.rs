@@ -13,6 +13,8 @@ const MEMBER_LIMIT: usize = 64 * 1024 * 1024;
 const TOTAL_LIMIT: usize = 256 * 1024 * 1024;
 const ENTRY_LIMIT: usize = 4096;
 
+mod sections;
+
 #[derive(Clone, Debug)]
 pub struct ScoreArchive {
     root: Element,
@@ -1132,6 +1134,8 @@ mod tests {
 
     fn options() -> PracticeOptions {
         PracticeOptions {
+            include_whole_song: true,
+            section_keys: vec![],
             parts: (1..=3)
                 .map(|index| PartSettings {
                     key: format!("part-{index}"),

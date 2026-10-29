@@ -4,7 +4,8 @@ use mxml_core::{
     SplitResult, EXTENSIONS, MAX_XML_BYTES,
 };
 use practice_tracks::{
-    ExportReport, PracticeOptions, PracticePart, RendererConfig, RendererEnvironment,
+    ExportReport, PracticeOptions, PracticePart, PracticeSection, RendererConfig,
+    RendererEnvironment,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -133,6 +134,7 @@ struct Inspection {
     parts: Vec<PartSummary>,
     format: DocumentFormat,
     practice_parts: Vec<PracticePart>,
+    practice_sections: Vec<PracticeSection>,
     error: Option<String>,
     modified_ms: Option<u64>,
 }
@@ -256,6 +258,7 @@ fn inspect_registered(
         parts: Vec::new(),
         format: document_format(Path::new(&context)).ok_or("Unsupported score format.")?,
         practice_parts: Vec::new(),
+        practice_sections: Vec::new(),
         error: None,
         modified_ms: None,
     };
@@ -280,7 +283,12 @@ fn inspect_registered(
         }
         if result.format == DocumentFormat::Musescore {
             let archive = practice_tracks::ScoreArchive::read_bytes(&bytes, &context)?;
-            return Ok((bytes, Vec::new(), archive.parts()?));
+            return Ok((
+                bytes,
+                Vec::new(),
+                archive.parts()?,
+                archive.rehearsal_sections()?,
+            ));
         }
         let score = read_score_bytes(&bytes, &context).map_err(|error| error.to_string())?;
         let parts = score
@@ -288,10 +296,10 @@ fn inspect_registered(
             .iter()
             .map(summarize_part)
             .collect::<Result<Vec<_>, String>>()?;
-        Ok((bytes, parts, Vec::new()))
+        Ok((bytes, parts, Vec::new(), Vec::new()))
     })();
     match parsed {
-        Ok((bytes, parts, practice_parts)) => {
+        Ok((bytes, parts, practice_parts, practice_sections)) => {
             let mut state = lock_documents(documents)?;
             let session = state
                 .sessions
@@ -301,6 +309,7 @@ fn inspect_registered(
             session.bytes = Some(Arc::new(bytes));
             result.parts = parts;
             result.practice_parts = practice_parts;
+            result.practice_sections = practice_sections;
         }
         Err(error) => result.error = Some(error),
     }
@@ -353,6 +362,11 @@ fn prepare_registered(
         .get_mut(&id)
         .ok_or("The score was closed while converting it.")?
         .musicxml = Some(musicxml);
+    let practice_archive = if format == DocumentFormat::Musescore {
+        Some(practice_tracks::ScoreArchive::read_bytes(&bytes, &context)?)
+    } else {
+        None
+    };
     Ok(Inspection {
         id,
         name: Path::new(&context)
@@ -364,11 +378,16 @@ fn prepare_registered(
         format,
         parts,
         modified_ms,
-        practice_parts: if format == DocumentFormat::Musescore {
-            practice_tracks::ScoreArchive::read_bytes(&bytes, &context)?.parts()?
-        } else {
-            Vec::new()
-        },
+        practice_parts: practice_archive
+            .as_ref()
+            .map(|archive| archive.parts())
+            .transpose()?
+            .unwrap_or_default(),
+        practice_sections: practice_archive
+            .as_ref()
+            .map(|archive| archive.rehearsal_sections())
+            .transpose()?
+            .unwrap_or_default(),
         error: None,
     })
 }
@@ -1546,6 +1565,26 @@ mod tests {
         std::fs::write(&path, b"changed outside VoiceWeaver").unwrap();
         let (_, snapshot) = practice_snapshot(&inspected.id, &documents).unwrap();
         assert_eq!(snapshot.as_slice(), source);
+    }
+
+    #[test]
+    fn musescore_inspection_exposes_rehearsal_sections() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sections.mscx");
+        std::fs::write(&path, br#"<museScore version="4.70"><Score>
+          <Part id="1"><Staff id="1"/><trackName>Piano</trackName><Instrument id="piano"/></Part>
+          <Staff id="1"><Measure><voice><SystemText><text>Not a rehearsal mark</text></SystemText></voice></Measure>
+          <Measure><voice><RehearsalMark><text>A</text></RehearsalMark></voice></Measure><Measure/></Staff>
+          </Score></museScore>"#).unwrap();
+        let documents = SharedDocuments::default();
+        let inspected = inspect(path, &documents).unwrap();
+        assert!(inspected.error.is_none(), "{:?}", inspected.error);
+        assert_eq!(inspected.practice_sections.len(), 2);
+        assert_eq!(inspected.practice_sections[0].name, "Intro");
+        let section = &inspected.practice_sections[1];
+        assert_eq!(section.key, "measure-2");
+        assert_eq!(section.name, "A");
+        assert_eq!((section.start_measure, section.end_measure), (2, 3));
     }
 
     #[test]

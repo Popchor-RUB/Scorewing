@@ -5,6 +5,62 @@ import type { PracticeConfig, PracticeEnvironment, PracticeOptions, PracticeResu
 import { mountTestApp } from "./test-support.ts";
 import { PRACTICE_DEFAULTS_KEY } from "./practice-defaults.ts";
 
+test("practice ranges support section-only exports, preserve choices, and count every mix", async () => {
+  const requests: PracticeOptions[] = [];
+  let finish: ((result: PracticeResult | null) => void) | undefined;
+  const app = await mountTestApp(async (command, args) => {
+    if (command === "open_files") return ["/scores/sections.mscz"];
+    if (command === "release_document") return;
+    if (command === "inspect_file") return {
+      id: "sections", path: args.path, name: "sections.mscz", error: null, parts: [], format: "musescore",
+      practice_parts: [{ key: "one", name: "Piano", visible: true, original_instruments: ["piano"], existing_preset: { bank: 0, program: 0 } }],
+      practice_sections: [
+        { key: "measure-1", name: "Intro", start_measure: 1, end_measure: 2 },
+        { key: "measure-3", name: "A", start_measure: 3, end_measure: 5 },
+        { key: "measure-6", name: "A", start_measure: 6, end_measure: 8 },
+      ],
+    };
+    if (command === "practice_environment") return {
+      executable: "/bin/mscore", soundfont: "/sounds/MS Basic.sf3", version: "4.7.5", error: null,
+      presets: [{ bank: 0, program: 0, name: "Piano" }],
+    };
+    if (command === "export_practice_tracks") {
+      requests.push(args.options as PracticeOptions);
+      return await new Promise<PracticeResult | null>((resolve) => { finish = resolve; });
+    }
+    throw new Error(`Unexpected command ${command}`);
+  });
+  try {
+    await app.click('[data-action="open"]');
+    await app.click('[data-mode="practice"]');
+    assert.equal(app.find<HTMLInputElement>('[data-action="practice-whole-song"] input').checked, true);
+    assert.equal(app.document.querySelectorAll('[data-section-key]').length, 3);
+    assert.match(app.find('[data-section-key="measure-3"]').textContent!, /A.*Measures 3–5/s);
+    await app.click('[data-action="practice-whole-song"]');
+    await app.click('[data-action="practice-export"]');
+    assert.equal(requests.length, 0);
+    assert.match(app.document.body.textContent!, /Choose the whole song or at least one rehearsal section/);
+    await app.click('[data-section-key="measure-3"]');
+    await app.click('[data-section-key="measure-6"]');
+    await app.click('[data-action="back-to-modes"]');
+    await app.click('[data-mode="practice"]');
+    assert.equal(app.find<HTMLInputElement>('[data-section-key="measure-3"] input').checked, true);
+    await app.click('[data-action="practice-export"]');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].include_whole_song, false);
+    assert.deepEqual(requests[0].section_keys, ["measure-3", "measure-6"]);
+    assert.match(app.find(".practice-progress").textContent!, /0 \/ 2 tracks completed/);
+    for (const input of app.document.querySelectorAll('[aria-label="Practice ranges"] input')) assert.ok(input.hasAttribute("disabled"));
+    await act(async () => finish!(null));
+    await app.settle();
+    await app.click('[data-action="close"]');
+    await app.click('[data-action="open"]');
+    await app.click('[data-mode="practice"]');
+    assert.equal(app.find<HTMLInputElement>('[data-action="practice-whole-song"] input').checked, true);
+    assert.equal(app.find<HTMLInputElement>('[data-section-key="measure-3"] input').checked, false, "sections do not become global defaults");
+  } finally { await app.close(); }
+});
+
 test("practice UI configures sounds, validates exports, reports progress and retains partial results", async () => {
   let ready = false;
   let nextPath: string | null = "/scores/first.mscz";
@@ -131,6 +187,7 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     await app.click('[data-action="practice-export"]');
     assert.equal(requests.length, 1);
     assert.deepEqual(requests[0].options, {
+      include_whole_song: true, section_keys: [],
       parts: [
         { key: "one", foreground_sound: { bank: 0, program: 0 }, background_sound: { bank: 0, program: 40 }, include_in_background: false, create_track: true },
         { key: "two", foreground_sound: null, background_sound: { bank: 0, program: 40 }, include_in_background: true, create_track: false },

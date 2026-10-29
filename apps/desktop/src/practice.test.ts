@@ -54,3 +54,18 @@ test("practice validates active sounds, target selection, and finite level limit
   state.metronome_db = -60;
   assert.doesNotThrow(() => practiceOptions(state, presets));
 });
+
+test("practice exports require a range and range choices stay per document", () => {
+  const state = newPractice(parts);
+  assert.equal(state.include_whole_song, true);
+  assert.deepEqual(state.section_keys, []);
+  state.include_whole_song = false;
+  assert.throws(() => practiceOptions(state, presets), /whole song or at least one rehearsal section/);
+  state.section_keys = ["measure-3"];
+  const request = practiceOptions(state, presets);
+  assert.equal(request.include_whole_song, false);
+  assert.deepEqual(request.section_keys, ["measure-3"]);
+  request.section_keys.push("measure-5");
+  assert.deepEqual(state.section_keys, ["measure-3"]);
+  assert.deepEqual(newPractice(parts).section_keys, []);
+});

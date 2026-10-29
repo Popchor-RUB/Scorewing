@@ -2,12 +2,13 @@ import { Button, Card, Checkbox, Description, Input, Label, Modal, NumberField, 
 import { useEffect, useState } from "react";
 import type {
   PracticeConfig, PracticeDefaults, PracticeEnvironment, PracticeOptions, PracticePart,
-  PracticeResult, PresetId,
+  PracticeResult, PracticeSection, PresetId,
 } from "./model.ts";
 import { SoundPicker } from "./sound-picker.tsx";
 
 export interface PracticeViewProps {
   parts: PracticePart[];
+  sections: PracticeSection[];
   options: PracticeOptions;
   defaults: PracticeDefaults;
   onSetDefault: (mode: "foreground_sound" | "background_sound", sound: PresetId) => void;
@@ -47,7 +48,7 @@ function RendererPath({ kind, value, placeholder, disabled, onChange, onBrowse }
 }
 
 export function PracticeView({
-  parts, options, defaults, onSetDefault, onSetLevelDefault, config, environment, checking, busy, rendering,
+  parts, sections, options, defaults, onSetDefault, onSetLevelDefault, config, environment, checking, busy, rendering,
   result, onOptionsChange, onConfigChange, onBrowse, onDetect, onExport,
 }: PracticeViewProps) {
   const disabled = busy || checking;
@@ -90,6 +91,32 @@ export function PracticeView({
         </Modal.Backdrop>
       </Modal>
     </div>
+
+    <Card aria-label="Practice ranges">
+      <Card.Header><Card.Title>Whole song and rehearsal sections</Card.Title></Card.Header>
+      <Card.Content className="flex flex-col gap-3">
+        <Checkbox variant="secondary" isSelected={options.include_whole_song} isDisabled={disabled}
+          data-action="practice-whole-song" onChange={(selected) => {
+            options.include_whole_song = selected; onOptionsChange();
+          }}>
+          <Checkbox.Content><Checkbox.Control><Checkbox.Indicator /></Checkbox.Control><Label>Whole song</Label></Checkbox.Content>
+        </Checkbox>
+        {sections.map((section) => <Checkbox key={section.key} variant="secondary"
+          isSelected={options.section_keys.includes(section.key)} isDisabled={disabled}
+          data-section-key={section.key} onChange={(selected) => {
+            options.section_keys = selected ? [...options.section_keys, section.key] : options.section_keys.filter((key) => key !== section.key);
+            onOptionsChange();
+          }}>
+          <Checkbox.Content><Checkbox.Control><Checkbox.Indicator /></Checkbox.Control><Label>{section.name}</Label></Checkbox.Content>
+          <Description>Measures {section.start_measure}–{section.end_measure}</Description>
+        </Checkbox>)}
+        <Description>{sections.length
+          ? "Sections start at the marked measure and play once, without repeats or jumps. Each range has its own output folder."
+          : "No rehearsal marks found. Whole-song export is available."}</Description>
+        {!options.include_whole_song && !options.section_keys.length &&
+          <p className="text-danger" role="alert">Choose the whole song or at least one rehearsal section.</p>}
+      </Card.Content>
+    </Card>
 
     <section aria-label="Practice instruments" aria-disabled={instrumentsDisabled} className={instrumentsDisabled ? "opacity-50" : undefined}>
       <div className="section-heading mb-4 space-y-2">

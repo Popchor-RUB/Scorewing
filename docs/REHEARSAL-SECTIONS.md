@@ -1,0 +1,120 @@
+# Rehearsal section practice tracks
+
+Status: implemented; requirements and acceptance checks are recorded below.
+
+## Purpose
+
+Export practice tracks for selected rehearsal sections in addition to the existing
+whole-song tracks. Identify sections from genuine MuseScore rehearsal marks.
+
+## Agreed behavior
+
+- Support the existing `.mscx` and `.mscz` score inputs.
+- Offer a list of detected sections with independent selection. Whole-song export
+  is also selectable and is enabled by default. Users may export sections only.
+- A section starts at the beginning of the measure containing its rehearsal mark
+  and ends immediately before the next marked measure. A mid-measure mark snaps
+  to that measure's start; it does not create a beat-level boundary.
+- If there are measures before the first marked measure, offer an `Intro` section
+  covering them. Do not create an empty Intro when the first measure is marked.
+- The last marked section continues through the end of the score.
+- Multiple marks in the same measure create one section with combined names,
+  such as `B + Trio`. Repeated labels in different measures remain distinct
+  sections, identified by score position and export order.
+- Use the existing instrument selection, foreground/background sounds, background
+  volume, and metronome settings for every selected section and the whole song.
+  Do not add per-section mix settings.
+- Section playback starts immediately, with no count-in or preceding measure.
+  Play the written section once, ignoring repeats and navigation jumps. Preserve
+  the existing repeat/jump behavior for whole-song tracks.
+- Do not play music from the next section. Allow final notes and reverb to decay
+  naturally instead of applying a hard cutoff or fade.
+- Place each selected range in its own ordered folder under the existing export
+  directory. Use `00 - Whole song` when included, then section folders in score
+  order, for example `01 - Intro`, `02 - A`, and `03 - B`. Keep the existing
+  instrument-track filenames inside each folder.
+- Preserve mark text in displayed names; sanitize filesystem names and retain
+  ordering prefixes so duplicate labels cannot overwrite one another.
+- A score without rehearsal marks remains eligible for whole-song export and
+  offers no rehearsal sections. Prevent an export with no selected range.
+
+Only actual rehearsal-mark objects define sections. Ordinary staff/system text
+does not become a section merely because its appearance includes a box.
+
+## Confirmed technical facts
+
+MuseScore represents rehearsal marks in MSCX XML as a `RehearsalMark` element
+containing its label, for example `<RehearsalMark><text>A</text></RehearsalMark>`.
+MSCZ contains the master MSCX document. Mark text can contain rich formatting,
+and marks can occur within a measure.
+
+The existing application already reads these score containers in
+[`archive.rs`](../crates/practice-tracks/src/archive.rs), normalizes scores and
+renders instrument mixes in
+[`service.rs`](../crates/practice-tracks/src/service.rs), and requires MuseScore
+Studio 4.7.x in [`renderer.rs`](../crates/practice-tracks/src/renderer.rs).
+Reuse those responsibilities and the existing mix request types in
+[`lib.rs`](../crates/practice-tracks/src/lib.rs).
+
+MuseScore 4.7 provides a native region-to-MSCZ export option. Its JSON accepts
+one-based measure and staff numbers, for example:
+
+```json
+{"start":{"measure":3,"staff":1},"end":{"measure":8,"staff":4}}
+```
+
+The option is `--region '<JSON>'` with an output score supplied through `-o`.
+The implementation uses this capability to extract all-staff section scores once
+per selected range before using the existing mixing/rendering pipeline. Native
+checks confirmed that the start and end measure numbers are both inclusive.
+
+Authoritative MuseScore 4.7 sources:
+
+- [Rehearsal-mark fixture](https://github.com/musescore/MuseScore/blob/v4.7.0/src/engraving/tests/compat206_data/textstyles-ref.mscx#L395)
+- [Rehearsal-mark reader](https://github.com/musescore/MuseScore/blob/v4.7.0/src/engraving/rw/read460/measureread.cpp#L499)
+- [CLI region option](https://github.com/musescore/MuseScore/blob/v4.7.0/src/app/internal/commandlineparser.cpp#L135)
+- [Region argument parser](https://github.com/musescore/MuseScore/blob/v4.7.0/src/converter/internal/converterutils.cpp#L118)
+- [Native selection export](https://github.com/musescore/MuseScore/blob/v4.7.0/src/converter/internal/convertercontroller.cpp#L591)
+
+## Implementation and verification
+
+Native MuseScore 4.7.0 checks verified measure boundaries, selection across staves,
+inherited key/meter, and part identity. A decoded MP3 comparison against an
+independently authored standalone score verifies inherited tempo, immediate
+playback, pickup handling, repeat/jump suppression, ties across both boundaries,
+final-note decay, and exclusion of the next section's music. No fixed-duration
+bar calculations or audio cropping are used.
+
+Native region export drops tempo annotations from before the section and retains
+tie references to notes outside it. The archive layer restores the preceding
+tempo at the beginning of the extracted score and removes only ties crossing its
+boundaries. Ties within the section remain intact.
+
+Section copies suppress repeats, volta navigation, and jumps without changing the
+source score or whole-song playback. MuseScore's `--unroll-repeats` expands repeats;
+it does not implement the agreed straight-through behavior and is not used.
+
+Each selected range is extracted once and reused for the chosen instrument mixes.
+The existing scheduler, progress, cancellation, and publication behavior account
+for every selected range and mix. Regression tests cover collision-safe output
+creation, completed files on failure/cancellation across ranges, and renderer
+cleanup. HeroUI checkboxes expose ranges and keep choices local to the document.
+The backend validates section IDs against its immutable score snapshot.
+
+## Acceptance checks
+
+1. Parse rehearsal labels and measure positions from both input containers,
+   including formatted labels. Exclude ordinary boxed text.
+2. Verify no-mark scores, a first-measure mark, an Intro, the final section,
+   mid-measure snapping, multiple marks in one measure, and duplicate or unsafe
+   label text. Every offered section contains at least one measure.
+3. Export only selected sections, optionally alongside the whole song, using the
+   shared mix settings and ordered section directories. Reject empty selection.
+4. Verify that sections play straight through while whole-song repeats/jumps
+   retain existing behavior. Use native rendering checks for inherited musical
+   state, boundary notes, and natural decay.
+5. Verify progress and cancellation across multiple ranges and mixes, plus
+   completed-output preservation if a later render fails.
+
+Native audio checks were performed on Linux. Windows/macOS native rendering
+still needs verification on those platforms.

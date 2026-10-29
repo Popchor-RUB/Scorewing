@@ -16,6 +16,52 @@ struct Fixture {
 }
 
 impl Fixture {
+    fn with_sections(mut self) -> Self {
+        let mut zip = ZipArchive::new(Cursor::new(&self.bytes)).unwrap();
+        let mut xml = vec![];
+        zip.by_name("score.mscx")
+            .unwrap()
+            .read_to_end(&mut xml)
+            .unwrap();
+        let mut source = mxml_core::parse_xml(&xml, "section fixture").unwrap();
+        let measures = br#"<Staff><Measure><voice><Tempo><tempo>1</tempo></Tempo></voice></Measure>
+          <Measure><startRepeat/><voice><RehearsalMark><text>../A:*</text></RehearsalMark></voice></Measure>
+          <Measure><endRepeat>2</endRepeat><voice><RehearsalMark><text>../A:*</text></RehearsalMark></voice></Measure></Staff>"#;
+        for staff in source
+            .get_mut_child("Score")
+            .unwrap()
+            .children
+            .iter_mut()
+            .filter_map(mxml_core::XMLNode::as_mut_element)
+            .filter(|e| e.name == "Staff")
+        {
+            staff.children = mxml_core::parse_xml(measures, "section measures")
+                .unwrap()
+                .children;
+        }
+        drop(zip);
+        self.bytes.clear();
+        source.write(&mut self.bytes).unwrap();
+        for staff in source
+            .get_mut_child("Score")
+            .unwrap()
+            .children
+            .iter_mut()
+            .filter_map(mxml_core::XMLNode::as_mut_element)
+            .filter(|e| e.name == "Staff")
+        {
+            staff.children.truncate(1);
+        }
+        let mut region = vec![];
+        source.write(&mut region).unwrap();
+        ScoreArchive::read_bytes(&region, "region")
+            .unwrap()
+            .write(&self.dir.path().join("region.mscz"))
+            .unwrap();
+        self.options.section_keys = vec!["measure-3".into(), "measure-2".into()];
+        self
+    }
+
     fn new(parts: usize, fail: usize) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let executable = dir.path().join("fake-renderer");
@@ -24,6 +70,7 @@ impl Fixture {
 root="$(dirname "$0")"
 if [ "$1" = "--version" ]; then echo 'MuseScore Studio 4.7.5'; exit 0; fi
 if [ "$1" = "--sound-profile" ]; then echo normalized >> "$root/normalizations"; cp "$5" "$4"; exit $?; fi
+if [ "$1" = "--region" ]; then printf '%s\n' "$2" >> "$root/regions"; cp "$5" "$root/straight.mscz"; cp "$root/region.mscz" "$4"; exit $?; fi
 track="$(basename "$(dirname "$5")")"
 n="${{track#track-}}"
 cp "$5" "$root/mix-$n.mscz" || exit 92
@@ -79,6 +126,8 @@ printf '%s' "$n" >> "$4"
         }
         let bytes = archive.finish().unwrap().into_inner();
         let options = PracticeOptions {
+            include_whole_song: true,
+            section_keys: vec![],
             parts: (1..=parts)
                 .map(|n| PartSettings {
                     key: format!("part-{n}"),
@@ -148,7 +197,7 @@ printf '%s' "$n" >> "$4"
                 cancelled,
                 |p| {
                     assert!(p.running <= workers);
-                    assert!(p.completed + p.running <= self.options.parts.len());
+                    assert!(p.completed + p.running <= p.total);
                     running.set(p.running);
                     progress(p);
                 },
@@ -269,7 +318,7 @@ fn two_workers_overlap_bound_concurrency_and_publish_in_completion_order() {
             started(root, 3);
             release(root, 3);
             // Publication acknowledges completion before the first render may finish.
-            wait_for(&root.join("score - Practice Tracks/03 - Same.mp3"));
+            wait_for(&root.join("score - Practice Tracks/00 - Whole song/03 - Same.mp3"));
             release(root, 1);
         });
         fixture.run(2, &cancelled, |p| progress.borrow_mut().push(p))
@@ -320,7 +369,12 @@ fn two_workers_overlap_bound_concurrency_and_publish_in_completion_order() {
         archive_entry(&mix2, "audiosettings.json")
     );
     assert_eq!(archive_entry(&mix1, "assets/preserve.bin"), b"unchanged");
-    assert_eq!(fs::read_dir(&report.directory).unwrap().count(), 3);
+    assert_eq!(
+        fs::read_dir(Path::new(&report.directory).join("00 - Whole song"))
+            .unwrap()
+            .count(),
+        3
+    );
     fixture.assert_clean();
 }
 
@@ -335,7 +389,7 @@ fn one_worker_waits_for_each_track() {
             assert!(!root.join("started-0002").exists());
             release(root, 1);
             started(root, 2);
-            wait_for(&root.join("score - Practice Tracks/01 - Same.mp3"));
+            wait_for(&root.join("score - Practice Tracks/00 - Whole song/01 - Same.mp3"));
             release(root, 2);
         });
         fixture.run(1, &cancelled, |_| {})
@@ -383,7 +437,7 @@ fn render_failure_preserves_a_track_published_before_failure() {
             started(root, 2);
             release(root, 1);
             started(root, 3);
-            wait_for(&root.join("score - Practice Tracks/01 - Same.mp3"));
+            wait_for(&root.join("score - Practice Tracks/00 - Whole song/01 - Same.mp3"));
             release(root, 2);
         });
         fixture.run(2, &cancelled, |_| {})
@@ -449,11 +503,12 @@ fn publication_conflict_preserves_existing_file_and_stops_sibling() {
     let conflict = fixture
         .dir
         .path()
-        .join("score - Practice Tracks/01 - Same.mp3");
+        .join("score - Practice Tracks/00 - Whole song/01 - Same.mp3");
     let report = thread::scope(|scope| {
         scope.spawn(|| {
             started(fixture.dir.path(), 1);
             started(fixture.dir.path(), 2);
+            fs::create_dir_all(conflict.parent().unwrap()).unwrap();
             fs::write(&conflict, b"existing user file").unwrap();
             release(fixture.dir.path(), 1);
         });
@@ -464,4 +519,78 @@ fn publication_conflict_preserves_existing_file_and_stops_sibling() {
     assert!(report.completed.is_empty());
     assert_eq!(fs::read(conflict).unwrap(), b"existing user file");
     fixture.assert_clean();
+}
+
+#[test]
+fn selected_ranges_share_mix_settings_and_render_once_per_range() {
+    for whole_song in [true, false] {
+        let mut fixture = Fixture::new(2, 0).with_sections();
+        fixture.options.include_whole_song = whole_song;
+        let total = if whole_song { 6 } else { 4 };
+        for n in 1..=total {
+            release(fixture.dir.path(), n);
+        }
+        let events = std::cell::RefCell::new(vec![]);
+        let report = fixture.run(2, &AtomicBool::new(false), |p| events.borrow_mut().push(p));
+        assert!(report.error.is_none(), "{:?}", report.error);
+        assert_eq!(report.completed.len(), total);
+        assert!(events.borrow().iter().all(|p| p.total == total));
+        assert_eq!(events.borrow().last().unwrap().completed, total);
+        let regions = fs::read_to_string(fixture.dir.path().join("regions")).unwrap();
+        let regions: Vec<serde_json::Value> = regions
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(regions.len(), 2, "extract each section once, before mixing");
+        assert_eq!(regions[0]["start"]["measure"], 2);
+        assert_eq!(regions[0]["end"]["staff"], 2);
+        assert_eq!(regions[1]["start"]["measure"], 3);
+        let keys: Vec<_> = report.completed.iter().map(|t| t.key.as_str()).collect();
+        assert_eq!(
+            &keys[keys.len() - 4..],
+            [
+                "measure-2/part-1",
+                "measure-2/part-2",
+                "measure-3/part-1",
+                "measure-3/part-2"
+            ]
+        );
+        for track in &report.completed {
+            let path = Path::new(&track.path);
+            assert!(path.is_file());
+            assert!(path.parent().unwrap().parent().unwrap() == Path::new(&report.directory));
+        }
+        let straight = String::from_utf8(archive_entry(
+            &fixture.dir.path().join("straight.mscz"),
+            "score.mscx",
+        ))
+        .unwrap();
+        assert!(!straight.contains("startRepeat") && !straight.contains("endRepeat"));
+        fixture.assert_clean();
+    }
+}
+
+#[test]
+fn later_range_failure_or_cancellation_keeps_completed_ranges() {
+    for cancel in [false, true] {
+        let fixture = Fixture::new(2, if cancel { 0 } else { 4 }).with_sections();
+        for n in 1..=6 {
+            release(fixture.dir.path(), n);
+        }
+        let cancelled = AtomicBool::new(false);
+        let report = fixture.run(1, &cancelled, |p| {
+            if cancel && p.completed == 3 {
+                cancelled.store(true, Ordering::Relaxed);
+            }
+        });
+        assert!(report.error.is_some());
+        assert_eq!(report.cancelled, cancel);
+        assert_eq!(report.completed.len(), 3);
+        assert!(report
+            .completed
+            .iter()
+            .all(|t| Path::new(&t.path).is_file()));
+        assert_eq!(report.completed[2].key, "measure-2/part-1");
+        fixture.assert_clean();
+    }
 }

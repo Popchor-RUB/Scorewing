@@ -48,3 +48,12 @@ cargo test -p practice-tracks --test native --locked -- --ignored --nocapture
 ```
 
 GUI installations retain their ordinary display environment; the two Qt platform overrides above are for this headless test. Native Windows/macOS rendering and preference restoration require verification on their respective hosts. Windows renderer code can be type-checked against the Windows APIs, but that alone does not establish native process cleanup or audio compatibility.
+
+The native rehearsal-section test compares an extracted section against an independently
+authored standalone score. It covers an earlier pickup, inherited 60 BPM and 3/4 meter,
+repeat/jump suppression, immediate playback, ties crossing both boundaries, and natural
+decay without the next section's music. It passed with the official MuseScore 4.7.0
+AppImage and bundled MS Basic. A separate native region check verified inclusive
+measure boundaries, all-staff selection, and inherited key signature and part identity.
+Native region export drops earlier tempo annotations and retains external tie references;
+section preparation repairs both before applying the existing instrument mixes.

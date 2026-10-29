@@ -2,8 +2,8 @@
 use crate::preferences::MetronomePreference;
 use crate::renderer::{self, CONVERSION_TIMEOUT};
 use crate::{
-    CompletedTrack, ExportReport, PracticeOptions, Progress, RendererConfig, Result, ScoreArchive,
-    SoundCatalog,
+    CompletedTrack, ExportReport, PracticeOptions, PracticePart, Progress, RendererConfig, Result,
+    ScoreArchive, SoundCatalog,
 };
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
@@ -11,6 +11,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
+
+struct RenderJob<'a> {
+    score: &'a ScoreArchive,
+    part: &'a PracticePart,
+    path: PathBuf,
+    key: String,
+    name: String,
+}
 
 // Keep the desktop boundary flat; these arguments have distinct ownership and lifetimes.
 #[allow(clippy::too_many_arguments)]
@@ -39,7 +47,10 @@ pub fn export_tracks(
                 .parts
                 .iter()
                 .filter(|part| part.create_track)
-                .count(),
+                .count()
+                .saturating_mul(
+                    options.section_keys.len() + usize::from(options.include_whole_song),
+                ),
         ),
     )
 }
@@ -59,6 +70,8 @@ fn export_with_preference(
 ) -> Result<ExportReport> {
     let original = ScoreArchive::read_bytes(bytes, context)?;
     let original_parts = original.parts()?;
+    let sections = original.selected_sections(options)?;
+    let all_sections = original.rehearsal_sections()?;
     let executable = renderer::find_executable(config.executable.as_deref())?;
     let soundfont = renderer::find_soundfont(&executable, config.soundfont.as_deref())?;
     let catalog = SoundCatalog::read(&soundfont)?;
@@ -78,7 +91,8 @@ fn export_with_preference(
         error: None,
         cancelled: false,
     };
-    let total = options.parts.iter().filter(|p| p.create_track).count();
+    let total = options.parts.iter().filter(|p| p.create_track).count()
+        * (sections.len() + usize::from(options.include_whole_song));
     let mut preference = match preference() {
         Ok(guard) => guard,
         Err(error) => {
@@ -123,7 +137,10 @@ fn export_with_preference(
         let mut normalized = ScoreArchive::read_bytes(&normalized_bytes, "normalized.mscz")?;
         normalized.verify_normalized(&original)?;
         normalized.merge_assets_from(&original);
-        let jobs = options
+        if !sections.is_empty() && normalized.rehearsal_sections()? != all_sections {
+            return Err("Normalization changed rehearsal section boundaries or labels".into());
+        }
+        let parts = options
             .parts
             .iter()
             .filter(|settings| settings.create_track)
@@ -134,6 +151,74 @@ fn export_with_preference(
                     .ok_or_else(|| "Practice part disappeared after validation".to_owned())
             })
             .collect::<Result<Vec<_>>>()?;
+        let mut ranges = vec![];
+        if options.include_whole_song {
+            ranges.push((None, normalized.clone()));
+        }
+        if !sections.is_empty() {
+            let straight_path = staging.path().join("straight.mscz");
+            normalized.without_repeats().write(&straight_path)?;
+            for section in &sections {
+                check_cancelled(cancelled)?;
+                progress(Progress {
+                    stage: format!("Preparing {}", section.name),
+                    completed: 0,
+                    running: 0,
+                    total,
+                });
+                let region_path = staging.path().join(format!("{}.mscz", section.key));
+                renderer::run(
+                    &executable,
+                    &[
+                        "--region".into(),
+                        normalized.region(section).to_string().into(),
+                        "-o".into(),
+                        region_path.as_os_str().into(),
+                        straight_path.as_os_str().into(),
+                    ],
+                    CONVERSION_TIMEOUT,
+                    cancelled,
+                )?;
+                let mut region =
+                    ScoreArchive::read_bytes(&read_bounded_score(&region_path)?, "section.mscz")?;
+                region.verify_region(&normalized, section)?;
+                region.prepare_section(&normalized, section);
+                region.merge_assets_from(&normalized);
+                ranges.push((Some(section), region));
+            }
+        }
+        let mut jobs = vec![];
+        for (section, score) in &ranges {
+            let (folder, key_prefix, name_prefix) = match section {
+                Some(section) => (
+                    format!(
+                        "{:02} - {}",
+                        all_sections
+                            .iter()
+                            .position(|s| s.key == section.key)
+                            .unwrap()
+                            + 1,
+                        safe_filename(&section.name)
+                    ),
+                    format!("{}/", section.key),
+                    format!("{} — ", section.name),
+                ),
+                None => ("00 - Whole song".into(), String::new(), String::new()),
+            };
+            for (index, part) in parts.iter().enumerate() {
+                jobs.push(RenderJob {
+                    score,
+                    part,
+                    path: directory.join(&folder).join(format!(
+                        "{:02} - {}.mp3",
+                        index + 1,
+                        safe_filename(&part.name)
+                    )),
+                    key: format!("{key_prefix}{}", part.key),
+                    name: format!("{name_prefix}{}", part.name),
+                });
+            }
+        }
         let stopped = AtomicBool::new(false);
         let workers = worker_count.max(1).min(total);
         let (job_sender, job_receiver) = mpsc::sync_channel::<usize>(workers);
@@ -146,7 +231,6 @@ fn export_with_preference(
                 let sender = result_sender.clone();
                 let receiver = &job_receiver;
                 let stopped = &stopped;
-                let normalized = &normalized;
                 let catalog = &catalog;
                 let executable = &executable;
                 let staging = staging.path();
@@ -168,8 +252,9 @@ fn export_with_preference(
                                     })?;
                                     let prepared_path = track_dir.join("practice.mscz");
                                     let mp3_path = track_dir.join("rendered.mp3");
-                                    normalized
-                                        .mix(options, &jobs[index].key, catalog)?
+                                    jobs[index]
+                                        .score
+                                        .mix(options, &jobs[index].part.key, catalog)?
                                         .write(&prepared_path)?;
                                     check_cancelled(stopped)?;
                                     renderer::run(
@@ -216,12 +301,12 @@ fn export_with_preference(
             let mut next = 0;
             let mut running = 0;
             if error.is_none() {
-                for index in 0..workers {
+                for (index, job) in jobs.iter().enumerate().take(workers) {
                     job_sender.as_ref().unwrap().send(index).unwrap();
                     next += 1;
                     running += 1;
                     progress(Progress {
-                        stage: format!("Rendering {}", jobs[index].name),
+                        stage: format!("Rendering {}", job.name),
                         completed: 0,
                         running,
                         total,
@@ -252,20 +337,17 @@ fn export_with_preference(
                         }
                         let published = result.and_then(|mp3_path| {
                             check_cancelled(cancelled)?;
-                            let part = jobs[index];
-                            let path = directory.join(format!(
-                                "{:02} - {}.mp3",
-                                index + 1,
-                                safe_filename(&part.name)
-                            ));
-                            publish(&mp3_path, &path)?;
+                            let job = &jobs[index];
+                            fs::create_dir_all(job.path.parent().unwrap())
+                                .map_err(|e| format!("Cannot create section output folder: {e}"))?;
+                            publish(&mp3_path, &job.path)?;
                             report.completed.push(CompletedTrack {
-                                key: part.key.clone(),
-                                name: part.name.clone(),
-                                path: path.to_string_lossy().into_owned(),
+                                key: job.key.clone(),
+                                name: job.name.clone(),
+                                path: job.path.to_string_lossy().into_owned(),
                             });
                             progress(Progress {
-                                stage: format!("Created {}", part.name),
+                                stage: format!("Created {}", job.name),
                                 completed: report.completed.len(),
                                 running,
                                 total,
@@ -505,6 +587,8 @@ dd if=/dev/zero bs=200 count=1 >> "$4" 2>/dev/null
         let bytes = archive.finish().unwrap().into_inner();
         let snapshot = bytes.clone();
         let options = PracticeOptions {
+            include_whole_song: true,
+            section_keys: vec![],
             parts: (1..=2)
                 .map(|n| PartSettings {
                     key: format!("part-{n}"),
@@ -571,7 +655,12 @@ dd if=/dev/zero bs=200 count=1 >> "$4" 2>/dev/null
             .completed
             .iter()
             .all(|track| Path::new(&track.path).is_file()));
-        assert_eq!(fs::read_dir(&report.directory).unwrap().count(), 2);
+        assert_eq!(
+            fs::read_dir(Path::new(&report.directory).join("00 - Whole song"))
+                .unwrap()
+                .count(),
+            2
+        );
     }
 
     #[test]

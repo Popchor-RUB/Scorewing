@@ -147,6 +147,7 @@ impl Native {
         assert_eq!(
             report.completed.len(),
             options.parts.iter().filter(|p| p.create_track).count()
+                * (usize::from(options.include_whole_song) + options.section_keys.len())
         );
         report
             .completed
@@ -187,6 +188,8 @@ fn absolute_env(name: &str) -> PathBuf {
 
 fn options() -> PracticeOptions {
     PracticeOptions {
+        include_whole_song: true,
+        section_keys: vec![],
         parts: (1..=3)
             .map(|index| PartSettings {
                 key: format!("part-{index}"),
@@ -405,4 +408,121 @@ fn native_audio_acceptance() {
             "Native click timing failed at {beat:.1}s: pulse={pulse}, gap={gap}"
         );
     }
+}
+
+// The reference is an independently authored two-bar score, not a sliced source.
+fn section_score(reference: bool) -> Vec<u8> {
+    let mut root = mxml_core::parse_xml(&score("silent"), "section fixture").unwrap();
+    for staff in root
+        .get_mut_child("Score")
+        .unwrap()
+        .children
+        .iter_mut()
+        .filter_map(mxml_core::XMLNode::as_mut_element)
+        .filter(|e| e.name == "Staff")
+    {
+        let prefix = if reference {
+            ""
+        } else {
+            r#"
+          <Measure len="1/4"><irregular>1</irregular><voice><TimeSig><sigN>3</sigN><sigD>4</sigD></TimeSig><Rest><durationType>quarter</durationType></Rest></voice></Measure>
+          <Measure><startRepeat/><voice><TimeSig><sigN>3</sigN><sigD>4</sigD></TimeSig><KeySig><concertKey>2</concertKey></KeySig><Tempo><tempo>1</tempo><text>60</text></Tempo><Rest><durationType>half</durationType></Rest><Chord><durationType>quarter</durationType><Note><pitch>64</pitch><tpc>18</tpc><Spanner type="Tie"><Tie/><next><location><measures>1</measures><fractions>-1/2</fractions></location></next></Spanner></Note></Chord></voice></Measure>"#
+        };
+        let initial = if reference {
+            "<TimeSig><sigN>3</sigN><sigD>4</sigD></TimeSig><KeySig><concertKey>2</concertKey></KeySig><Tempo><tempo>1</tempo><text>60</text></Tempo>"
+        } else {
+            ""
+        };
+        let repeat = if reference {
+            ""
+        } else {
+            "<endRepeat>2</endRepeat>"
+        };
+        let tie_end = if reference {
+            ""
+        } else {
+            r#"<Spanner type="Tie"><prev><location><measures>-1</measures><fractions>1/2</fractions></location></prev></Spanner>"#
+        };
+        let tie_start = if reference {
+            ""
+        } else {
+            r#"<Spanner type="Tie"><Tie/><next><location><measures>1</measures><fractions>-1/2</fractions></location></next></Spanner>"#
+        };
+        let suffix = if reference {
+            ""
+        } else {
+            r#"<Measure><voice><RehearsalMark><text>B</text></RehearsalMark><TimeSig><sigN>2</sigN><sigD>4</sigD></TimeSig><Tempo><tempo>3</tempo><text>180</text></Tempo><Chord><durationType>half</durationType><Note><pitch>64</pitch><tpc>18</tpc><Spanner type="Tie"><prev><location><measures>-1</measures><fractions>1/2</fractions></location></prev></Spanner></Note><Note><pitch>96</pitch><tpc>14</tpc></Note></Chord><Jump><jumpTo>start</jumpTo><playUntil>end</playUntil><continueAt/></Jump></voice></Measure>"#
+        };
+        let xml = format!(
+            r#"<Staff>{prefix}
+          <Measure><voice>{initial}<RehearsalMark><text>A</text></RehearsalMark><Chord><durationType>quarter</durationType><Note><pitch>64</pitch><tpc>18</tpc>{tie_end}</Note></Chord><Rest><durationType>half</durationType></Rest></voice></Measure>
+          <Measure>{repeat}<voice><Rest><durationType>half</durationType></Rest><Chord><durationType>quarter</durationType><Note><pitch>64</pitch><tpc>18</tpc>{tie_start}</Note></Chord></voice></Measure>
+          {suffix}</Staff>"#
+        );
+        staff.children = mxml_core::parse_xml(xml.as_bytes(), "section measures")
+            .unwrap()
+            .children;
+    }
+    let mut bytes = vec![];
+    root.write(&mut bytes).unwrap();
+    bytes
+}
+
+#[test]
+#[ignore = "Requires MuseScore 4.7.x, MS Basic, FFmpeg, and an isolated Linux profile"]
+fn native_rehearsal_sections_match_standalone_score() {
+    let mut native = Native::new();
+    let source = section_score(false);
+    let archive = practice_tracks::ScoreArchive::read_bytes(&source, "sections").unwrap();
+    let sections = archive.rehearsal_sections().unwrap();
+    assert_eq!(
+        sections
+            .iter()
+            .map(|s| (s.name.as_str(), s.start_measure, s.end_measure))
+            .collect::<Vec<_>>(),
+        [("Intro", 1, 2), ("A", 3, 4), ("B", 5, 5)]
+    );
+    let mut settings = options();
+    settings.parts.iter_mut().for_each(|p| {
+        p.create_track = p.key == "part-1";
+        p.include_in_background = false;
+    });
+    settings.metronome_enabled = true;
+    settings.include_whole_song = false;
+    settings.section_keys = vec!["measure-3".into()];
+    let section = native.export(&source, &settings, None).remove(0);
+    settings.include_whole_song = true;
+    settings.section_keys.clear();
+    let reference = native
+        .export(&section_score(true), &settings, None)
+        .remove(0);
+    assert!(
+        (section.len() as f64 - reference.len() as f64).abs() < RATE * 0.1,
+        "Section duration differs from the standalone score: {} vs {}",
+        section.len(),
+        reference.len()
+    );
+    for beat in [1.0, 2.0, 3.0, 4.0] {
+        let pulse = rms(&section, beat + 0.01, beat + 0.1);
+        let gap = rms(&section, beat + 0.3, beat + 0.42);
+        assert!(
+            pulse > 1e-5 && pulse > gap * 2.0,
+            "Section lost inherited 60 BPM at {beat}s"
+        );
+    }
+    let similarity = correlation(&section, &reference);
+    assert!(similarity > 0.99,
+        "Section start differs from standalone score: correlation={similarity}, section rms={}, reference rms={}",
+        rms(&section, 0.1, 0.3), rms(&reference, 0.1, 0.3));
+    for (start, end) in [(5.1, 5.3), (6.01, 6.1), (6.2, 6.4)] {
+        let difference = db_ratio(rms(&section, start, end), rms(&reference, start, end));
+        assert!(
+            difference.abs() < 0.2,
+            "Section note/decay differs from standalone score at {start}s: {difference} dB"
+        );
+    }
+    assert!(
+        rms(&section, 6.01, 6.1) > 1e-6,
+        "Final sound was cut off at the next mark"
+    );
 }

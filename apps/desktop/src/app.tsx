@@ -582,7 +582,7 @@ export function mountApp(container: HTMLElement): () => void {
             <h2 id="mode-config-heading" className="text-xl font-semibold" tabIndex={-1}
               ref={(node) => { if (node && focusTarget === "configuration") { focusTarget = null; node.focus(); } }}>{modes.find(({ kind }) => kind === session.arrangement.kind)!.title}</h2>
           </div>
-          {session.arrangement.kind === "practice" && session.practice ? <PracticeView parts={score!.practice_parts ?? []} options={session.practice} config={config} environment={environment} checking={checking}
+          {session.arrangement.kind === "practice" && session.practice ? <PracticeView parts={score!.practice_parts ?? []} sections={score!.practice_sections ?? []} options={session.practice} config={config} environment={environment} checking={checking}
             busy={busy()} rendering={exporting} result={session.result}
             defaults={practiceDefaults} onSetDefault={(mode, sound) => update(({ practice }) => {
               practiceDefaults[mode] = sound;
@@ -605,7 +605,8 @@ export function mountApp(container: HTMLElement): () => void {
       </section></main>
       <div className={`status mx-auto max-w-6xl px-5 pb-6 text-sm whitespace-pre-line wrap-anywhere sm:px-7 ${messageError ? "text-danger" : "text-muted"}`} role={messageError ? "alert" : "status"} aria-live="polite">{message}</div>
       {(completedExport || (exporting && session?.arrangement.kind === "practice")) && <PracticeExportModal result={completedExport}
-        progress={session?.progress} total={session?.practice?.parts.filter((part) => part.create_track).length ?? 0}
+        progress={session?.progress} total={session?.practice
+          ? session.practice.parts.filter((part) => part.create_track).length * (Number(session.practice.include_whole_song) + session.practice.section_keys.length) : 0}
         cancelling={cancelling} onCancel={() => void cancelExport()} onClose={() => { completedExport = null; render(); }} />}
       {pendingPair && <DiffPairModal pair={pendingPair} busy={busy()} closing={releasedPairIds.size > 0} error={pairError} status={message} onChoose={(version) => void chooseDiffFile(version)} onSwap={swapDiffFiles} onCancel={() => void cancelPair()} onCompare={() => void exportDiff()} />}
       {dropping && <div className="drop-overlay pointer-events-none fixed inset-4 z-50 grid place-items-center bg-overlay" aria-hidden="true"><Surface className="p-6"><p>Drop one score to open it or two to compare</p><Description>MusicXML · MuseScore</Description></Surface></div>}

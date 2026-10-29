@@ -7,9 +7,21 @@ tools/devcontainer.sh build
 tools/devcontainer.sh shell
 ```
 
-The runner uses Podman's `keep-id` mapping and your host UID/GID as a non-root container user. It binds the repository at `/workspace` and uses named volumes for Cargo downloads and `target/`. Generated source files remain owned by your host account. Build artifacts stay in the `mxml-target` volume; `tools/package-linux.sh` copies distributables to repository `dist/`.
+The runner uses Podman's `keep-id` mapping and your host UID/GID as a non-root container user. It binds the repository at `/workspace` and uses named volumes for Cargo downloads and `target/`. Generated source files remain owned by your host account. Build artifacts stay in the `scorewing-target` volume; `tools/package-linux.sh` copies distributables to repository `dist/`.
 
 VS Code Dev Containers can open `.devcontainer/devcontainer.json`. Set its `dev.containers.dockerPath` setting to `podman`. The same Containerfile powers the command-line runner and Linux CI.
+
+## Rename and upgrade notes
+
+Use `scorewing` for the CLI and `scorewing-desktop` for the desktop executable. The Rust packages are `scorewing-cli`, `scorewing-core`, and `scorewing-desktop`; `practice-tracks` keeps its existing name. Automation must use the new commands and build variables; old names have no aliases or fallback handling.
+
+Build variables now use the `SCOREWING_` prefix: `SCOREWING_LOCAL_BUILD`, `SCOREWING_PODMAN_RUNROOT`, `SCOREWING_PODMAN_ROOT`, `SCOREWING_ROOTLESS_UID0`, and `SCOREWING_CACHE_DIR`. Native practice-track checks use `SCOREWING_NATIVE_PROFILE`, as shown in [validation](VALIDATION.md#native-practice-track-audio-checks). The renamed development image and cache volumes may require a fresh build; previous caches and volumes are left untouched.
+
+The internal application identifier remains `org.mxml.desktop`. Existing localStorage keys with the `voiceweaver` prefix, their readers and writers, recovery paths and journals, and `.voiceweaver-metronome.lock` remain unchanged. These internal names preserve saved settings and prevent old and new versions from taking different locks for the same MuseScore preferences. No settings migration is added. MusicXML and the `.mxml` file extension remain supported, and the icon artwork is unchanged.
+
+The first macOS installation creates `/Applications/Scorewing.app`; it leaves any previous differently named app in place. Subsequent Scorewing replacements retain the script's staging, signature verification, backup, and rollback behavior. Before upgrading, close the previous app. Verify recent scores, recent sounds, practice defaults, and interrupted-export recovery in the packaged Scorewing app before manually removing an old installation. Retaining the identifier alone does not establish native profile preservation; verify upgrades on each target platform. Windows and Linux installers also require native checks before assuming they replace previous product names. Existing user data is never removed by this rename.
+
+Hosted repository names, remotes, published download links, and release registries are separate changes; follow the [external checklist](scorewing-rename-plan.md#separate-external-checklist) before publishing.
 
 ## Checks and packages
 
@@ -37,17 +49,17 @@ Headless Linux startup checks use Xvfb inside the container. Xvfb provides a vir
 If Podman cannot write its normal runtime/storage locations, select writable task-local locations. This does not require installing host dependencies:
 
 ```sh
-mkdir -p /tmp/mxml-runtime
-chmod 700 /tmp/mxml-runtime
-export XDG_RUNTIME_DIR=/tmp/mxml-runtime
-export MXML_PODMAN_RUNROOT=/tmp/mxml-runtime/run
-export MXML_PODMAN_ROOT=/tmp/mxml-container-storage
+mkdir -p /tmp/scorewing-runtime
+chmod 700 /tmp/scorewing-runtime
+export XDG_RUNTIME_DIR=/tmp/scorewing-runtime
+export SCOREWING_PODMAN_RUNROOT=/tmp/scorewing-runtime/run
+export SCOREWING_PODMAN_ROOT=/tmp/scorewing-container-storage
 tools/devcontainer.sh build
 ```
 
 User namespaces and `newuidmap` must be available to Podman. A sandbox that blocks them needs permission to run Podman outside that sandbox; do not use privileged containers as a workaround.
 
-Some older nested rootless runtimes fail with `cannot chown /sys/fs/cgroup/cgroup.procs` when using `keep-id`. For that specific case, set `MXML_ROOTLESS_UID0=1` when invoking the runner. Podman must still run as your unprivileged host account: container UID 0 then maps to that account, so output files retain host ownership. No privileged flag or host root access is used.
+Some older nested rootless runtimes fail with `cannot chown /sys/fs/cgroup/cgroup.procs` when using `keep-id`. For that specific case, set `SCOREWING_ROOTLESS_UID0=1` when invoking the runner. Podman must still run as your unprivileged host account: container UID 0 then maps to that account, so output files retain host ownership. No privileged flag or host root access is used.
 
 ## Proxies and certificates
 
@@ -87,7 +99,7 @@ The scripts check prerequisites before compiling, report what is missing, and ex
 
 ### Linux
 
-The script prefers the existing `localhost/mxml-dev` Podman image, using the same storage, proxy, and cache settings as `tools/devcontainer.sh`. If Podman or that image is unavailable, it checks the native host instead. Inside a container it builds directly. You can also select native compilation with `MXML_LOCAL_BUILD=1 tools/build-linux.sh`.
+The script prefers the existing `localhost/scorewing-dev` Podman image, using the same storage, proxy, and cache settings as `tools/devcontainer.sh`. If Podman or that image is unavailable, it checks the native host instead. Inside a container it builds directly. You can also select native compilation with `SCOREWING_LOCAL_BUILD=1 tools/build-linux.sh`.
 
 Prepare the devcontainer and dependency caches once (requires network access):
 
@@ -99,15 +111,15 @@ tools/devcontainer.sh run cargo fetch --locked
 
 For a native build, prepare Rust 1.90.0 via rustup, Node.js >=22.22, npm, a C/C++ toolchain, make, pkg-config, binutils (`readelf`), libclang, and development packages for GTK 3, WebKitGTK 4.1, Ayatana AppIndicator 3, and librsvg. Prepare the private static libxml2 with `tools/build-libxml2.sh` and set `PKG_CONFIG_PATH` to its `lib/pkgconfig`. The Containerfile lists the Ubuntu package names. Set `LIBCLANG_PATH` if libclang is outside standard library directories. Separately run `npm --prefix apps/desktop ci` and `cargo fetch --locked` in that prepared environment.
 
-Both the CLI (`dist/voiceweaver`) and desktop executable (`dist/voiceweaver-desktop`) are copied to the repository's `dist/`, alongside third-party notices, including when building inside Podman. Linux still needs the GTK/WebKitGTK runtime on the machine running the desktop executable.
+Both the CLI (`dist/scorewing`) and desktop executable (`dist/scorewing-desktop`) are copied to the repository's `dist/`, alongside third-party notices, including when building inside Podman. Linux still needs the GTK/WebKitGTK runtime on the machine running the desktop executable.
 
 ### macOS
 
 Use a native Mac; the Linux devcontainer cannot build the Cocoa/WebKit app. Prepare Rust 1.90.0 via rustup, Node.js >=22.22, npm, Xcode Command Line Tools with a macOS SDK, pkg-config, libclang, and the private static libxml2 described above. The script checks `target/libxml2/lib/pkgconfig` automatically, then your existing `PKG_CONFIG_PATH`. It detects Xcode's libclang when available; otherwise set `LIBCLANG_PATH` to LLVM's `lib` directory. Separately run `npm --prefix apps/desktop ci` and `cargo fetch --locked`.
 
-The script builds `target/release/bundle/macos/Voiceweaver.app`, ad-hoc signs the complete bundle with `codesign --sign -`, verifies it, and stages a verified copy in `/Applications` before replacing `/Applications/Voiceweaver.app`. It restores the previous app if replacement fails. Quit an existing Voiceweaver instance before replacing it. Your account must have write access to `/Applications`; the script does not invoke sudo. Ad-hoc signing is for local use and provides no Developer ID or notarization.
+The script builds `target/release/bundle/macos/Scorewing.app`, ad-hoc signs the complete bundle with `codesign --sign -`, verifies it, and stages a verified copy in `/Applications` before replacing `/Applications/Scorewing.app`. It restores the previous app if replacement fails. Quit an existing Scorewing instance before replacing it. Your account must have write access to `/Applications`; the script does not invoke sudo. Ad-hoc signing is for local use and provides no Developer ID or notarization.
 
-The CLI remains at `target/release/voiceweaver`. `CARGO_TARGET_DIR` may select a different build directory on all platforms.
+The CLI remains at `target/release/scorewing`. `CARGO_TARGET_DIR` may select a different build directory on all platforms.
 
 ### Windows
 

@@ -57,7 +57,7 @@ impl MetronomePreference {
             .truncate(false)
             .open(lock_path)
             .map_err(|e| format!("Cannot open metronome lock: {e}"))?;
-        lock.try_lock().map_err(|_| "Another VoiceWeaver practice export is using MuseScore preferences. Wait for it to finish.".to_string())?;
+        lock.try_lock().map_err(|_| "Another Scorewing practice export is using MuseScore preferences. Wait for it to finish.".to_string())?;
         let journal_path = recovery_dir.join("musescore-metronome-recovery.json");
         if journal_path.exists() {
             let bytes = read_regular_file(&journal_path, 16 * 1024 * 1024)

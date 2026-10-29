@@ -45,21 +45,21 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_dir/target}"
 cargo metadata --locked --offline --format-version 1 >/dev/null || {
   echo 'Prepare the Cargo cache separately with cargo fetch --locked, then retry.' >&2; exit 1;
 }
-cargo build -p mxml-cli --release --locked --offline
+cargo build -p scorewing-cli --release --locked --offline
 npm --offline --prefix apps/desktop run tauri -- build --bundles app --no-sign -- --locked --offline
 target_dir="$CARGO_TARGET_DIR"
-node tools/check-linkage.mjs "$target_dir/release/voiceweaver"
-node tools/check-linkage.mjs --desktop "$target_dir/release/voiceweaver-desktop"
-app="$target_dir/release/bundle/macos/Voiceweaver.app"
+node tools/check-linkage.mjs "$target_dir/release/scorewing"
+node tools/check-linkage.mjs --desktop "$target_dir/release/scorewing-desktop"
+app="$target_dir/release/bundle/macos/Scorewing.app"
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"
 
 # Stage the complete copy before replacing an existing installation.
-staging="$(mktemp -d /Applications/.voiceweaver.XXXXXX)"
+staging="$(mktemp -d /Applications/.scorewing.XXXXXX)"
 cleanup() {
   if [[ -e "$staging/previous.app" ]]; then
-    if [[ ! -e /Applications/Voiceweaver.app && ! -L /Applications/Voiceweaver.app ]]; then
-      mv "$staging/previous.app" /Applications/Voiceweaver.app || { echo "Previous app preserved in $staging/previous.app" >&2; return; }
+    if [[ ! -e /Applications/Scorewing.app && ! -L /Applications/Scorewing.app ]]; then
+      mv "$staging/previous.app" /Applications/Scorewing.app || { echo "Previous app preserved in $staging/previous.app" >&2; return; }
     else
       echo "Previous app preserved in $staging/previous.app" >&2; return
     fi
@@ -67,11 +67,11 @@ cleanup() {
   rm -rf "$staging"
 }
 trap cleanup EXIT
-ditto "$app" "$staging/Voiceweaver.app"
-codesign --verify --deep --strict "$staging/Voiceweaver.app"
-if [[ -e /Applications/Voiceweaver.app || -L /Applications/Voiceweaver.app ]]; then
-  mv /Applications/Voiceweaver.app "$staging/previous.app"
+ditto "$app" "$staging/Scorewing.app"
+codesign --verify --deep --strict "$staging/Scorewing.app"
+if [[ -e /Applications/Scorewing.app || -L /Applications/Scorewing.app ]]; then
+  mv /Applications/Scorewing.app "$staging/previous.app"
 fi
-mv "$staging/Voiceweaver.app" /Applications/Voiceweaver.app
+mv "$staging/Scorewing.app" /Applications/Scorewing.app
 rm -rf "$staging/previous.app"
-echo "Installed ad-hoc signed app at /Applications/Voiceweaver.app; CLI: $target_dir/release/voiceweaver"
+echo "Installed ad-hoc signed app at /Applications/Scorewing.app; CLI: $target_dir/release/scorewing"

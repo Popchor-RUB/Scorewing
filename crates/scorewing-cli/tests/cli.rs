@@ -1,7 +1,7 @@
 use std::{fs, process::Command};
 
 fn cli() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_voiceweaver"))
+    Command::new(env!("CARGO_BIN_EXE_scorewing"))
 }
 
 const SCORE: &str = r#"<score-partwise version="4.0"><work><work-title>CLI fixture</work-title></work><part-list><score-part id="P1"><part-name>Soprano</part-name></score-part><score-part id="P2"><part-name>Alto</part-name></score-part></part-list><part id="P1"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>E</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note><note><chord/><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part><part id="P2"><measure number="1"><attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time><clef><sign>G</sign><line>2</line></clef></attributes><note><pitch><step>A</step><octave>4</octave></pitch><duration>4</duration><type>whole</type></note></measure></part></score-partwise>"#;
@@ -23,12 +23,13 @@ const GROUP_SCORE: &str = r#"<score-partwise version="4.0">
 fn help_version_and_error_contract() {
     let help = cli().arg("--help").output().unwrap();
     assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("Usage: scorewing"));
     assert!(String::from_utf8_lossy(&help.stdout).contains("split"));
     let version = cli().arg("--version").output().unwrap();
     assert!(version.status.success());
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
-        "voiceweaver 0.1.0"
+        "scorewing 0.1.0"
     );
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("invalid.xml");
@@ -43,14 +44,14 @@ fn help_version_and_error_contract() {
         .unwrap();
     assert_eq!(result.status.code(), Some(2));
     assert!(result.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("voiceweaver:"));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("scorewing:"));
     assert!(String::from_utf8_lossy(&result.stderr).contains("invalid XML"));
     assert!(!output.exists());
 }
 
 #[test]
 fn ambiguous_relations_export_xml_and_mxl_with_warnings() {
-    let source = include_str!("../../mxml-core/tests/fixtures/ambiguous-relations.musicxml");
+    let source = include_str!("../../scorewing-core/tests/fixtures/ambiguous-relations.musicxml");
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("choir.musicxml");
     fs::write(&input, source).unwrap();
@@ -75,8 +76,8 @@ fn ambiguous_relations_export_xml_and_mxl_with_warnings() {
                 && warnings.contains("ambiguous tie")
                 && warnings.contains("ambiguous slur")
         );
-        let score = mxml_core::read_score(&output).unwrap();
-        mxml_core::validate_score(&score.root).unwrap();
+        let score = scorewing_core::read_score(&output).unwrap();
+        scorewing_core::validate_score(&score.root).unwrap();
         assert_eq!(score.parts.len(), 3);
         for part in &score.parts {
             assert_eq!(part.measures.len(), 2);
@@ -115,7 +116,7 @@ fn split_merge_compressed_roundtrip_and_output_protection() {
             .status()
             .unwrap()
             .success());
-        let score = mxml_core::read_score(&split).unwrap();
+        let score = scorewing_core::read_score(&split).unwrap();
         assert_eq!(
             score.parts.iter().map(|p| p.name()).collect::<Vec<_>>(),
             ["Soprano", "Soprano 1", "Soprano 2", "Alto"]
@@ -130,7 +131,7 @@ fn split_merge_compressed_roundtrip_and_output_protection() {
         .status()
         .unwrap()
         .success());
-    let score = mxml_core::read_score(&merged).unwrap();
+    let score = scorewing_core::read_score(&merged).unwrap();
     assert_eq!(
         score.parts.iter().map(|p| p.name()).collect::<Vec<_>>(),
         ["Soprano", "Soprano 1 / Soprano 2 / Alto"]
@@ -192,7 +193,7 @@ fn duplicate_names_require_positions_and_bad_selections_publish_nothing() {
         .status()
         .unwrap()
         .success());
-    assert_eq!(mxml_core::read_score(&output).unwrap().parts.len(), 4);
+    assert_eq!(scorewing_core::read_score(&output).unwrap().parts.len(), 4);
 }
 
 #[test]
@@ -214,7 +215,7 @@ fn merge_groups_resolve_mixed_names_and_positions_in_voice_order() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
-    let score = mxml_core::read_score(&output).unwrap();
+    let score = scorewing_core::read_score(&output).unwrap();
     assert_eq!(
         score.parts.iter().map(|p| p.name()).collect::<Vec<_>>(),
         ["Alto / Soprano", "Tenor / Bass"]

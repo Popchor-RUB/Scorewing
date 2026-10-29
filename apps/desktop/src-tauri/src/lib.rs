@@ -1,11 +1,11 @@
-use mxml_core::{
-    check_output, diff_score, merge_score_with_stems, read_score_bytes, split_plan,
-    split_score_with_options, validate_score, write_score, Part, SplitFallback, SplitOptions,
-    SplitResult, EXTENSIONS, MAX_XML_BYTES,
-};
 use practice_tracks::{
     ExportReport, PracticeOptions, PracticePart, PracticeSection, RendererConfig,
     RendererEnvironment,
+};
+use scorewing_core::{
+    check_output, diff_score, merge_score_with_stems, read_score_bytes, split_plan,
+    split_score_with_options, validate_score, write_score, Part, SplitFallback, SplitOptions,
+    SplitResult, EXTENSIONS, MAX_XML_BYTES,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -894,7 +894,7 @@ pub fn run() {
             open_practice_export_folder
         ])
         .run(tauri::generate_context!())
-        .expect("Failed to start Voiceweaver");
+        .expect("Failed to start Scorewing");
 }
 
 #[cfg(test)]
@@ -937,14 +937,14 @@ mod tests {
             &snapshot.context,
         )
         .unwrap();
-        let score = mxml_core::parse_score(transformed.root.clone()).unwrap();
+        let score = scorewing_core::parse_score(transformed.root.clone()).unwrap();
         assert_eq!(
             score.parts[0].measures[0].events[0].notes[0].attributes["color"],
             "#FF0000"
         );
         assert_eq!(
-            mxml_core::xml::child_text(
-                mxml_core::xml::child(&score.parts[0].measures[0].events[0].notes[0], "pitch")
+            scorewing_core::xml::child_text(
+                scorewing_core::xml::child(&score.parts[0].measures[0].events[0].notes[0], "pitch")
                     .unwrap(),
                 "step"
             )
@@ -953,10 +953,10 @@ mod tests {
         );
         write_score(&transformed.root, &output, &new_path, false).unwrap();
         assert!(std::fs::read(&output).unwrap().starts_with(b"PK\x03\x04"));
-        let exported = mxml_core::read_score(&output).unwrap();
+        let exported = scorewing_core::read_score(&output).unwrap();
         validate_score(&exported.root).unwrap();
         let expected = read_score_bytes(
-            &mxml_core::serialize_xml(&transformed.root).unwrap(),
+            &scorewing_core::serialize_xml(&transformed.root).unwrap(),
             "expected.musicxml",
         )
         .unwrap();
@@ -1183,17 +1183,17 @@ mod tests {
             request(vec![vec!["down".into(), "down".into()]]),
         )
         .unwrap();
-        let score = mxml_core::parse_score(result.root).unwrap();
+        let score = scorewing_core::parse_score(result.root).unwrap();
         let events = &score.parts[0].measures[0].events;
         assert_eq!(events.len(), 3);
         assert!(events
             .iter()
             .flat_map(|e| &e.notes)
-            .all(|n| mxml_core::xml::child_text(n, "stem").as_deref() == Some("down")));
+            .all(|n| scorewing_core::xml::child_text(n, "stem").as_deref() == Some("down")));
         assert_eq!(
             events
                 .iter()
-                .find(|e| e.start == mxml_core::frac(1))
+                .find(|e| e.start == scorewing_core::frac(1))
                 .unwrap()
                 .voice,
             "1"
@@ -1212,7 +1212,7 @@ mod tests {
     #[test]
     fn empire_state_preview_and_export_share_three_chord_lanes() {
         let bytes = include_bytes!(
-            "../../../../crates/mxml-core/tests/fixtures/empire-state-of-mind-sopran-alt.mxl"
+            "../../../../crates/scorewing-core/tests/fixtures/empire-state-of-mind-sopran-alt.mxl"
         );
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("empire-state.mxl");
@@ -1244,7 +1244,7 @@ mod tests {
         )
         .unwrap()
         .root;
-        let score = mxml_core::parse_score(root).unwrap();
+        let score = scorewing_core::parse_score(root).unwrap();
         assert_eq!(score.parts.len(), 4);
         for (index, step) in [(4, "G"), (5, "F")] {
             let note = score.parts[3].measures[index]
@@ -1254,7 +1254,8 @@ mod tests {
                 .find(|note| note.get_child("pitch").is_some())
                 .unwrap();
             assert_eq!(
-                mxml_core::xml::child_text(note.get_child("pitch").unwrap(), "step").as_deref(),
+                scorewing_core::xml::child_text(note.get_child("pitch").unwrap(), "step")
+                    .as_deref(),
                 Some(step)
             );
         }
@@ -1263,7 +1264,7 @@ mod tests {
     #[test]
     fn ambiguous_relations_prepare_a_valid_export_with_review_warnings() {
         let source = include_bytes!(
-            "../../../../crates/mxml-core/tests/fixtures/ambiguous-relations.musicxml"
+            "../../../../crates/scorewing-core/tests/fixtures/ambiguous-relations.musicxml"
         );
         let score = read_score_bytes(source, "choir.musicxml").unwrap();
         let result = prepare_export(
@@ -1289,7 +1290,7 @@ mod tests {
         assert_eq!(result.warnings.len(), 2);
         assert!(result.warnings.iter().any(|w| w.contains("ambiguous tie")));
         assert!(result.warnings.iter().any(|w| w.contains("ambiguous slur")));
-        let exported = mxml_core::parse_score(result.root).unwrap();
+        let exported = scorewing_core::parse_score(result.root).unwrap();
         assert_eq!(exported.parts.len(), 3);
         assert!(exported
             .parts
@@ -1305,7 +1306,7 @@ mod tests {
 
     #[test]
     fn fallback_slur_warning_reaches_the_gui_export_result() {
-        let source = include_bytes!("../../../../crates/mxml-core/tests/fixtures/Test2.mxl");
+        let source = include_bytes!("../../../../crates/scorewing-core/tests/fixtures/Test2.mxl");
         let score = read_score_bytes(source, "Test2.mxl").unwrap();
         for insert_fallback_slurs in [true, false] {
             let result = prepare_export(
@@ -1330,7 +1331,7 @@ mod tests {
             .unwrap();
             assert_eq!(result.warnings.len(), usize::from(insert_fallback_slurs));
             if !insert_fallback_slurs {
-                let output = mxml_core::parse_score(result.root).unwrap();
+                let output = scorewing_core::parse_score(result.root).unwrap();
                 let note = &output.parts[3].measures[1].events[0];
                 assert!(note.notes[0].get_child("rest").is_some());
                 assert_eq!(note.duration, score.parts[0].measures[1].events[0].duration);
@@ -1396,7 +1397,7 @@ mod tests {
             )
             .unwrap()
             .root;
-            mxml_core::model::parse_score(root).unwrap()
+            scorewing_core::model::parse_score(root).unwrap()
         };
         let score = export(settings());
         assert_eq!(score.parts.len(), 4);
@@ -1562,7 +1563,7 @@ mod tests {
             inspected.practice_parts[1].key
         );
         assert!(!inspected.practice_parts[1].visible);
-        std::fs::write(&path, b"changed outside VoiceWeaver").unwrap();
+        std::fs::write(&path, b"changed outside Scorewing").unwrap();
         let (_, snapshot) = practice_snapshot(&inspected.id, &documents).unwrap();
         assert_eq!(snapshot.as_slice(), source);
     }

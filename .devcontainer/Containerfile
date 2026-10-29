@@ -32,7 +32,7 @@ RUN --mount=type=secret,id=proxy_ca \
     python3 -c 'import tarfile; t=tarfile.open("/tmp/node.tar.xz"); members=t.getmembers(); prefix=members[0].name.split("/")[0]+"/"; [(setattr(m,"name",m.name[len(prefix):])) for m in members if m.name.startswith(prefix)]; t.extractall("/usr/local",members=[m for m in members if m.name and not m.name.startswith("node-v")],filter="data")' && rm /tmp/node.tar.xz
 
 # Dev Containers updates ownership beneath this home when matching the host UID.
-RUN mkdir -p /home/ubuntu/.cargo/registry /home/ubuntu/.cargo/git /home/ubuntu/.cache/mxml-target && \
+RUN mkdir -p /home/ubuntu/.cargo/registry /home/ubuntu/.cargo/git /home/ubuntu/.cache/scorewing-target && \
     chown -R 1000:1000 /home/ubuntu/.cargo /home/ubuntu/.cache
 
 # Ubuntu already supplies a non-root UID 1000 account.

@@ -12,22 +12,22 @@ jobs:
       - name: Restore Rust cache
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/mxml-cache
+          path: ${{ runner.temp }}/scorewing-cache
           key: linux-cargo-v1-${{ runner.arch }}-${{ hashFiles('.devcontainer/Containerfile', 'tools/devcontainer.sh', 'tools/build-libxml2.sh', 'rust-toolchain.toml', '.cargo/**') }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}-${{ github.sha }}
           restore-keys: |
             linux-cargo-v1-${{ runner.arch }}-${{ hashFiles('.devcontainer/Containerfile', 'tools/devcontainer.sh', 'tools/build-libxml2.sh', 'rust-toolchain.toml', '.cargo/**') }}-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}-
             linux-cargo-v1-${{ runner.arch }}-${{ hashFiles('.devcontainer/Containerfile', 'tools/devcontainer.sh', 'tools/build-libxml2.sh', 'rust-toolchain.toml', '.cargo/**') }}-
       - name: Test and build in Podman
         env:
-          MXML_CACHE_DIR: ${{ runner.temp }}/mxml-cache
+          SCOREWING_CACHE_DIR: ${{ runner.temp }}/scorewing-cache
         run: tools/devcontainer.sh run bash tools/check.sh
       - name: Copy artifacts from build volume
         env:
-          MXML_CACHE_DIR: ${{ runner.temp }}/mxml-cache
+          SCOREWING_CACHE_DIR: ${{ runner.temp }}/scorewing-cache
         run: tools/devcontainer.sh run bash tools/package-linux.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: voiceweaver-linux-x64
+          name: scorewing-linux-x64
           path: dist/*
           if-no-files-found: error
   native:
@@ -36,11 +36,11 @@ jobs:
       matrix:
         include:
           - runner: windows-2022
-            artifact: voiceweaver-windows-x64
+            artifact: scorewing-windows-x64
           - runner: macos-15-intel
-            artifact: voiceweaver-macos-x64
+            artifact: scorewing-macos-x64
           - runner: macos-15
-            artifact: voiceweaver-macos-arm64
+            artifact: scorewing-macos-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -84,22 +84,22 @@ jobs:
           cargo fmt --all -- --check
           cargo test --workspace --locked
           cargo clippy --workspace --all-targets --locked -- -D warnings
-          cargo build -p mxml-cli --release --locked
+          cargo build -p scorewing-cli --release --locked
       - name: Build desktop installer
         working-directory: apps/desktop
         run: npm run tauri -- build
       - name: Smoke test CLI
         shell: bash
         run: |
-          target/release/voiceweaver --version
-          node tools/check-linkage.mjs target/release/voiceweaver${{ runner.os == 'Windows' && '.exe' || '' }}
-          node tools/check-linkage.mjs --desktop target/release/voiceweaver-desktop${{ runner.os == 'Windows' && '.exe' || '' }}
+          target/release/scorewing --version
+          node tools/check-linkage.mjs target/release/scorewing${{ runner.os == 'Windows' && '.exe' || '' }}
+          node tools/check-linkage.mjs --desktop target/release/scorewing-desktop${{ runner.os == 'Windows' && '.exe' || '' }}
       - name: Collect artifacts and checksums
         shell: bash
         run: |
           mkdir -p dist
           cp docs/THIRD_PARTY_NOTICES.txt dist/
-          cp target/release/voiceweaver.exe dist/ 2>/dev/null || cp target/release/voiceweaver dist/
+          cp target/release/scorewing.exe dist/ 2>/dev/null || cp target/release/scorewing dist/
           find target/release/bundle -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) -exec cp {} dist/ \;
           node tools/checksum.mjs dist/*
       - uses: actions/upload-artifact@v4

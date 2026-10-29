@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use mxml_core::model::{parse_score, Event, Part, Score};
+use scorewing_core::model::{parse_score, Event, Part, Score};
 use xmltree::{Element, XMLNode};
 
 pub struct Note {
@@ -125,7 +125,7 @@ pub fn parse(xml: &str) -> Score {
     parse_score(element(xml)).unwrap()
 }
 pub fn element(xml: &str) -> Element {
-    mxml_core::parse_xml(xml.as_bytes(), "test fixture").unwrap()
+    scorewing_core::parse_xml(xml.as_bytes(), "test fixture").unwrap()
 }
 pub fn append(parent: &mut Element, node: Element) {
     parent.children.push(XMLNode::Element(node));

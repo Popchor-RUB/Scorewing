@@ -551,7 +551,7 @@ export function mountApp(container: HTMLElement): () => void {
     const score = session?.document;
     const museScore = score?.format === "musescore";
     root.render(<RecentSoundsProvider><div className="app-shell min-h-dvh bg-background text-foreground">
-      <header className="app-header mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 p-5 sm:p-7"><div className="brand flex items-center gap-3"><span aria-hidden="true">♫</span><div className="flex flex-col gap-1"><strong>Voiceweaver</strong><Description>A little room to rearrange.</Description></div></div>
+      <header className="app-header mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 p-5 sm:p-7"><div className="brand flex items-center gap-3"><span aria-hidden="true">♫</span><div className="flex flex-col gap-1"><strong>Scorewing</strong><Description>A little room to rearrange.</Description></div></div>
         <div className="file-actions flex flex-wrap gap-3">{session && <Button variant="ghost" data-action="close" isDisabled={busy()} onPress={() => void closeScore()}>Close score</Button>}
           <Button data-action="open" variant={session ? "secondary" : "primary"} isDisabled={busy()} onPress={() => void openScore()}>{fileBusy ? "Opening…" : session ? "Open another score" : "Open score"}<span aria-hidden="true"> ↗</span></Button>
         </div>

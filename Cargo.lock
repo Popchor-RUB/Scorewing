@@ -2251,16 +2251,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "mxml-cli"
+name = "scorewing-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "mxml-core",
+ "scorewing-core",
  "tempfile",
 ]
 
 [[package]]
-name = "mxml-core"
+name = "scorewing-core"
 version = "0.1.0"
 dependencies = [
  "libxml",
@@ -2277,10 +2277,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "mxml-desktop"
+name = "scorewing-desktop"
 version = "0.1.0"
 dependencies = [
- "mxml-core",
+ "scorewing-core",
  "practice-tracks",
  "serde",
  "tauri",
@@ -2863,7 +2863,7 @@ name = "practice-tracks"
 version = "0.1.0"
 dependencies = [
  "libc",
- "mxml-core",
+ "scorewing-core",
  "serde",
  "serde_json",
  "tempfile",

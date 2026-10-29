@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use mxml_core::{
+use scorewing_core::{
     merge::{merge_score, merge_score_with_stems},
     model::{frac, parse_score, Score},
 };
@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 fn merged(parts: &[(&str, Vec<String>)]) -> Score {
     let output = merge_score(&score(parts), &groups(&[&["P1", "P2"]])).unwrap();
-    mxml_core::validate_score(&output).unwrap();
+    scorewing_core::validate_score(&output).unwrap();
     parse_score(output).unwrap()
 }
 
@@ -49,7 +49,7 @@ fn ordered_groups_anchor_at_first_score_position_and_keep_unselected_parts() {
         ("Bass", vec![n("C").octave(3).xml()]),
     ]);
     let output = merge_score(&input, &groups(&[&["P2", "P1"], &["P3", "P4"]])).unwrap();
-    mxml_core::validate_score(&output).unwrap();
+    scorewing_core::validate_score(&output).unwrap();
     let result = parse_score(output).unwrap();
     assert_eq!(names(&result), ["Alto / Soprano", "Tenor / Bass"]);
     assert_eq!(
@@ -65,7 +65,7 @@ fn ordered_groups_anchor_at_first_score_position_and_keep_unselected_parts() {
         ("B", vec![n("E").xml()]),
     ]);
     let output = merge_score(&input, &groups(&[&["P3", "P1"]])).unwrap();
-    mxml_core::validate_score(&output).unwrap();
+    scorewing_core::validate_score(&output).unwrap();
     let result = parse_score(output).unwrap();
     assert_eq!(names(&result), ["B / A", "Keep"]);
     assert_eq!(result.parts[1].source, input.parts[1].source);
@@ -101,7 +101,7 @@ fn explicit_stems_deduplicate_matching_chord_tones_after_divergence() {
     for stem in ["up", "down"] {
         let output =
             merge_score_with_stems(&input, &groups, &[vec![stem.into(), stem.into()]]).unwrap();
-        mxml_core::validate_score(&output).unwrap();
+        scorewing_core::validate_score(&output).unwrap();
         let output = parse_score(output).unwrap();
         let events = &output.parts[0].measures[0].events;
         assert_eq!(
@@ -199,7 +199,7 @@ fn same_stems_keep_distinct_rhythms_ties_pitches_and_grace_repetitions() {
             &[vec!["up".into(), "up".into()]],
         )
         .unwrap();
-        mxml_core::validate_score(&output).unwrap();
+        scorewing_core::validate_score(&output).unwrap();
         assert!(parse_score(output).unwrap().parts[0].measures[0]
             .events
             .iter()
@@ -216,7 +216,7 @@ fn same_stems_keep_distinct_rhythms_ties_pitches_and_grace_repetitions() {
         &[vec!["up".into(), "up".into()]],
     )
     .unwrap();
-    mxml_core::validate_score(&output).unwrap();
+    scorewing_core::validate_score(&output).unwrap();
     let output = parse_score(output).unwrap();
     let graces: Vec<_> = output.parts[0].measures[0]
         .events
@@ -315,7 +315,7 @@ fn three_sources_stems_and_common_rests() {
         ("T", vec![n("C").rest().xml() + &n("E").xml()]),
     ]);
     let output = merge_score(&input, &groups(&[&["P1", "P2", "P3"]])).unwrap();
-    mxml_core::validate_score(&output).unwrap();
+    scorewing_core::validate_score(&output).unwrap();
     let result = parse_score(output).unwrap();
     let events = &result.parts[0].measures[0].events;
     assert_eq!(events.len(), 4);
@@ -346,7 +346,7 @@ fn common_rests_after_divergence_only_appear_in_voice_one() {
     ]);
     for group in [vec!["P1", "P2"], vec!["P3", "P2", "P1"]] {
         let output = merge_score(&input, &groups(&[&group])).unwrap();
-        mxml_core::validate_score(&output).unwrap();
+        scorewing_core::validate_score(&output).unwrap();
         let result = parse_score(output).unwrap();
         let measure = &result.parts[0].measures[0];
         let rests: Vec<_> = measure
@@ -390,7 +390,7 @@ fn rests_stay_separate_when_not_shared_by_every_voice_or_duration() {
         ("T", vec![n("E").xml() + &n("E").xml() + &rest + &rest]),
     ]);
     let output = merge_score(&input, &groups(&[&["P1", "P2", "P3"]])).unwrap();
-    mxml_core::validate_score(&output).unwrap();
+    scorewing_core::validate_score(&output).unwrap();
     let result = parse_score(output).unwrap();
     let rests: Vec<_> = result.parts[0].measures[0]
         .events
@@ -684,7 +684,7 @@ fn exact_changing_divisions_and_hidden_signatures_zero_transpose() {
         .filter(|e| e.name == "part")
         .nth(1)
         .unwrap();
-    mxml_core::xml::set_child(
+    scorewing_core::xml::set_child(
         second
             .get_mut_child("measure")
             .unwrap()
@@ -695,7 +695,7 @@ fn exact_changing_divisions_and_hidden_signatures_zero_transpose() {
     );
     input = parse_score(input.root).unwrap();
     let output = merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap();
-    mxml_core::validate_score(&output).unwrap();
+    scorewing_core::validate_score(&output).unwrap();
     let result = parse_score(output).unwrap();
     assert_eq!(
         result.parts[0].measures[0]
@@ -728,7 +728,7 @@ fn exact_changing_divisions_and_hidden_signatures_zero_transpose() {
     append(attrs,element("<transpose><diatonic>0</diatonic><chromatic>0</chromatic><octave-change>0</octave-change></transpose>"));
     let input = parse_score(input.root).unwrap();
     let output = merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap();
-    mxml_core::validate_score(&output).unwrap();
+    scorewing_core::validate_score(&output).unwrap();
     assert_eq!(
         parse_score(output).unwrap().parts[0].measures[0]
             .events
@@ -826,7 +826,7 @@ fn names_instruments_players_lyrics_play_and_overrides_survive() {
             append(&mut part.definition,element(&format!("<midi-instrument id=\"I{index}\"><midi-channel>{index}</midi-channel></midi-instrument>")));
             if shared_prefix {
                 let note = &mut part.measures[0].events[0].notes[0];
-                mxml_core::xml::insert_note_child(
+                scorewing_core::xml::insert_note_child(
                     note,
                     element(&format!("<instrument id=\"I{index}\"/>")),
                 );
@@ -834,12 +834,12 @@ fn names_instruments_players_lyrics_play_and_overrides_survive() {
             }
         }
         append(&mut input.parts[1].definition,element("<score-instrument id=\"AltOverride\"><instrument-name>Alternate alto</instrument-name></score-instrument>"));
-        mxml_core::xml::insert_note_child(
+        scorewing_core::xml::insert_note_child(
             &mut input.parts[1].measures[0].events[1].notes[0],
             element("<instrument id=\"AltOverride\"/>"),
         );
         let output = merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap();
-        mxml_core::validate_score(&output).unwrap();
+        scorewing_core::validate_score(&output).unwrap();
         let result = parse_score(output).unwrap();
         let part = &result.parts[0];
         assert!(part.definition.get_child("part-name-display").is_none());

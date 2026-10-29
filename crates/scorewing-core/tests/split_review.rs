@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use mxml_core::{
+use scorewing_core::{
     parse_score, split_plan, split_score, split_score_with_fallbacks, validate_score, SplitFallback,
 };
 
@@ -55,8 +55,8 @@ fn ambiguous_relations_keep_notes_and_mark_original_and_split_passages() {
             assert_eq!(part.measures.len(), 4);
             for measure in &part.measures[..3] {
                 for event in &measure.events {
-                    assert_eq!(event.start, mxml_core::frac(0));
-                    assert_eq!(event.duration, mxml_core::frac(1));
+                    assert_eq!(event.start, scorewing_core::frac(0));
+                    assert_eq!(event.duration, scorewing_core::frac(1));
                     for note in &event.notes {
                         assert!(note.get_child("pitch").is_some());
                         assert_eq!(

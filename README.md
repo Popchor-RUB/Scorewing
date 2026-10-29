@@ -1,8 +1,10 @@
-# Voiceweaver
+# Scorewing
 
 A Rust CLI and Tauri 2 desktop app for splitting and merging choir staves in MusicXML, with desktop practice-track creation for MuseScore scores.
 
-Builds produce the `voiceweaver` CLI and `voiceweaver-desktop` executable, with desktop installers branded **Voiceweaver**.
+Builds produce the `scorewing` CLI and `scorewing-desktop` executable, with desktop installers branded **Scorewing**.
+
+Existing automation must adopt the renamed commands and `SCOREWING_*` build variables; no legacy aliases are provided. See [rename and upgrade notes](docs/SETUP.md#rename-and-upgrade-notes) for preserved settings and installation behavior. The existing icon artwork is unchanged.
 
 Open or drop one `.mxml`, `.musicxml`, `.xml`, compressed `.mxl`, or MuseScore `.mscz`/`.mscx` score, then choose an operation and export a new score. Select or drop two scores together to compare versions, including a MusicXML/MuseScore pair. A confirmation dialog stacks **Older version** above **Newer version**, with a swap button between them. Click either filename to choose a replacement, then **Export diff** to export directly without opening the diff workspace. With one score loaded, choose **Diff versions** to use the same controls below the mode selector, with the loaded score initially assigned as Newer. Successful diff exports return to the start screen; cancelling the save dialog or an export failure keeps the selections for retry. Use **Close score** to return to the start, or **Open another score** to replace it. Closing or replacing a score discards its editing choices; cancelling the picker or failing to load a replacement keeps the current score.
 
@@ -24,7 +26,7 @@ Fallback suggestions match consistent explicit up/down stems and prefer the matc
 
 ## Practice tracks
 
-Install **MuseScore Studio 4.7.x** separately. Voiceweaver discovers its executable and bundled **MS Basic.sf3**; renderer settings also accept explicit paths. For a Linux AppImage, extract it with `--appimage-extract` and select the executable and matching SoundFont from that installation. Python, Muse Sounds, and online sound engines are unnecessary.
+Install **MuseScore Studio 4.7.x** separately. Scorewing discovers its executable and bundled **MS Basic.sf3**; renderer settings also accept explicit paths. For a Linux AppImage, extract it with `--appimage-extract` and select the executable and matching SoundFont from that installation. Python, Muse Sounds, and online sound engines are unnecessary.
 
 Each selected target produces a 192 kbps MP3 for every selected range. Whole-song export is selected by default; rehearsal sections can be selected alongside it or exported on their own. Sections follow genuine MuseScore rehearsal marks, start at the beginning of the marked measure, and end before the next marked measure. An Intro covers measures before the first mark; the last section reaches the end. Marks in the same measure share a section and combined name. Ordinary boxed text does not define a section.
 
@@ -32,7 +34,7 @@ The target uses its foreground sound at 0 dB; other selected background members 
 
 Track rendering uses separate MuseScore processes, limited to half the available logical CPUs, rounded down, with at least one worker and no more workers than selected tracks. If CPU detection fails, exports use one worker. Each process loads its own score and sounds, so large exports on machines with many CPUs can use substantial memory. Completed tracks can appear out of order; filenames and the final track list retain the selected order.
 
-The metronome checkbox controls **MuseScore's built-in metronome**, with an independent level from −60 to 0 dB (default −6 dB). No percussion staff or generated click notes are added. Keep MuseScore closed during exports: Voiceweaver temporarily changes only its metronome preference, restores its original value or absence afterward, and keeps a recovery journal if interrupted. Unresolved preference conflicts or unsupported preference layouts stop rendering with an explanation. Concurrent Voiceweaver jobs share a preference-store lock.
+The metronome checkbox controls **MuseScore's built-in metronome**, with an independent level from −60 to 0 dB (default −6 dB). No percussion staff or generated click notes are added. Keep MuseScore closed during exports: Scorewing temporarily changes only its metronome preference, restores its original value or absence afterward, and keeps a recovery journal if interrupted. Unresolved preference conflicts or unsupported preference layouts stop rendering with an explanation. Concurrent Scorewing jobs share a preference-store lock.
 
 Foreground and background instrument fields open the full sound catalog on focus. Type to filter, use arrow keys to navigate, and press Enter to select. The five most recently selected sounds appear above the unfiltered catalog, shared across selectors and remembered between app sessions.
 
@@ -67,9 +69,9 @@ For local release builds, run `tools/build-linux.sh`, `tools/build-macos.sh`, or
 ## CLI
 
 ```sh
-voiceweaver split input.mxl -o split.musicxml
-voiceweaver split input.musicxml -o voices.mxl --mode voices --part Soprano --part 3
-voiceweaver merge input.mxl -o merged.mxl --pair 'Soprano+Alto' --pair '3+4'
+scorewing split input.mxl -o split.musicxml
+scorewing split input.musicxml -o voices.mxl --mode voices --part Soprano --part 3
+scorewing merge input.mxl -o merged.mxl --pair 'Soprano+Alto' --pair '3+4'
 ```
 
 Selectors are one-based positions or exact part names. Use positions when names repeat. Merge groups cannot overlap; the order inside each group determines voice order. Unselected parts remain unchanged. Omitting `--part` splits every eligible part, preserving the previous CLI default.

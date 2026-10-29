@@ -6,9 +6,9 @@ cd "$repo_dir"
 [[ "$(uname -s)" == Linux ]] || { echo 'Run this script on Linux.' >&2; exit 1; }
 
 # Reuse a prepared image; building it here would install dependencies.
-if [[ "${MXML_LOCAL_BUILD:-0}" != 1 && ! -f /.dockerenv && ! -f /run/.containerenv ]]; then
+if [[ "${SCOREWING_LOCAL_BUILD:-0}" != 1 && ! -f /.dockerenv && ! -f /run/.containerenv ]]; then
   if command -v podman >/dev/null && bash tools/devcontainer.sh ready; then
-    exec bash tools/devcontainer.sh run env MXML_LOCAL_BUILD=1 bash tools/build-linux.sh
+    exec bash tools/devcontainer.sh run env SCOREWING_LOCAL_BUILD=1 bash tools/build-linux.sh
   fi
   echo 'Prepared Podman devcontainer unavailable; checking native dependencies.' >&2
 fi
@@ -50,11 +50,11 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$repo_dir/target}"
 cargo metadata --locked --offline --format-version 1 >/dev/null || {
   echo 'Prepare the Cargo cache separately with cargo fetch --locked, then retry.' >&2; exit 1;
 }
-cargo build -p mxml-cli --release --locked --offline
+cargo build -p scorewing-cli --release --locked --offline
 npm --offline --prefix apps/desktop run tauri -- build --no-bundle -- --locked --offline
 target_dir="$CARGO_TARGET_DIR"
-node tools/check-linkage.mjs "$target_dir/release/voiceweaver"
-node tools/check-linkage.mjs --desktop "$target_dir/release/voiceweaver-desktop"
+node tools/check-linkage.mjs "$target_dir/release/scorewing"
+node tools/check-linkage.mjs --desktop "$target_dir/release/scorewing-desktop"
 mkdir -p dist
-cp "$target_dir/release/voiceweaver" "$target_dir/release/voiceweaver-desktop" docs/THIRD_PARTY_NOTICES.txt dist/
+cp "$target_dir/release/scorewing" "$target_dir/release/scorewing-desktop" docs/THIRD_PARTY_NOTICES.txt dist/
 echo "Built CLI and desktop executables in $repo_dir/dist/"

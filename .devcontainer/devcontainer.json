@@ -1,5 +1,5 @@
 {
-  "name": "MXML Rust + Tauri",
+  "name": "Scorewing Rust + Tauri",
   "build": { "dockerfile": "Containerfile", "context": ".." },
   "remoteUser": "ubuntu",
   "containerUser": "ubuntu",
@@ -9,12 +9,12 @@
   "workspaceFolder": "/workspace",
   "containerEnv": {
     "CARGO_HOME": "/home/ubuntu/.cargo",
-    "CARGO_TARGET_DIR": "/home/ubuntu/.cache/mxml-target"
+    "CARGO_TARGET_DIR": "/home/ubuntu/.cache/scorewing-target"
   },
   "mounts": [
-    "source=mxml-cargo-registry,target=/home/ubuntu/.cargo/registry,type=volume",
-    "source=mxml-cargo-git,target=/home/ubuntu/.cargo/git,type=volume",
-    "source=mxml-target,target=/home/ubuntu/.cache/mxml-target,type=volume"
+    "source=scorewing-cargo-registry,target=/home/ubuntu/.cargo/registry,type=volume",
+    "source=scorewing-cargo-git,target=/home/ubuntu/.cargo/git,type=volume",
+    "source=scorewing-target,target=/home/ubuntu/.cache/scorewing-target,type=volume"
   ],
   "forwardPorts": [1420],
   "customizations": { "vscode": { "extensions": ["rust-lang.rust-analyzer", "tauri-apps.tauri-vscode"] } }

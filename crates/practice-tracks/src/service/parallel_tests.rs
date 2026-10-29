@@ -23,7 +23,7 @@ impl Fixture {
             .unwrap()
             .read_to_end(&mut xml)
             .unwrap();
-        let mut source = mxml_core::parse_xml(&xml, "section fixture").unwrap();
+        let mut source = scorewing_core::parse_xml(&xml, "section fixture").unwrap();
         let measures = br#"<Staff><Measure><voice><Tempo><tempo>1</tempo></Tempo></voice></Measure>
           <Measure><startRepeat/><voice><RehearsalMark><text>../A:*</text></RehearsalMark></voice></Measure>
           <Measure><endRepeat>2</endRepeat><voice><RehearsalMark><text>../A:*</text></RehearsalMark></voice></Measure></Staff>"#;
@@ -32,10 +32,10 @@ impl Fixture {
             .unwrap()
             .children
             .iter_mut()
-            .filter_map(mxml_core::XMLNode::as_mut_element)
+            .filter_map(scorewing_core::XMLNode::as_mut_element)
             .filter(|e| e.name == "Staff")
         {
-            staff.children = mxml_core::parse_xml(measures, "section measures")
+            staff.children = scorewing_core::parse_xml(measures, "section measures")
                 .unwrap()
                 .children;
         }
@@ -47,7 +47,7 @@ impl Fixture {
             .unwrap()
             .children
             .iter_mut()
-            .filter_map(mxml_core::XMLNode::as_mut_element)
+            .filter_map(scorewing_core::XMLNode::as_mut_element)
             .filter(|e| e.name == "Staff")
         {
             staff.children.truncate(1);

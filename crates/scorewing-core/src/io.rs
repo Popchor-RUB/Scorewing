@@ -387,7 +387,7 @@ pub fn write_score(root: &Element, output: &Path, input: &Path, force: bool) -> 
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     let mut temporary = tempfile::Builder::new()
-        .prefix(".mxml-")
+        .prefix(".scorewing-")
         .suffix(".tmp")
         .tempfile_in(parent)?;
     if output

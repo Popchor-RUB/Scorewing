@@ -4,11 +4,11 @@ Rust unit/integration tests cover musical timing, transformations, file safety, 
 
 | Coverage | Rust test location |
 | --- | --- |
-| Exact timing, chords, slicing, relationship styles, invalid scores | `crates/mxml-core/src/model.rs` unit tests |
-| Plain/compressed roundtrips, archive safety, schema validation, atomic output protection | `crates/mxml-core/src/io.rs` unit tests |
-| Split ordering, voice/chord sharing, ties/slurs, annotations, metadata and identifiers | `crates/mxml-core/tests/split.rs` |
-| Merge ordering, rhythms, rests, lyrics, instruments, compatibility and relationships | `crates/mxml-core/tests/merge.rs` |
-| CLI split/merge roundtrips, mixed name/position selectors, invalid groups and file protection | `crates/mxml-cli/tests/cli.rs` |
+| Exact timing, chords, slicing, relationship styles, invalid scores | `crates/scorewing-core/src/model.rs` unit tests |
+| Plain/compressed roundtrips, archive safety, schema validation, atomic output protection | `crates/scorewing-core/src/io.rs` unit tests |
+| Split ordering, voice/chord sharing, ties/slurs, annotations, metadata and identifiers | `crates/scorewing-core/tests/split.rs` |
+| Merge ordering, rhythms, rests, lyrics, instruments, compatibility and relationships | `crates/scorewing-core/tests/merge.rs` |
+| CLI split/merge roundtrips, mixed name/position selectors, invalid groups and file protection | `crates/scorewing-cli/tests/cli.rs` |
 | MuseScore archives, MS Basic presets, sound roles, membership, normalization, fixed dynamics and native metronome configuration | `crates/practice-tracks/src/archive.rs` and `catalog.rs` unit tests |
 | Renderer failures/timeouts, partial results, atomic publication, metronome preference locking/restoration/crash recovery | Practice-track renderer, service and preference unit tests using isolated fake stores |
 | Opt-in real MuseScore MP3 gain, sound roles, dynamics, excluded-part silence and built-in metronome audio/restoration | `crates/practice-tracks/tests/native.rs` |
@@ -23,7 +23,7 @@ The shared engine embeds the official MusicXML 4.0 schemas, with imports restric
 
 CI builds unsigned native artifacts for Linux x64, Windows x64, macOS Intel, and macOS Apple Silicon. Native builds and interactive GUI behavior on platforms unavailable locally must be verified by their respective runners; a configured workflow alone does not establish that those builds passed.
 
-CI caches Cargo downloads and compiled Rust dependencies between runs. Linux also caches workspace build output: `MXML_CACHE_DIR` tells `tools/devcontainer.sh` to mount directories restored by GitHub Actions instead of local named volumes. Native jobs use `Swatinem/rust-cache`. Cache keys separate platforms and build environments, with Linux fallback keys allowing unchanged dependencies to survive lockfile updates. Cargo still decides what must be rebuilt, and all checks and packaging steps run on every execution. The first run or an evicted cache requires a full build; Linux container images and native XML dependencies are still built on each runner.
+CI caches Cargo downloads and compiled Rust dependencies between runs. Linux also caches workspace build output: `SCOREWING_CACHE_DIR` tells `tools/devcontainer.sh` to mount directories restored by GitHub Actions instead of local named volumes. Native jobs use `Swatinem/rust-cache`. Cache keys separate platforms and build environments, with Linux fallback keys allowing unchanged dependencies to survive lockfile updates. Cargo still decides what must be rebuilt, and all checks and packaging steps run on every execution. The first run or an evicted cache requires a full build; Linux container images and native XML dependencies are still built on each runner.
 
 Release checks use `otool -L` on macOS, `readelf -d` on Linux, and LLVM's PE import inspection on Windows to reject shared application dependencies in both CLI and desktop executables. macOS permits only system framework/library paths (and rejects libxml2 even there); Windows permits system DLLs without a dynamic Visual C++ runtime; Linux permits the C runtime and, for the desktop only, GTK/WebKitGTK integration libraries. Linux platform libraries may themselves depend on the system libxml2; our executables must not import it directly. `node --test tools/check-linkage.test.mjs` covers missing-libxml2 regressions and rejects unrecognized inspection output.
 
@@ -38,7 +38,7 @@ The ignored Linux acceptance test requires MuseScore Studio 4.7.x, the matching 
 ```sh
 practice_profile=$(mktemp -d)
 mkdir -p "$practice_profile/home" "$practice_profile/config"
-VOICEWEAVER_NATIVE_PROFILE="$practice_profile" \
+SCOREWING_NATIVE_PROFILE="$practice_profile" \
 HOME="$practice_profile/home" XDG_CONFIG_HOME="$practice_profile/config" \
 MUSESCORE_EXECUTABLE=/absolute/path/to/MuseScore \
 MUSESCORE_SOUNDFONT="/absolute/path/to/MS Basic.sf3" \

@@ -1,12 +1,12 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use mxml_core::{
+use scorewing_core::{
     check_output, merge_score, read_score, split_score, write_score, Score, ScoreError, SplitResult,
 };
 use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    name = "voiceweaver",
+    name = "scorewing",
     version,
     about = "Split and merge choir staves in MusicXML scores."
 )]
@@ -113,14 +113,14 @@ fn run(cli: Cli) -> Result<(), ScoreError> {
     };
     write_score(&result.root, &files.output, &files.input, files.force)?;
     for warning in result.warnings {
-        eprintln!("voiceweaver: warning: {warning}");
+        eprintln!("scorewing: warning: {warning}");
     }
     Ok(())
 }
 
 fn main() {
     if let Err(error) = run(Cli::parse()) {
-        eprintln!("voiceweaver: {error}");
+        eprintln!("scorewing: {error}");
         std::process::exit(2);
     }
 }

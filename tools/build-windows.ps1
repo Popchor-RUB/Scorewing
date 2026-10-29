@@ -56,18 +56,18 @@ try {
     $env:CARGO_TARGET_DIR = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { Join-Path $repoDir 'target' }
     & cargo metadata --locked --offline --format-version 1 > $null
     if ($LASTEXITCODE -ne 0) { throw 'Prepare the Cargo cache separately with cargo fetch --locked, then retry.' }
-    & cargo build -p mxml-cli --release --locked --offline
+    & cargo build -p scorewing-cli --release --locked --offline
     if ($LASTEXITCODE -ne 0) { throw 'CLI build failed.' }
     # Avoid installer bundlers, which may download WiX, NSIS, or WebView2.
     & npm.cmd --offline --prefix apps/desktop run tauri -- build --no-bundle -- --locked --offline
     if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed.' }
     $targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repoDir 'target' }
-    & node tools/check-linkage.mjs "$targetDir/release/voiceweaver.exe"
+    & node tools/check-linkage.mjs "$targetDir/release/scorewing.exe"
     if ($LASTEXITCODE -ne 0) { throw 'CLI linkage check failed.' }
-    & node tools/check-linkage.mjs --desktop "$targetDir/release/voiceweaver-desktop.exe"
+    & node tools/check-linkage.mjs --desktop "$targetDir/release/scorewing-desktop.exe"
     if ($LASTEXITCODE -ne 0) { throw 'Desktop linkage check failed.' }
     New-Item -ItemType Directory -Force dist | Out-Null
-    Copy-Item "$targetDir/release/voiceweaver.exe", "$targetDir/release/voiceweaver-desktop.exe", 'docs/THIRD_PARTY_NOTICES.txt' dist/
+    Copy-Item "$targetDir/release/scorewing.exe", "$targetDir/release/scorewing-desktop.exe", 'docs/THIRD_PARTY_NOTICES.txt' dist/
     Write-Host "Built CLI and desktop executables in $repoDir/dist/ (desktop requires the WebView2 runtime)."
 } finally {
     Pop-Location

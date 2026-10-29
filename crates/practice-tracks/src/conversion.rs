@@ -24,10 +24,10 @@ pub fn convert_musicxml(bytes: &[u8], context: &str, executable: Option<&Path>) 
     let mut converted = Vec::new();
     File::open(&output)
         .map_err(|error| format!("MuseScore did not produce MusicXML: {error}"))?
-        .take(mxml_core::MAX_XML_BYTES as u64 + 1)
+        .take(scorewing_core::MAX_XML_BYTES as u64 + 1)
         .read_to_end(&mut converted)
         .map_err(|error| format!("Cannot read converted MusicXML: {error}"))?;
-    mxml_core::read_score_bytes(&converted, "converted.musicxml")
+    scorewing_core::read_score_bytes(&converted, "converted.musicxml")
         .map_err(|error| format!("Converted MusicXML cannot be arranged: {error}"))?;
     Ok(converted)
 }

@@ -1,4 +1,4 @@
-use mxml_core::{
+use scorewing_core::{
     diff_score, read_score, read_score_bytes, validate_score, write_score,
     xml::{child, children, text, visit, visit_mut},
     DiffResult, Element, Score,
@@ -125,7 +125,7 @@ fn enharmonic_microtonal_and_divisions_equivalence_ignore_engraving_and_ids() {
     let old = score(&note("C", 1, "1", "").replace("</step>", "</step><alter>0.5</alter>"));
     let mut new = score(&note("D", 2, "1", "").replace("</step>", "</step><alter>-1.5</alter>"));
     // One half-note duration in two divisions is one quarter-note duration.
-    let source = mxml_core::serialize_xml(&new.root).unwrap();
+    let source = scorewing_core::serialize_xml(&new.root).unwrap();
     let source = String::from_utf8(source)
         .unwrap()
         .replace("<divisions>1</divisions>", "<divisions>2</divisions>")
@@ -392,7 +392,7 @@ fn repeated_passages_warn_and_export_roundtrips_plain_and_compressed() {
     assert!(result.warnings.iter().any(|w| w.contains("ambiguous")));
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("new.musicxml");
-    let input_bytes = mxml_core::serialize_xml(&new.root).unwrap();
+    let input_bytes = scorewing_core::serialize_xml(&new.root).unwrap();
     std::fs::write(&input, &input_bytes).unwrap();
     for ext in ["musicxml", "mxl"] {
         let output = dir.path().join(format!("diff.{ext}"));

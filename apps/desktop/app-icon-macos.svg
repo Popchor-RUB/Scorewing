@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <desc>100px margins at 1024px match the standard macOS icon footprint.
-       From apps/desktop: npm run tauri -- icon app-icon-macos.svg --output /tmp/mxml-macos-icons
-       Then copy only /tmp/mxml-macos-icons/icon.icns to src-tauri/icons/icon.icns.</desc>
+       From apps/desktop: npm run tauri -- icon app-icon-macos.svg --output /tmp/scorewing-macos-icons
+       Then copy only /tmp/scorewing-macos-icons/icon.icns to src-tauri/icons/icon.icns.</desc>
   <g transform="translate(50 50) scale(0.8046875)">
     <rect width="512" height="512" rx="112" fill="#1d3935"/>
     <path d="M88 172h336M88 214h336M88 256h336M88 298h336M88 340h336" stroke="#95b6aa" stroke-width="10" opacity=".65"/>

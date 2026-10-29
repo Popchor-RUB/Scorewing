@@ -1,6 +1,6 @@
 use crate::{PracticeOptions, PracticePart, Preset, PresetId, Result, SoundCatalog};
-use mxml_core::xml::{child_text, children, elements, set_child, visit, visit_mut};
-use mxml_core::{parse_xml, Element, XMLNode};
+use scorewing_core::xml::{child_text, children, elements, set_child, visit, visit_mut};
+use scorewing_core::{parse_xml, Element, XMLNode};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::fs::File;

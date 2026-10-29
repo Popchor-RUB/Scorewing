@@ -1,15 +1,15 @@
 [package]
-name = "mxml-cli"
+name = "scorewing-cli"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "voiceweaver"
+name = "scorewing"
 path = "src/main.rs"
 
 [dependencies]
-mxml-core = { path = "../mxml-core" }
+scorewing-core = { path = "../scorewing-core" }
 clap = { version = "4", features = ["derive"] }
 
 [dev-dependencies]

@@ -2,7 +2,7 @@
 
 ## Summary
 
-Rebuild Voiceweaver's desktop UI with the installed HeroUI 3.2.6 components. Use a warm cream-and-forest-green design, clear editing cards, and a prominent export footer. Edit one score at a time: remove the queue, file sidebar, and switching between retained documents.
+Rebuild Scorewing's desktop UI with the installed HeroUI 3.2.6 components. Use a warm cream-and-forest-green design, clear editing cards, and a prominent export footer. Edit one score at a time: remove the queue, file sidebar, and switching between retained documents.
 
 This plan replaces the earlier queue-based UI plan. The implementation is complete; verification is recorded below.
 
@@ -52,6 +52,6 @@ No new dependencies, theme switching, unrelated backend changes, or export-forma
 ## Implementation verification
 
 - Desktop frontend: `npm test` passes all 12 tests; `npm run build` passes TypeScript and the production bundle. The reported SoundPicker `id` prop error is fixed, with IDs supplied through HeroUI fields to retain accessible labels.
-- Native desktop library: `cargo test -p mxml-desktop --lib --locked --offline` passes all 15 tests in the prepared devcontainer. The single-file picker command compiles there.
+- Native desktop library: `cargo test -p scorewing-desktop --lib --locked --offline` passes all 15 tests in the prepared devcontainer. The single-file picker command compiles there.
 - WebKit browser previews at 1280px and 390px show no JavaScript errors or horizontal overflow. The visual check covers split/practice views and the open instrument dropdown with recent sounds, using mocked native commands.
 - Native macOS dialogs, macOS packaging, and actual MP3 rendering were not exercised in this environment.

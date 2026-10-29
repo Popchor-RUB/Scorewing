@@ -19,7 +19,7 @@ struct Native {
 
 impl Native {
     fn new() -> Self {
-        let profile = absolute_env("VOICEWEAVER_NATIVE_PROFILE")
+        let profile = absolute_env("SCOREWING_NATIVE_PROFILE")
             .canonicalize()
             .expect("Native profile directory must already exist");
         assert_ne!(
@@ -37,7 +37,7 @@ impl Native {
         for path in [&home, &config] {
             assert!(
                 path.starts_with(&profile),
-                "HOME and XDG_CONFIG_HOME must be inside VOICEWEAVER_NATIVE_PROFILE: {}",
+                "HOME and XDG_CONFIG_HOME must be inside SCOREWING_NATIVE_PROFILE: {}",
                 path.display()
             );
         }
@@ -78,7 +78,7 @@ impl Native {
         fs::write(
             &self.ini,
             format!(
-                "[application]\nvoiceweaverNativeSentinel=preserve\n{}",
+                "[application]\nscorewingNativeSentinel=preserve\n{}",
                 value
                     .map(|v| format!("playback\\metronomeEnabled={v}\n"))
                     .unwrap_or_default()
@@ -90,7 +90,7 @@ impl Native {
     fn preference(&self) -> Option<String> {
         let text = fs::read_to_string(&self.ini).unwrap();
         assert!(
-            text.contains("voiceweaverNativeSentinel=preserve"),
+            text.contains("scorewingNativeSentinel=preserve"),
             "MuseScore lost unrelated preferences"
         );
         text.lines().find_map(|line| {
@@ -255,13 +255,13 @@ fn score(mode: &str) -> Vec<u8> {
 }
 
 fn timing_score() -> Vec<u8> {
-    let mut root = mxml_core::parse_xml(&score("silent"), "native timing fixture").unwrap();
+    let mut root = scorewing_core::parse_xml(&score("silent"), "native timing fixture").unwrap();
     for staff in root
         .get_mut_child("Score")
         .unwrap()
         .children
         .iter_mut()
-        .filter_map(mxml_core::XMLNode::as_mut_element)
+        .filter_map(scorewing_core::XMLNode::as_mut_element)
         .filter(|e| e.name == "Staff")
     {
         let measures = br#"<Staff>
@@ -269,7 +269,7 @@ fn timing_score() -> Vec<u8> {
           <Measure><startRepeat/><voice><TimeSig><sigN>3</sigN><sigD>4</sigD></TimeSig><Tempo><tempo>2</tempo><text>120</text></Tempo><Rest><durationType>measure</durationType><duration>3/4</duration></Rest></voice></Measure>
           <Measure><endRepeat>2</endRepeat><voice><Tempo><tempo>1</tempo><text>60</text></Tempo><Rest><durationType>measure</durationType><duration>3/4</duration></Rest></voice></Measure>
         </Staff>"#;
-        staff.children = mxml_core::parse_xml(measures, "native timing measures")
+        staff.children = scorewing_core::parse_xml(measures, "native timing measures")
             .unwrap()
             .children;
     }
@@ -412,13 +412,13 @@ fn native_audio_acceptance() {
 
 // The reference is an independently authored two-bar score, not a sliced source.
 fn section_score(reference: bool) -> Vec<u8> {
-    let mut root = mxml_core::parse_xml(&score("silent"), "section fixture").unwrap();
+    let mut root = scorewing_core::parse_xml(&score("silent"), "section fixture").unwrap();
     for staff in root
         .get_mut_child("Score")
         .unwrap()
         .children
         .iter_mut()
-        .filter_map(mxml_core::XMLNode::as_mut_element)
+        .filter_map(scorewing_core::XMLNode::as_mut_element)
         .filter(|e| e.name == "Staff")
     {
         let prefix = if reference {
@@ -459,7 +459,7 @@ fn section_score(reference: bool) -> Vec<u8> {
           <Measure>{repeat}<voice><Rest><durationType>half</durationType></Rest><Chord><durationType>quarter</durationType><Note><pitch>64</pitch><tpc>18</tpc>{tie_start}</Note></Chord></voice></Measure>
           {suffix}</Staff>"#
         );
-        staff.children = mxml_core::parse_xml(xml.as_bytes(), "section measures")
+        staff.children = scorewing_core::parse_xml(xml.as_bytes(), "section measures")
             .unwrap()
             .children;
     }

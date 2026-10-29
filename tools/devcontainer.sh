@@ -2,10 +2,10 @@
 set -euo pipefail
 
 repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-image=localhost/mxml-dev
+image=localhost/scorewing-dev
 podman_args=(--cgroup-manager=cgroupfs)
-if [[ -n "${MXML_PODMAN_RUNROOT:-}" ]]; then podman_args+=(--runroot "$MXML_PODMAN_RUNROOT"); fi
-if [[ -n "${MXML_PODMAN_ROOT:-}" ]]; then podman_args+=(--root "$MXML_PODMAN_ROOT" --storage-driver vfs); fi
+if [[ -n "${SCOREWING_PODMAN_RUNROOT:-}" ]]; then podman_args+=(--runroot "$SCOREWING_PODMAN_RUNROOT"); fi
+if [[ -n "${SCOREWING_PODMAN_ROOT:-}" ]]; then podman_args+=(--root "$SCOREWING_PODMAN_ROOT" --storage-driver vfs); fi
 
 case "${1:-shell}" in
   ready)
@@ -27,21 +27,21 @@ case "${1:-shell}" in
       if [[ -n "${!key:-}" ]]; then runtime_args+=(-e "$key"); fi
     done
     if [[ -n "${CODEX_PROXY_CERT:-}" ]]; then
-      runtime_args+=(--mount "type=bind,src=$CODEX_PROXY_CERT,dst=/run/mxml-proxy-ca.pem,ro=true"
-        -e SSL_CERT_FILE=/run/mxml-proxy-ca.pem -e CURL_CA_BUNDLE=/run/mxml-proxy-ca.pem
-        -e CARGO_HTTP_CAINFO=/run/mxml-proxy-ca.pem -e NODE_EXTRA_CA_CERTS=/run/mxml-proxy-ca.pem)
+      runtime_args+=(--mount "type=bind,src=$CODEX_PROXY_CERT,dst=/run/scorewing-proxy-ca.pem,ro=true"
+        -e SSL_CERT_FILE=/run/scorewing-proxy-ca.pem -e CURL_CA_BUNDLE=/run/scorewing-proxy-ca.pem
+        -e CARGO_HTTP_CAINFO=/run/scorewing-proxy-ca.pem -e NODE_EXTRA_CA_CERTS=/run/scorewing-proxy-ca.pem)
     fi
     user_args=(--userns=keep-id --user "$(id -u):$(id -g)")
     # Old nested rootless runtimes cannot chown the host cgroup under keep-id.
-    if [[ "${MXML_ROOTLESS_UID0:-0}" == 1 ]]; then user_args=(--user 0:0); fi
-    cache_args=(-v mxml-cargo-registry:/opt/cargo/registry:U
-      -v mxml-cargo-git:/opt/cargo/git:U -v mxml-target:/workspace/target:U)
-    if [[ -n "${MXML_CACHE_DIR:-}" ]]; then
-      mkdir -p "$MXML_CACHE_DIR"/{registry,git,target}
-      cache_args=(-v "$MXML_CACHE_DIR/registry:/opt/cargo/registry:U"
-        -v "$MXML_CACHE_DIR/git:/opt/cargo/git:U" -v "$MXML_CACHE_DIR/target:/workspace/target:U")
+    if [[ "${SCOREWING_ROOTLESS_UID0:-0}" == 1 ]]; then user_args=(--user 0:0); fi
+    cache_args=(-v scorewing-cargo-registry:/opt/cargo/registry:U
+      -v scorewing-cargo-git:/opt/cargo/git:U -v scorewing-target:/workspace/target:U)
+    if [[ -n "${SCOREWING_CACHE_DIR:-}" ]]; then
+      mkdir -p "$SCOREWING_CACHE_DIR"/{registry,git,target}
+      cache_args=(-v "$SCOREWING_CACHE_DIR/registry:/opt/cargo/registry:U"
+        -v "$SCOREWING_CACHE_DIR/git:/opt/cargo/git:U" -v "$SCOREWING_CACHE_DIR/target:/workspace/target:U")
     fi
-    exec podman "${podman_args[@]}" run --rm --cgroups=disabled --cgroupns=host "${user_args[@]}" -e HOME=/tmp/mxml-home \
+    exec podman "${podman_args[@]}" run --rm --cgroups=disabled --cgroupns=host "${user_args[@]}" -e HOME=/tmp/scorewing-home \
       "${runtime_args[@]}" \
       --mount "type=bind,src=$repo_dir,dst=/workspace" \
       "${cache_args[@]}" \

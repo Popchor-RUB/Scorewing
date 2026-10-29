@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use mxml_core::{
+use scorewing_core::{
     model::{frac, parse_score},
     split::split_score,
 };
@@ -499,7 +499,7 @@ fn chord_marks_lyrics_instruments_players_and_unique_ids() {
     for (index, note) in part.measures[0].events[0].notes.iter_mut().enumerate() {
         note.attributes.insert("id".into(), format!("N{index}"));
         note.attributes.insert("default-x".into(), "42".into());
-        mxml_core::xml::insert_note_child(note, element("<instrument id=\"I1\"/>"));
+        scorewing_core::xml::insert_note_child(note, element("<instrument id=\"I1\"/>"));
         append(
             note,
             element("<listen><assess type=\"yes\" player=\"Singer\"/></listen>"),

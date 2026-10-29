@@ -84,7 +84,7 @@ export function PracticeView({
                 <Description>Check renderer and sounds after changing a path.</Description>
                 {environment?.version && <Description>Detected MuseScore {environment.version}</Description>}
                 {environment?.error && <p className="text-danger" role="alert">{environment.error}</p>}
-                <Description>Keep MuseScore closed during rendering. VoiceWeaver temporarily controls the built-in metronome preference and restores it when rendering ends.</Description>
+                <Description>Keep MuseScore closed during rendering. Scorewing temporarily controls the built-in metronome preference and restores it when rendering ends.</Description>
               </Modal.Body>
             </Modal.Dialog>
           </Modal.Container>

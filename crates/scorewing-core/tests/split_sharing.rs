@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use mxml_core::{
+use scorewing_core::{
     frac, parse_score, read_score_bytes, split_plan, split_score, split_score_with_fallbacks,
     validate_score, Event, Score, SplitFallback,
 };

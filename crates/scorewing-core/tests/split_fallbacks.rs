@@ -1,6 +1,6 @@
 mod common;
 use common::*;
-use mxml_core::{
+use scorewing_core::{
     frac, parse_score, read_score_bytes, split_plan, split_score, split_score_with_fallbacks,
     split_score_with_options, validate_score, Score, SplitFallback, SplitOptions,
 };
@@ -520,8 +520,8 @@ fn disabling_fallback_slurs_rests_the_fallback_note_and_preserves_ties() {
                                 assert!(actual.get_child("rest").is_some());
                                 assert!(actual.get_child("pitch").is_none());
                                 assert_eq!(
-                                    mxml_core::xml::child_text(actual, "type"),
-                                    mxml_core::xml::child_text(expected, "type")
+                                    scorewing_core::xml::child_text(actual, "type"),
+                                    scorewing_core::xml::child_text(expected, "type")
                                 );
                             } else {
                                 for tag in ["pitch", "rest", "tie"] {

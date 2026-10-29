@@ -82,6 +82,7 @@ export interface PracticeOptions {
   metronome_enabled: boolean;
   metronome_db: number;
 }
+export type PracticeDefaults = Partial<Pick<PracticePartOptions, "foreground_sound" | "background_sound"> & Omit<PracticeOptions, "parts">>;
 export interface PracticeConfig { executable: string | null; soundfont: string | null }
 export interface PracticeEnvironment extends PracticeConfig {
   version: string | null;
@@ -96,14 +97,16 @@ export interface PracticeResult {
 }
 export interface PracticeProgress { id: string; stage: string; completed: number; running: number; total: number }
 
-export function newPractice(parts: PracticePart[]): PracticeOptions {
+export function newPractice(parts: PracticePart[], defaults: PracticeDefaults = {}): PracticeOptions {
   return {
     parts: parts.map((part) => ({
-      key: part.key, foreground_sound: part.existing_preset,
-      background_sound: part.existing_preset,
+      key: part.key, foreground_sound: defaults.foreground_sound ?? part.existing_preset,
+      background_sound: defaults.background_sound ?? part.existing_preset,
       include_in_background: part.visible, create_track: part.visible,
     })),
-    background_reduction_db: 6, metronome_enabled: false, metronome_db: -6,
+    background_reduction_db: defaults.background_reduction_db ?? 6,
+    metronome_enabled: defaults.metronome_enabled ?? false,
+    metronome_db: defaults.metronome_db ?? -6,
   };
 }
 

@@ -12,9 +12,11 @@ export interface SoundPickerProps {
   value: PresetId | null;
   onChange: (value: PresetId | null) => void;
   isDisabled?: boolean;
+  defaultValue?: PresetId | null;
+  onSetDefault?: (sound: PresetId) => void;
 }
 
-export function SoundPicker({ id, label, presets, value, onChange, isDisabled }: SoundPickerProps) {
+export function SoundPicker({ id, label, presets, value, onChange, isDisabled, defaultValue, onSetDefault }: SoundPickerProps) {
   const { recent, remember } = useRecentSounds();
   const [query, setQuery] = useState<string | null>(null);
   const focused = useRef(false);
@@ -39,47 +41,51 @@ export function SoundPicker({ id, label, presets, value, onChange, isDisabled }:
     </ListBox.Item>
   );
 
-  return <div className="sound-picker min-w-0 space-y-2">
-    <ComboBox
-      className="w-full"
-      variant="secondary"
-      id={id}
-      isDisabled={isDisabled}
-      selectedKey={key}
-      inputValue={query ?? selectedLabel}
-      // Only typed input filters; Aria also resets input text when opening and closing.
-      onInputChange={() => {}}
-      defaultFilter={() => true}
-      menuTrigger="focus"
-      allowsEmptyCollection
-      onOpenChange={(isOpen) => { if (!isOpen) setQuery(null); }}
-    >
-      <Label>{label}</Label>
-      <ComboBox.InputGroup>
-        <Input
-          placeholder="Choose an instrument"
-          onChange={(event) => setQuery(event.target.value)}
-          onFocus={(event) => {
-            if (focused.current) return;
-            focused.current = true;
-            setQuery(null);
-            event.target.select();
-          }}
-          onBlur={() => { focused.current = false; setQuery(null); }}
-        />
-        <ComboBox.Trigger aria-label={`Show ${label.toLocaleLowerCase()} instruments`} />
-      </ComboBox.InputGroup>
-      <ComboBox.Popover>
-        <ListBox
-          renderEmptyState={() => <span className="p-5 text-muted">No instruments found</span>}
-        >
-          {recentPresets.length > 0 && <ListBox.Section id="recent"><Header>Recently selected</Header>{recentPresets.map(item)}</ListBox.Section>}
-          {recentPresets.length > 0 && catalog.length > 0 && <Separator />}
-          {catalog.length > 0 && <ListBox.Section id="catalog"><Header>All instruments</Header>{catalog.map(item)}</ListBox.Section>}
-        </ListBox>
-      </ComboBox.Popover>
-    </ComboBox>
-    {value && <Button variant="secondary" size="sm" isDisabled={isDisabled} onPress={() => { onChange(null); setQuery(null); }} aria-label={`Clear ${label.toLocaleLowerCase()}`}>Clear</Button>}
-    {value && !selected && <Description className="text-danger">This sound is unavailable in the current catalog. Choose an instrument or clear it.</Description>}
+  return <div className="sound-picker min-w-0 w-fit max-w-full space-y-2">
+    <div className="flex flex-wrap items-end gap-3">
+      <ComboBox
+        className="w-72 max-w-full"
+        variant="secondary"
+        id={id}
+        isDisabled={isDisabled}
+        selectedKey={key}
+        inputValue={query ?? selectedLabel}
+        // Only typed input filters; Aria also resets input text when opening and closing.
+        onInputChange={() => {}}
+        defaultFilter={() => true}
+        menuTrigger="focus"
+        allowsEmptyCollection
+        onOpenChange={(isOpen) => { if (!isOpen) setQuery(null); }}
+      >
+        <Label>{label}</Label>
+        <ComboBox.InputGroup>
+          <Input
+            placeholder="Choose an instrument"
+            onChange={(event) => setQuery(event.target.value)}
+            onFocus={(event) => {
+              if (focused.current) return;
+              focused.current = true;
+              setQuery(null);
+              event.target.select();
+            }}
+            onBlur={() => { focused.current = false; setQuery(null); }}
+          />
+          <ComboBox.Trigger aria-label={`Show ${label.toLocaleLowerCase()} instruments`} />
+        </ComboBox.InputGroup>
+        <ComboBox.Popover>
+          <ListBox
+            renderEmptyState={() => <span className="p-5 text-muted">No instruments found</span>}
+          >
+            {recentPresets.length > 0 && <ListBox.Section id="recent"><Header>Recently selected</Header>{recentPresets.map(item)}</ListBox.Section>}
+            {recentPresets.length > 0 && catalog.length > 0 && <Separator />}
+            {catalog.length > 0 && <ListBox.Section id="catalog"><Header>All instruments</Header>{catalog.map(item)}</ListBox.Section>}
+          </ListBox>
+        </ComboBox.Popover>
+      </ComboBox>
+      {onSetDefault && selected && (!defaultValue || key !== soundKey(defaultValue)) &&
+        <Button variant="secondary" isDisabled={isDisabled} aria-label={`Set default ${label.toLocaleLowerCase()}`}
+          onPress={() => onSetDefault({ bank: selected.bank, program: selected.program })}>Set Default</Button>}
+    </div>
+    {value && !selected && <Description className="text-danger">This sound is unavailable in the current catalog. Choose another instrument.</Description>}
   </div>;
 }

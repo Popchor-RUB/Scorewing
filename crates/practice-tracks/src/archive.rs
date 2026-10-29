@@ -274,13 +274,12 @@ impl ScoreArchive {
         children(self.master(), "Part")
             .enumerate()
             .map(|(index, node)| {
-                let name = child_text(node, "trackName")
+                let name = node
+                    .get_child("Instrument")
+                    .and_then(|i| child_text(i, "longName"))
                     .filter(|s| !s.trim().is_empty())
-                    .or_else(|| {
-                        node.get_child("Instrument")
-                            .and_then(|i| child_text(i, "longName"))
-                    })
-                    .unwrap_or_else(|| format!("Instrument {}", index + 1));
+                    .or_else(|| child_text(node, "trackName").filter(|s| !s.trim().is_empty()))
+                    .unwrap_or_else(|| "Unnamed instrument".into());
                 let original_instruments = children(node, "Instrument")
                     .map(|i| instrument_id(i).unwrap_or("unknown").to_owned())
                     .collect();
@@ -1165,6 +1164,27 @@ mod tests {
             zip.write_all(bytes).unwrap();
         }
         zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn inspect_prefers_long_name_with_fallback_for_missing_names() {
+        for (instrument_name, track_name, expected) in [
+            ("<longName>Alt 2</longName>", "Alto", "Alt 2"),
+            (
+                "<longName>&lt;b&gt;Alt 2&lt;/b&gt;</longName>",
+                "Alto",
+                "Alt 2",
+            ),
+            ("", "Alto", "Alto"),
+            ("<longName> </longName>", "Alto", "Alto"),
+            ("", "", "Unnamed instrument"),
+        ] {
+            let xml = format!(
+                "<museScore version=\"4.70\"><Score><Part id=\"8\"><Staff id=\"1\"/><trackName>{track_name}</trackName><Instrument id=\"alto\">{instrument_name}</Instrument></Part><Staff id=\"1\"/></Score></museScore>"
+            );
+            let score = ScoreArchive::read_bytes(xml.as_bytes(), "test").unwrap();
+            assert_eq!(score.parts().unwrap()[0].name, expected);
+        }
     }
 
     #[test]

@@ -74,12 +74,28 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
     assert.ok(css?.code.includes(".button--primary"), "HeroUI styles are compiled");
     await app.click('[data-action="open"]');
     assert.match(app.document.body.textContent!, /first.xml/);
-    assert.equal(app.find(".status").textContent, "Your music stays on this device.");
+    assert.equal(app.find(".status").textContent, "", "loaded screens have no device slogan");
+    assert.equal(app.document.querySelector("#split-mode"), null, "loading stops at mode selection");
+    assert.equal(app.document.querySelectorAll("[data-mode]").length, 4);
+    assert.equal(app.document.querySelector('input[type="radio"]'), null, "mode tiles replace the radio section");
+    assert.ok(app.find<HTMLButtonElement>('[data-mode="practice"]').disabled, "MusicXML cannot create practice tracks");
+    nextPath = null;
+    await app.click('[data-action="open"]');
+    assert.equal(app.document.querySelectorAll("[data-mode]").length, 4, "cancelling replacement keeps mode selection");
+    await app.click('[data-mode="split"]');
+    assert.equal(app.document.activeElement, app.find("#mode-config-heading"));
     for (const checkbox of app.document.querySelectorAll(".card .checkbox"))
       assert.ok(checkbox.classList.contains("checkbox--secondary"), "checkboxes on cards use the surface variant");
     assert.ok(app.find(".select").classList.contains("select--secondary"), "selects on cards use the surface variant");
     await app.click('[data-part="P2"]');
+    assert.equal(app.document.activeElement, app.find('[data-part="P2"] input'), "routine changes do not steal focus");
     await app.click("#insert-fallback-slurs");
+    await app.click('[data-action="back-to-modes"]');
+    assert.equal(app.document.activeElement, app.find('[data-mode="split"]'));
+    assert.equal(app.document.querySelector("#split-mode"), null);
+    await app.click('[data-mode="split"]');
+    assert.ok(app.find(".split-preview"), "reopening the same mode keeps selected parts");
+    assert.equal(app.find<HTMLInputElement>("#insert-fallback-slurs").checked, false);
     nextPath = null;
     await app.click('[data-action="open"]');
     assert.equal(app.find<HTMLInputElement>("#insert-fallback-slurs").checked, false);
@@ -112,6 +128,7 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
     await app.click('[data-action="open"]');
     assert.ok(app.find<HTMLButtonElement>('[data-action="open"]').disabled);
     assert.ok(app.find<HTMLButtonElement>('[data-action="close"]').disabled);
+    assert.ok(app.find<HTMLButtonElement>('[data-action="back-to-modes"]').disabled);
     await app.event("tauri://drag-drop", { paths: ["/scores/ignored.xml"], position: { x: 0, y: 0 } });
     assert.equal(inspected.includes("/scores/ignored.xml"), false);
     await act(async () => { finishInspection!(score(nextPath!)); });
@@ -119,6 +136,8 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
     heldInspection = false;
     assert.ok(released.includes("/scores/first.xml"));
     assert.match(app.document.body.textContent!, /second.xml/);
+    assert.equal(app.document.querySelector("#insert-fallback-slurs"), null, "replacement returns to mode selection");
+    await app.click('[data-mode="split"]');
     assert.ok(app.find<HTMLInputElement>("#insert-fallback-slurs").checked, "new score resets choices");
     assert.equal(app.document.querySelector(".split-preview"), null, "new score starts without selected parts");
     await app.click('[data-action="close"]');
@@ -127,6 +146,7 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
     assert.equal(app.document.querySelector('[data-part="P1"]'), null);
     await app.event("tauri://drag-drop", { paths: ["/scores/dropped.xml"], position: { x: 0, y: 0 } });
     assert.match(app.document.body.textContent!, /dropped.xml/);
+    assert.ok(app.find('[data-mode="split"]'), "a dropped score also enters mode selection");
     assert.equal(app.registrations.filter((event) => event === "tauri://drag-drop").length, 1);
     assert.equal(app.registrations.filter((event) => event === "practice-progress").length, 1);
   } finally { await app.close(); }
@@ -153,11 +173,15 @@ test("HeroUI split and merge controls retain choices, validate, and send unchang
   });
   try {
     await app.click('[data-action="open"]');
+    await app.click('[data-mode="split"]');
     await app.click('[data-action="export"]');
     assert.match(app.find('[role="alert"]').textContent!, /Select at least one/);
     assert.equal(exported.length, 0);
     await app.click('[data-part="P2"]');
     assert.match(app.find(".split-preview").textContent!, /3 additional staves/);
+    assert.equal(app.find('[data-part="P2"] .part-name').textContent, "Violin", "instrument names have no repeated subtitle or internal ID");
+    assert.deepEqual(Array.from(app.find(".split-preview").querySelectorAll(".score-select [data-slot='label']"), (label) => label.textContent), ["Fallback voice", "Fallback voice", "Fallback voice"]);
+    assert.equal(app.document.querySelectorAll(".fallback-row[role='group'][aria-labelledby]").length, 3, "staff context stays separate from the selector label");
     assert.match(app.find(".options-card").textContent!, /Matching pitches continue existing ties/);
     await app.choose("#fallback-P2-2-1", "Voice 3");
     await app.click('[data-action="export"]');
@@ -179,6 +203,7 @@ test("HeroUI split and merge controls retain choices, validate, and send unchang
     assert.ok(app.find<HTMLButtonElement>('[data-action="open"]').disabled);
     assert.ok(app.find<HTMLButtonElement>('[data-action="close"]').disabled);
     assert.ok(app.find<HTMLInputElement>("#insert-fallback-slurs").disabled);
+    assert.ok(app.find<HTMLButtonElement>('[data-action="back-to-modes"]').disabled);
     await act(async () => { finishExport!(); });
     holdExport = false; await app.settle();
     assert.deepEqual(exported.at(-1)?.operation, {
@@ -196,7 +221,9 @@ test("HeroUI split and merge controls retain choices, validate, and send unchang
     assert.match(app.find('[role="alert"]').textContent!, /Cannot write output file/);
     assert.equal(app.find<HTMLButtonElement>('[data-action="export"]').disabled, false);
     exportError = undefined;
-    await app.click('input[type="radio"][value="merge"]');
+    await app.click('[data-action="back-to-modes"]');
+    await app.click('[data-mode="merge"]');
+    assert.match(app.find(".merge-empty").textContent!, /Select two or more instruments/);
     await app.click('[data-part="P1"]');
     await app.click('[data-part="P2"]');
     await app.click('[data-action="add-group"]');
@@ -205,6 +232,9 @@ test("HeroUI split and merge controls retain choices, validate, and send unchang
     await app.click('[data-part="P4"]');
     await app.click('[data-action="add-group"]');
     assert.equal(app.document.querySelectorAll(".merge-group").length, 2);
+    assert.ok(app.find(".merge-part").querySelector("#stem-P2"), "reordered instruments retain the correct stem controls");
+    assert.deepEqual(Array.from(app.document.querySelectorAll(".merge-group .score-select [data-slot='label']"), (label) => label.textContent), ["Stem direction", "Stem direction", "Stem direction", "Stem direction"]);
+    assert.equal(app.find(".group-part [data-slot='description']").textContent, "Voice 1", "voice context has no internal part ID");
     await app.choose("#stem-P1", "Up");
     await app.choose("#stem-P3", "Down");
     await app.click('[data-action="up"][data-group="1"][data-index="1"]');

@@ -1,1 +1,2 @@
 - Before starting initialize a git repository. After after making changes ask the user to commit. Propose a commit message.
+- When performing UI/frontend-related tasks, always use the HeroUI MCP and skill. Use HeroUI components whenever possible.

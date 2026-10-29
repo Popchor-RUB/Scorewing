@@ -15,7 +15,7 @@ const presets: SoundPreset[] = [
   { bank: 0, program: 5, name: "Flute" },
 ];
 
-test("instrument picker supports search, keyboard selection, recents, persistence, and clearing", async () => {
+test("instrument picker supports search, keyboard selection, recents, and persistence without a clear button", async () => {
   const browser = new Window({ url: "http://localhost:1420" });
   const globals = globalThis as unknown as Record<string, unknown>;
   for (const name of ["window", "document", "navigator", "localStorage", "HTMLElement", "HTMLInputElement", "HTMLTextAreaElement", "HTMLButtonElement", "HTMLDivElement", "HTMLSelectElement", "SVGElement", "Element", "Node", "NodeFilter", "Text", "Document", "ShadowRoot", "MutationObserver", "ResizeObserver", "Event", "CustomEvent", "KeyboardEvent", "MouseEvent", "PointerEvent", "FocusEvent", "getComputedStyle", "CSS", "requestAnimationFrame", "cancelAnimationFrame"])
@@ -62,6 +62,7 @@ test("instrument picker supports search, keyboard selection, recents, persistenc
 
     await render();
     assert.equal(input().value, "Grand Piano");
+    assert.equal(container.querySelector('[aria-label="Clear foreground sound"]'), null);
     await focus();
     assert.equal(options().length, presets.length, "focus shows the full catalog with an existing selection");
     assert.equal(input().selectionStart, 0);
@@ -129,12 +130,12 @@ test("instrument picker supports search, keyboard selection, recents, persistenc
     assert.ok(browser.document.body.textContent.includes("Recently selected"), "clearing search restores recents");
     assert.equal(separators().length, 1, "clearing search restores the section separator");
     await blur();
-    await act(async () => (container.querySelector('[aria-label="Clear foreground sound"]') as unknown as HTMLButtonElement).click());
-    assert.equal(commits.at(-1), null);
-    assert.equal(input().value, "");
+    assert.equal(container.querySelector('[aria-label="Clear foreground sound"]'), null);
+    assert.equal(input().value, "Grand Piano");
     await render({ disabled: true });
     assert.equal(input().disabled, true);
     await render({ catalog: [] });
+    assert.match(container.textContent!, /This sound is unavailable in the current catalog. Choose another instrument\./);
     await focus();
     assert.equal(options().length, 0);
     assert.ok(browser.document.body.textContent.includes("No instruments found"));

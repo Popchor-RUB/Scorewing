@@ -88,6 +88,8 @@ test("landing split button checks recent files, reopens them, and handles keyboa
     assert.deepEqual(inspected, [paths[2]], "keyboard selection reopens the selected path");
     assert.equal(pickerCalls, 0, "recent selection bypasses the picker");
     assert.equal(history()[0], paths[2]);
+    assert.ok(app.find('[data-mode="split"]'), "recent scores open at mode selection");
+    assert.equal(app.document.querySelector('[data-action="back-to-modes"]'), null);
     await app.click('[data-action="close"]');
 
     await app.click(trigger);

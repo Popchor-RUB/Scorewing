@@ -33,7 +33,7 @@ pub struct SplitFallback {
 
 /// Split settings; defaults preserve automatic voice sharing and fallback slurs.
 pub struct SplitOptions<'a> {
-    /// Explicit measure-level choices; `None` uses legacy voice sharing.
+    /// Explicit fallbacks for undeclared measure openings; `None` uses legacy voice sharing.
     pub fallbacks: Option<&'a [SplitFallback]>,
     /// If false, replace mismatched-pitch fallback endpoints with rests.
     pub insert_fallback_slurs: bool,
@@ -463,13 +463,13 @@ fn notes<'a>(
         .unwrap_or_default())
 }
 
-fn segments(
+fn segments<'a>(
     measure: &Measure,
-    voice: Option<&str>,
+    voice_at: impl Fn(&Fraction) -> Option<&'a str>,
     shared: bool,
 ) -> Vec<(Fraction, Fraction, Option<usize>)> {
     let mut boundaries = BTreeSet::from([Fraction::zero(), measure.length.clone()]);
-    for event in measure.events.iter().filter(|event| !event.grace()) {
+    for event in &measure.events {
         boundaries.extend([event.start.clone(), event.end()]);
     }
     let boundaries: Vec<_> = boundaries.into_iter().collect();
@@ -487,7 +487,7 @@ fn segments(
                 active.insert(event.voice.as_str(), index);
             }
         }
-        let event = voice.and_then(|voice| {
+        let event = voice_at(start).and_then(|voice| {
             active
                 .get(voice)
                 .copied()
@@ -576,18 +576,31 @@ fn lane_measure(
     let tone = if shared_voice.is_some() { 0 } else { slot.tone };
     let voice = if let Some(voice) = shared_voice {
         Some(voice.as_str())
-    } else if measure.events.iter().any(|event| event.voice == slot.voice) {
+    } else if configured || measure.events.iter().any(|event| event.voice == slot.voice) {
         Some(slot.voice.as_str())
-    } else if configured {
-        slot.fallback_voice
-            .as_deref()
-            .filter(|voice| measure.events.iter().any(|event| event.voice == *voice))
     } else {
         Some("1")
     };
+    let first_native = measure
+        .events
+        .iter()
+        .filter(|event| Some(event.voice.as_str()) == voice)
+        .map(|event| &event.start)
+        .min();
+    let fallback = slot
+        .fallback_voice
+        .as_deref()
+        .filter(|voice| measure.events.iter().any(|event| event.voice == *voice));
+    let voice_at = |position: &Fraction| {
+        if configured && first_native.is_none_or(|start| position < start) {
+            fallback
+        } else {
+            voice
+        }
+    };
     let mut result = Vec::new();
     let mut errors = Vec::new();
-    for (start, end, index) in segments(measure, voice, shared) {
+    for (start, end, index) in segments(measure, &voice_at, shared) {
         let source = index.map(|index| &measure.events[index]);
         let selected_notes = match source {
             Some(event) => match notes(event, tone, mode, measure) {
@@ -675,7 +688,9 @@ fn lane_measure(
             })
             .map(|e| e.voice.as_str())
             .collect();
-        if Some(source.voice.as_str()) != voice && (!shared || occupied.len() != 1) {
+        if Some(source.voice.as_str()) != voice_at(&source.start)
+            && (!shared || occupied.len() != 1)
+        {
             continue;
         }
         let selected = match notes(source, tone, mode, measure) {
@@ -718,7 +733,7 @@ fn lane_measure(
                 .filter(|e| e.start <= extra.position && extra.position < e.end())
                 .map(|e| e.voice.as_str())
                 .collect();
-            if Some(source_voice.as_str()) != voice
+            if Some(source_voice.as_str()) != voice_at(&extra.position)
                 && !(shared && occupied.len() == 1 && occupied.contains(source_voice.as_str()))
             {
                 continue;
@@ -1239,7 +1254,8 @@ pub fn split_score(score: &Score, mode: &str, selected: Option<&[String]>) -> Re
     split_score_with_options(score, mode, selected, SplitOptions::default())
 }
 
-/// Split using explicit measure-level fallback choices instead of legacy voice sharing.
+/// Split using explicit fallbacks before each measure's first native event.
+/// Written rests and grace notes end the opening fallback; later gaps remain silent.
 /// Supply exactly one choice per preview lane in every selected part.
 /// `None` means silence when all native sources for the staff are absent.
 pub fn split_score_with_fallbacks(

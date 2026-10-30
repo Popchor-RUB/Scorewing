@@ -120,19 +120,180 @@ fn overrides_none_and_chord_tone_selection_are_respected() {
 }
 
 #[test]
-fn written_rests_and_partial_measure_gaps_prevent_fallbacks() {
+fn fallbacks_fill_undeclared_openings_but_preserve_rests_and_later_gaps() {
     let original = score(&[(
         "Choir",
         vec![
             n("C").duration(2).xml() + &backup(2) + &n("E").rest().voice("2").xml(),
             n("D").duration(2).xml() + &backup(2) + &forward(1) + &n("F").voice("2").xml(),
+            n("G").duration(4).xml()
+                + &backup(4)
+                + &forward(1)
+                + &n("A").rest().voice("2").xml()
+                + &forward(1)
+                + &n("B").voice("2").xml(),
         ],
     )]);
     let mut choices = settings(&original, "voices");
     choices[1].fallback_voice = Some("1".into());
     let result = split(&original, "voices", &choices);
     assert_eq!(pitches(&result.parts[2], 0), [["rest"], ["rest"]]);
-    assert_eq!(pitches(&result.parts[2], 1), [["rest"], ["F"]]);
+    assert_eq!(pitches(&result.parts[2], 1), [["D"], ["F"]]);
+    let clipped = &result.parts[2].measures[1].events[0];
+    assert_eq!((&clipped.start, &clipped.duration), (&frac(0), &frac(1)));
+    assert!(descendants(&clipped.notes[0])
+        .iter()
+        .all(|node| !["tie", "tied"].contains(&node.name.as_str())));
+    assert_eq!(
+        pitches(&result.parts[2], 2),
+        [["G"], ["rest"], ["rest"], ["B"]]
+    );
+
+    choices[1].fallback_voice = None;
+    assert_eq!(
+        pitches(&split(&original, "voices", &choices).parts[2], 1),
+        [["rest"], ["F"]]
+    );
+}
+
+#[test]
+fn supplied_late_starting_voice_matches_expected_score() {
+    let original = read_score_bytes(include_bytes!("fixtures/Test_Fig.mxl"), "Test_Fig").unwrap();
+    let expected = read_score_bytes(
+        include_bytes!("fixtures/Test_Fig-expected.mxl"),
+        "Test_Fig-expected",
+    )
+    .unwrap();
+    for mode in ["voices", "chords"] {
+        let mut choices = settings(&original, mode);
+        choices[1].fallback_voice = Some("1".into());
+        let result = split(&original, mode, &choices);
+        assert_eq!(result.parts[0].source, original.parts[0].source);
+        assert_eq!(
+            pitches(&result.parts[2], 0),
+            [["D"], ["E"], ["D"], ["B"], ["G"]]
+        );
+        assert_eq!(result.parts.len(), expected.parts.len());
+        for (actual, expected) in result.parts.iter().zip(&expected.parts) {
+            assert_eq!(actual.measures.len(), expected.measures.len());
+            for (actual, expected) in actual.measures.iter().zip(&expected.measures) {
+                assert_eq!(actual.length, expected.length);
+                assert_eq!(actual.events.len(), expected.events.len());
+                for (actual, expected) in actual.events.iter().zip(&expected.events) {
+                    assert_eq!(
+                        (&actual.start, &actual.duration),
+                        (&expected.start, &expected.duration)
+                    );
+                    assert_eq!(actual.notes.len(), expected.notes.len());
+                    for (actual, expected) in actual.notes.iter().zip(&expected.notes) {
+                        for tag in ["pitch", "rest"] {
+                            assert_eq!(
+                                actual.get_child(tag),
+                                expected.get_child(tag),
+                                "{mode}: {tag}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn opening_fallbacks_do_not_chain_or_fill_unavailable_source_gaps() {
+    let original = score(&[(
+        "Choir",
+        vec![
+            n("C").duration(3).xml() + &backup(3) + &forward(2) + &n("E").voice("2").xml(),
+            n("D").duration(3).xml()
+                + &backup(3)
+                + &forward(1)
+                + &n("F").voice("3").xml()
+                + &n("G").voice("2").xml(),
+        ],
+    )]);
+    let mut choices = settings(&original, "voices");
+    choices[1].fallback_voice = Some("3".into());
+    choices[2].fallback_voice = Some("1".into());
+    let result = split(&original, "voices", &choices);
+    assert_eq!(pitches(&result.parts[2], 0), [["rest"], ["E"]]);
+    assert_eq!(pitches(&result.parts[2], 1), [["rest"], ["F"], ["G"]]);
+    assert_eq!(pitches(&result.parts[3], 0), [["C"]]);
+}
+
+#[test]
+fn opening_grace_notes_and_directions_follow_the_source_at_their_position() {
+    let direction = |voice: &str| {
+        format!("<direction><direction-type><words>Voice {voice}</words></direction-type><voice>{voice}</voice></direction>")
+    };
+    let original = score(&[(
+        "Choir",
+        vec![
+            direction("1")
+                + &n("B").grace().xml()
+                + &n("C").xml()
+                + &direction("1")
+                + &n("D").grace().xml()
+                + &n("E").duration(2).xml()
+                + &backup(3)
+                + &direction("2")
+                + &forward(1)
+                + &direction("2")
+                + &n("F").voice("2").grace().xml()
+                + &forward(1)
+                + &n("G").voice("2").xml(),
+        ],
+    )]);
+    let mut choices = settings(&original, "voices");
+    choices[1].fallback_voice = Some("1".into());
+    let result = split(&original, "voices", &choices);
+    let measure = &result.parts[2].measures[0];
+    assert_eq!(pitches(&result.parts[2], 0), [["C"], ["rest"], ["G"]]);
+    let grace: Vec<_> = measure
+        .events
+        .iter()
+        .filter(|event| event.grace())
+        .map(|event| (event.start.clone(), text(&event.notes[0], "pitch/step")))
+        .collect();
+    assert_eq!(grace, [(frac(0), "B".into()), (frac(1), "F".into())]);
+    let directions: Vec<_> = measure
+        .extras
+        .iter()
+        .filter(|extra| extra.element.name == "direction")
+        .map(|extra| {
+            (
+                extra.position.clone(),
+                text(&extra.element, "direction-type/words"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        directions,
+        [(frac(0), "Voice 1".into()), (frac(1), "Voice 2".into())]
+    );
+}
+
+#[test]
+fn a_grace_only_target_stops_a_sustained_opening_fallback() {
+    let original = score(&[(
+        "Choir",
+        vec![
+            n("C").duration(2).xml() + &backup(2) + &forward(1) + &n("E").voice("2").grace().xml(),
+        ],
+    )]);
+    let mut choices = settings(&original, "voices");
+    choices[1].fallback_voice = Some("1".into());
+    let result = split(&original, "voices", &choices);
+    assert_eq!(pitches(&result.parts[2], 0), [["C"], ["rest"]]);
+    assert_eq!(result.parts[2].measures[0].events[0].duration, frac(1));
+    let grace = result.parts[2].measures[0]
+        .events
+        .iter()
+        .find(|event| event.grace())
+        .unwrap();
+    assert_eq!(grace.start, frac(1));
+    assert_eq!(text(&grace.notes[0], "pitch/step"), "E");
 }
 
 #[test]

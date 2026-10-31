@@ -25,8 +25,17 @@
       "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:"
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/Popchor-RUB/Scorewing/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZFRTk0NjJERjY5QUY0MTQKUldRVTlKcjJMVWJwL2hvWGhEUWlNd1k1cUh1eWNOMFR5T2s4TzBISzhGS2s1NkRmUDJ2TkhxRmsK"
+    }
+  },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": false,
     "resources": { "../../../docs/THIRD_PARTY_NOTICES.txt": "THIRD_PARTY_NOTICES.txt" },
     "targets": "all",
     "category": "Music",

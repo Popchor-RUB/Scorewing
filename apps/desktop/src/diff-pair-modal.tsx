@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Button, Description, Label, Modal } from "@heroui/react";
 import type { Inspection } from "./model.ts";
 
@@ -31,9 +31,12 @@ export function DiffPairModal({ pair, busy, closing, error, status, onChoose, on
   status: string; onChoose: (version: "old" | "new") => void;
   onSwap: () => void; onCancel: () => void; onCompare: () => void;
 }) {
-  useEffect(() => {
-    const previous = document.activeElement;
-    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
+  const previous = useRef(document.activeElement === document.body
+    ? document.querySelector<HTMLElement>('[data-action="open"]') : document.activeElement);
+  useEffect(() => () => {
+    requestAnimationFrame(() => {
+      if (previous.current instanceof HTMLElement && previous.current.isConnected) previous.current.focus();
+    });
   }, []);
   return <Modal.Backdrop isOpen isDismissable={!busy} isKeyboardDismissDisabled={busy} onOpenChange={(open) => { if (!open && !busy) onCancel(); }}>
     <Modal.Container size="lg"><Modal.Dialog>

@@ -10,5 +10,5 @@ while IFS= read -r -d '' artifact; do
   destination="dist/$(basename "$artifact")"
   cp "$artifact" "$destination"
   artifacts+=("$destination")
-done < <(find "$CARGO_TARGET_DIR/release/bundle" -type f \( -name '*.deb' -o -name '*.rpm' \) -print0)
+done < <(find "$CARGO_TARGET_DIR/release/bundle" -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -print0)
 node tools/checksum.mjs "${artifacts[@]}"

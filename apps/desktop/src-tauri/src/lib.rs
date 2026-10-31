@@ -22,6 +22,8 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 
+mod menu;
+
 #[derive(Default)]
 struct Documents {
     next_id: u64,
@@ -873,10 +875,36 @@ fn open_practice_export_folder(app: tauri::AppHandle, directory: String) -> Resu
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn updater_supported(app: tauri::AppHandle) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        app.env().appimage.is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        true
+    }
+}
+
+#[tauri::command]
+fn open_update_downloads(app: tauri::AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(
+            "https://github.com/Popchor-RUB/Scorewing/releases/latest",
+            None::<&str>,
+        )
+        .map_err(|error| error.to_string())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(menu::setup)
         .manage(SharedDocuments::default())
         .manage(SharedPracticeJob::default())
         .invoke_handler(tauri::generate_handler![
@@ -891,7 +919,11 @@ pub fn run() {
             pick_practice_path,
             export_practice_tracks,
             cancel_practice_export,
-            open_practice_export_folder
+            open_practice_export_folder,
+            updater_supported,
+            open_update_downloads,
+            menu::set_file_menu_state,
+            menu::set_update_menu_state
         ])
         .run(tauri::generate_context!())
         .expect("Failed to start Scorewing");

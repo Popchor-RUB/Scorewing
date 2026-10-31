@@ -90,16 +90,16 @@ test("landing split button checks recent files, reopens them, and handles keyboa
     assert.equal(history()[0], paths[2]);
     assert.ok(app.find('[data-mode="split"]'), "recent scores open at mode selection");
     assert.equal(app.document.querySelector('[data-action="back-to-modes"]'), null);
-    await app.click('[data-action="close"]');
+    await app.menu("close-score");
 
     await app.click(trigger);
     await app.click('[role="menuitem"]');
     assert.equal(inspected.at(-1), paths[2], "mouse selection reopens the same score");
-    await app.click('[data-action="close"]');
+    await app.menu("close-score");
     await app.click(choose);
     assert.equal(pickerCalls, 1);
     assert.equal(history()[0], "/scores/picked.xml");
-    await app.click('[data-action="close"]');
+    await app.menu("close-score");
     const saved = history();
     picked = null;
     await app.click(choose);
@@ -136,10 +136,10 @@ test("landing split button checks recent files, reopens them, and handles keyboa
     await act(async () => { finishInspection!(score(picked!)); });
     await app.settle();
     holdInspection = false;
-    await app.click('[data-action="close"]');
+    await app.menu("close-score");
     await app.event("tauri://drag-drop", { paths: ["/scores/drop.xml"], position: { x: 0, y: 0 } });
     assert.equal(history()[0], "/scores/drop.xml", "drops join the shared history");
-    await app.click('[data-action="close"]');
+    await app.menu("close-score");
     await app.remount();
     await app.click(trigger);
     assert.ok(items()[0].textContent!.includes("/scores/drop.xml"), "history persists across remounts");

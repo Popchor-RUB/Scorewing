@@ -18,10 +18,13 @@ export async function mountTestApp(invoke: Invoke) {
   globals.requestAnimationFrame = browser.requestAnimationFrame.bind(browser);
   globals.cancelAnimationFrame = browser.cancelAnimationFrame.bind(browser);
   globals.IS_REACT_ACT_ENVIRONMENT = true;
+  globals.isTauri = true;
   const callbacks = new Map<number, (...args: unknown[]) => void>();
   const listeners = new Map<string, number>();
   const registrations: string[] = [];
   const unregistered: number[] = [];
+  const fileMenu = { openEnabled: false, closeEnabled: false };
+  const updateMenu = { text: "Check for updates…", enabled: false };
   let callbackId = 0;
   (browser as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
     metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
@@ -34,6 +37,8 @@ export async function mountTestApp(invoke: Invoke) {
         return registrations.length;
       }
       if (command === "plugin:event|unlisten") { unregistered.push(Number(args.eventId)); return; }
+      if (command === "set_file_menu_state") { Object.assign(fileMenu, args); return; }
+      if (command === "set_update_menu_state") { Object.assign(updateMenu, args); return; }
       return invoke(command, args);
     },
   };
@@ -98,7 +103,12 @@ export async function mountTestApp(invoke: Invoke) {
     await settle();
   };
   return {
-    browser, document, find, click, input, choose, settle, event, registrations, unregistered, server,
+    browser, document, find, click, input, choose, settle, event, registrations, unregistered, server, fileMenu, updateMenu,
+    async menu(action: "open-score" | "close-score" | "check-updates") {
+      const enabled = action === "open-score" ? fileMenu.openEnabled : action === "close-score" ? fileMenu.closeEnabled : updateMenu.enabled;
+      assert.ok(enabled, `Menu action ${action} is disabled`);
+      await event("menu-action", action);
+    },
     async remount() {
       await act(async () => { dispose?.(); dispose = mountApp(document.querySelector("#app") as unknown as HTMLElement); });
       await settle();

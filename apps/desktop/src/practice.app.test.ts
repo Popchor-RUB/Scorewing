@@ -31,7 +31,7 @@ test("practice ranges support section-only exports, preserve choices, and count 
     throw new Error(`Unexpected command ${command}`);
   });
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="practice"]');
     assert.equal(app.find<HTMLInputElement>('[data-action="practice-whole-song"] input').checked, true);
     assert.equal(app.document.querySelectorAll('[data-section-key]').length, 3);
@@ -54,8 +54,8 @@ test("practice ranges support section-only exports, preserve choices, and count 
     for (const input of app.document.querySelectorAll('[aria-label="Practice ranges"] input')) assert.ok(input.hasAttribute("disabled"));
     await act(async () => finish!(null));
     await app.settle();
-    await app.click('[data-action="close"]');
-    await app.click('[data-action="open"]');
+    await app.menu("close-score");
+    await app.menu("open-score");
     await app.click('[data-mode="practice"]');
     assert.equal(app.find<HTMLInputElement>('[data-action="practice-whole-song"] input').checked, true);
     assert.equal(app.find<HTMLInputElement>('[data-section-key="measure-3"] input').checked, false, "sections do not become global defaults");
@@ -101,7 +101,7 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     throw new Error(`Unexpected command ${command}`);
   });
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     assert.equal(app.document.querySelector(".practice-part"), null, "loading stops at mode selection");
     assert.equal(app.find<HTMLButtonElement>('[data-mode="split"]').disabled, false);
     await app.click('[data-mode="practice"]');
@@ -195,8 +195,8 @@ test("practice UI configures sounds, validates exports, reports progress and ret
       ], background_reduction_db: 9, metronome_enabled: true, metronome_db: -12,
     });
     assert.ok(app.find<HTMLInputElement>("#foreground_sound-0").disabled);
-    assert.ok(app.find<HTMLButtonElement>('[data-action="open"]').disabled);
-    assert.ok(app.find<HTMLButtonElement>('[data-action="close"]').disabled);
+    assert.ok(!app.fileMenu.openEnabled);
+    assert.ok(!app.fileMenu.closeEnabled);
     assert.ok(app.find<HTMLButtonElement>('[data-action="back-to-modes"]').disabled);
     await app.event("practice-progress", { id: "/scores/unrelated.mscz", stage: "Wrong score", completed: 1, running: 1, total: 2 });
     assert.doesNotMatch(app.document.body.textContent!, /Wrong score/);
@@ -234,9 +234,9 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     await app.click('[data-action="practice-export"]');
     assert.match(app.find('[role="alert"]').textContent!, /Renderer launch failed/);
     assert.equal(app.find<HTMLButtonElement>('[data-action="practice-export"]').disabled, false);
-    await app.click('[data-action="close"]');
+    await app.menu("close-score");
     nextPath = "/scores/second.mscx";
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="practice"]');
     assert.equal(app.find<HTMLInputElement>("#background-reduction").value, "6", "unsaved levels reset on the next score");
     assert.equal(app.find<HTMLInputElement>("#practice-metronome").checked, true);
@@ -317,7 +317,7 @@ test("successful practice exports open a dismissible completion modal with a ret
     assert.equal(app.find(".status").textContent, "Practice tracks created.");
   };
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="practice"]');
     const directory = "/output/Practice tracks – 音楽 (2)";
     await complete(directory);
@@ -357,8 +357,8 @@ test("successful practice exports open a dismissible completion modal with a ret
     await act(async () => { app.document.activeElement?.dispatchEvent(new app.browser.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     await app.settle();
     assert.equal(app.document.querySelector('[role="dialog"]'), null, "Escape dismisses the modal");
-    await app.click('[data-action="close"]');
-    await app.click('[data-action="open"]');
+    await app.menu("close-score");
+    await app.menu("open-score");
     assert.equal(app.document.querySelector('[role="dialog"]'), null, "a new score has no old completion state");
     await app.click('[data-mode="practice"]');
 
@@ -401,7 +401,7 @@ test("MuseScore settings gate instruments during detection, path changes and ren
     assert.equal(app.find<HTMLButtonElement>('[data-action="practice-export"]').disabled, disabled);
   };
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="practice"]');
     assert.match(app.find(".practice-environment").textContent!, /Checking MuseScore/);
     assertDisabled(true);
@@ -452,7 +452,7 @@ test("explicit practice defaults update each mode independently and survive scor
   const value = (id: string) => app.find<HTMLInputElement>(`#${id}`).value;
   const saved = () => JSON.parse(app.browser.localStorage.getItem(PRACTICE_DEFAULTS_KEY) ?? "{}");
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="practice"]');
     assert.equal(app.document.querySelector('[aria-label="Set default background reduction"]'), null);
     for (const picker of app.document.querySelectorAll(".sound-picker")) {
@@ -505,16 +505,16 @@ test("explicit practice defaults update each mode independently and survive scor
       assert.equal(app.find<HTMLInputElement>("#practice-metronome").checked, true);
       assert.equal(app.document.querySelector("#foreground_sound-2"), null, "membership choices remain per score");
     };
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="practice"]');
     assertDefaults();
     await app.remount();
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="practice"]');
     assertDefaults();
     await app.click("#practice-metronome");
     await app.remount();
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="practice"]');
     assert.equal(app.find<HTMLInputElement>("#practice-metronome").checked, false, "a disabled metronome is remembered too");
     assert.equal(value("metronome-level"), "-12");

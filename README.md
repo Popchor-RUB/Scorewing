@@ -68,6 +68,10 @@ Run `npm run tauri dev` instead to open the native desktop app with its Rust bac
 
 For local release builds, run `tools/build-linux.sh`, `tools/build-macos.sh`, or `powershell -File tools/build-windows.ps1`. These scripts report missing prerequisites and never install dependencies. Linux prefers the prepared devcontainer; macOS and Windows build natively. The macOS script ad-hoc signs the app and installs it in `/Applications`. See [local compilation prerequisites](docs/SETUP.md#local-compilation-without-installing-dependencies).
 
+The native **File** menu contains **Open score…** (Cmd/Ctrl+O) and **Close score** (Cmd/Ctrl+Shift+W). On macOS, menus appear in the system menu bar; on Windows and Linux, they appear in the application window.
+
+Scorewing checks for signed updates quietly at startup; **Check for updates…** in the **Scorewing** menu on macOS or **Help** menu on Windows/Linux also checks manually. Updates download only after you accept. Close your score, then choose **Install and restart** when ready. In-app updates support Windows installers, macOS apps, and Linux AppImages; DEB/RPM users can open GitHub Releases for manual upgrades. Offline startup stays usable. See [releasing and updater signing](docs/RELEASING.md) for the GitHub draft-release workflow and key setup.
+
 ## CLI
 
 ```sh

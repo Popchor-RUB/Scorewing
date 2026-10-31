@@ -1,8 +1,10 @@
 import { createRoot } from "react-dom/client";
 import { Button, Card, Checkbox, Chip, Description, Label, ListBox, Select, Surface } from "@heroui/react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { relaunch } from "@tauri-apps/plugin-process";
+import type { Update } from "@tauri-apps/plugin-updater";
 import {
   addGroup, fallbackVoice, movePart, newArrangement, newPractice, operation,
   practiceOptions, setFallbackVoice, stemDirection, orderScorePair,
@@ -16,6 +18,7 @@ import { readPracticeDefaults, savePracticeDefaults } from "./practice-defaults.
 import { readRecentScores, rememberScore } from "./recent-scores.ts";
 import { RecentScoreButton } from "./recent-score-button.tsx";
 import { DiffFileSelectors, DiffPairModal } from "./diff-pair-modal.tsx";
+import { UpdateControl } from "./update-control.tsx";
 
 interface ScoreSession {
   document: Inspection;
@@ -76,6 +79,8 @@ export function mountApp(container: HTMLElement): () => void {
   let focusTarget: "configuration" | Arrangement["kind"] | null = null;
   let fileBusy = false;
   let exporting = false;
+  let installing = false;
+  let updateInstalled = false;
   let cancelling = false;
   let dropping = false;
   let disposed = false;
@@ -90,9 +95,22 @@ export function mountApp(container: HTMLElement): () => void {
   let recentScores = readRecentScores();
   let environment: PracticeEnvironment | null = null;
   let checking = false;
+  let updateCheckRequest = 0;
+  let fileMenuState = "";
   let environmentRequest = 0;
   const unlisteners: UnlistenFn[] = [];
-  const busy = () => fileBusy || exporting;
+  const busy = () => fileBusy || exporting || installing;
+
+  async function installUpdate(update: Update) {
+    if (disposed || busy() || current || pendingPair || checking)
+      throw new Error("Close your score and wait for current work to finish before installing.");
+    installing = true;
+    render();
+    try {
+      if (!updateInstalled) { await update.install(); updateInstalled = true; }
+      await relaunch();
+    } catch (error) { installing = false; render(); throw error; }
+  }
 
   function notify(text: string, error = false) {
     if (disposed) return;
@@ -287,7 +305,7 @@ export function mountApp(container: HTMLElement): () => void {
   }
 
   async function closeScore() {
-    if (busy() || !current || disposed) return;
+    if (busy() || pendingPair || !current || disposed) return;
     fileBusy = true;
     render();
     try {
@@ -554,12 +572,18 @@ export function mountApp(container: HTMLElement): () => void {
     const session = current;
     const score = session?.document;
     const museScore = score?.format === "musescore";
+    const openEnabled = !busy() && !pendingPair;
+    const closeEnabled = openEnabled && !!session;
+    const menuState = `${openEnabled}:${closeEnabled}`;
+    if (isTauri() && menuState !== fileMenuState) {
+      fileMenuState = menuState;
+      void invoke("set_file_menu_state", { openEnabled, closeEnabled })
+        .catch((error) => notify(`Could not update the File menu: ${String(error)}`, true));
+    }
     root.render(<RecentSoundsProvider><div className="app-shell min-h-dvh bg-background text-foreground">
       <header className="app-header mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 p-5 sm:p-7"><div className="brand flex items-center gap-3"><span aria-hidden="true">♫</span><div className="flex flex-col gap-1"><strong>Scorewing</strong><Description>A little room to rearrange.</Description></div></div>
-        <div className="file-actions flex flex-wrap gap-3">{session && <Button variant="ghost" data-action="close" isDisabled={busy()} onPress={() => void closeScore()}>Close score</Button>}
-          <Button data-action="open" variant={session ? "secondary" : "primary"} isDisabled={busy()} onPress={() => void openScore()}>{fileBusy ? "Opening…" : session ? "Open another score" : "Open score"}<span aria-hidden="true"> ↗</span></Button>
-        </div>
       </header>
+      <UpdateControl checkRequest={updateCheckRequest} canInstall={!session && !pendingPair && !busy() && !checking} onInstall={installUpdate} />
       <main className="workspace mx-auto max-w-6xl p-5 sm:p-7"><section className="editor min-w-0" aria-label="Score arrangement">
         {!session ? <div className="empty flex min-h-96 flex-col items-center justify-center gap-6 py-12 text-center"><div className="text-6xl" aria-hidden="true">♫</div><Description>MAKE SPACE FOR YOUR MUSIC</Description><h1 className="text-4xl font-semibold sm:text-6xl">Every voice.<br />A little clearer.</h1>
           <p className="max-w-md text-muted">Split a staff, bring parts together, or make a practice track that lets your instrument shine.</p>
@@ -626,6 +650,12 @@ export function mountApp(container: HTMLElement): () => void {
   }
   register(listen<PracticeProgress>("practice-progress", (event) => {
     if (!disposed && exporting && current?.practice && current.document.id === event.payload.id) { current.progress = event.payload; render(); }
+  }));
+  register(listen<string>("menu-action", (event) => {
+    if (disposed) return;
+    if (event.payload === "open-score") void openScore();
+    else if (event.payload === "close-score") void closeScore();
+    else if (event.payload === "check-updates" && !installing) { ++updateCheckRequest; render(); }
   }));
   try {
     register(getCurrentWebviewWindow().onDragDropEvent((event) => {

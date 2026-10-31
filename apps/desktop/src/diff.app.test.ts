@@ -36,7 +36,7 @@ test("inline diff preserves selections through cancellation and failure, replace
     throw new Error(`Unexpected ${command}`);
   });
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="diff"]');
     assert.equal(app.document.querySelector('[role="dialog"]'), null);
     assert.ok(app.find<HTMLButtonElement>('[data-action="export"]').disabled);
@@ -88,12 +88,12 @@ test("inline diff preserves selections through cancellation and failure, replace
     assert.ok(released.includes("/scores/earlier.xml"));
     assert.ok(released.includes("/scores/replacement.xml"));
     path = "/scores/another.xml";
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="diff"]');
     assert.ok(app.find<HTMLButtonElement>('[data-action="export"]').disabled);
     path = "/scores/another-old.xml";
     await app.click('[data-action="open-older"]');
-    await app.click('[data-action="close"]');
+    await app.menu("close-score");
     assert.ok(released.includes("/scores/another-old.xml"));
     assert.ok(released.includes("/scores/another.xml"));
   } finally { await app.close(); }
@@ -115,7 +115,7 @@ test("closing the app releases a pending older inspection and both active diff d
     throw new Error(`Unexpected ${command}`);
   });
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-mode="diff"]');
     path = "/old.xml";
     await app.click('[data-action="open-older"]');
@@ -155,9 +155,13 @@ test("pair picker confirms inferred order, swaps, retries conversion, and export
     throw new Error(`Unexpected ${command}`);
   });
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     paths = ["/new.mscz", "/old.xml"];
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
+    assert.equal(app.fileMenu.openEnabled, false);
+    assert.equal(app.fileMenu.closeEnabled, false);
+    await app.event("menu-action", "close-score");
+    assert.deepEqual(released, [], "queued menu actions cannot close a score beneath the comparison dialog");
     assert.match(app.find('[data-version="old"]').textContent!, /old.xml/);
     assert.match(app.find('[data-version="new"]').textContent!, /new.mscz/);
     assert.match(app.find(".score-heading").textContent!, /current.xml/);
@@ -200,7 +204,7 @@ test("dropped pairs cancel without replacing the workspace and failed intake rel
     throw new Error(`Unexpected ${command}`);
   });
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.event("tauri://drag-drop", { paths: ["/one.xml", "/two.xml"], position: { x: 0, y: 0 } });
     assert.match(app.find('[data-version="old"]').textContent!, /one.xml/);
     await app.click('[data-action="cancel-diff"]');
@@ -233,7 +237,7 @@ test("pair picker replaces either slot, keeps selections on invalid picks, and d
     throw new Error(`Unexpected ${command}`);
   });
   try {
-    await app.click('header [data-action="open"]');
+    await app.menu("open-score");
     for (const version of ["older", "newer"]) {
       for (const candidate of [null, "/broken.xml"]) {
         path = candidate;
@@ -278,7 +282,7 @@ for (const entry of ["pair", "inline"] as const) {
       throw new Error(`Unexpected ${command}`);
     });
     try {
-      await app.click('header [data-action="open"]');
+      await app.menu("open-score");
       if (entry === "inline") {
         await app.click('[data-mode="diff"]');
         await app.click('[data-action="open-older"]');
@@ -316,7 +320,7 @@ test("MuseScore arranging modes prepare MusicXML and dispatch by selected operat
     throw new Error(`Unexpected ${command}`);
   });
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     assert.equal(conversions, 0);
     assert.ok(app.find('[data-mode="practice"]'));
     assert.equal(app.document.querySelector(".arrangement-card"), null);
@@ -352,7 +356,7 @@ test("MuseScore arranging modes prepare MusicXML and dispatch by selected operat
   } finally { await app.close(); }
 });
 
-test("pair cancellation retries only unreleased documents and Escape restores focus", async () => {
+test("pair cancellation retries only unreleased documents and Escape restores focus after a native menu action", async () => {
   const released: string[] = [];
   let fail = true;
   const app = await mountTestApp((command, args) => {
@@ -365,7 +369,7 @@ test("pair cancellation retries only unreleased documents and Escape restores fo
     throw new Error(`Unexpected ${command}`);
   });
   try {
-    await app.click('header [data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-action="cancel-diff"]');
     assert.deepEqual(released, ["/old.xml"]);
     assert.match(app.find('[role="dialog"]').textContent!, /retry Cancel/);
@@ -376,7 +380,7 @@ test("pair cancellation retries only unreleased documents and Escape restores fo
     await app.settle();
     assert.deepEqual(released, ["/old.xml", "/new.xml"]);
     assert.equal(app.document.querySelector('[data-action="compare-diff"]'), null);
-    assert.equal(app.document.activeElement, app.find('header [data-action="open"]'));
+    assert.equal(app.document.activeElement?.getAttribute("data-action"), "open");
   } finally { await app.close(); }
 });
 
@@ -393,7 +397,7 @@ test("two MuseScore files are prepared for direct export and a cancelled pair is
     throw new Error(`Unexpected ${command}`);
   });
   try {
-    await app.click('[data-action="open"]');
+    await app.menu("open-score");
     await app.click('[data-action="compare-diff"]');
     assert.deepEqual(prepared, pair);
     assert.match(app.find('[role="dialog"]').textContent!, /Export cancelled/);

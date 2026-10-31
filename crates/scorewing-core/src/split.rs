@@ -600,7 +600,7 @@ fn lane_measure(
     };
     let mut result = Vec::new();
     let mut errors = Vec::new();
-    for (start, end, index) in segments(measure, &voice_at, shared) {
+    for (start, end, index) in segments(measure, voice_at, shared) {
         let source = index.map(|index| &measure.events[index]);
         let selected_notes = match source {
             Some(event) => match notes(event, tone, mode, measure) {

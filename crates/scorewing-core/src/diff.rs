@@ -179,8 +179,7 @@ fn music(part: &Part) -> Result<Music> {
     };
     let mut divisions = frac(1);
     let mut transpose = frac(0);
-    let mut measure_index = 0;
-    for (mi, measure) in part
+    for (measure_index, (mi, measure)) in part
         .source
         .children
         .iter()
@@ -190,6 +189,7 @@ fn music(part: &Part) -> Result<Music> {
                 .filter(|e| e.name == "measure")
                 .map(|e| (i, e))
         })
+        .enumerate()
     {
         let mut cursor = frac(0);
         let mut previous = frac(0);
@@ -283,7 +283,6 @@ fn music(part: &Part) -> Result<Music> {
                 }
             }
         }
-        measure_index += 1;
     }
     result
         .notes

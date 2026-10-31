@@ -410,55 +410,24 @@ fn native_audio_acceptance() {
     }
 }
 
-// The reference is an independently authored two-bar score, not a sliced source.
-fn section_score(reference: bool) -> Vec<u8> {
+fn section_score(measures: &[String], multimeasure_rests: bool) -> Vec<u8> {
     let mut root = scorewing_core::parse_xml(&score("silent"), "section fixture").unwrap();
-    for staff in root
-        .get_mut_child("Score")
-        .unwrap()
+    let score = root.get_mut_child("Score").unwrap();
+    if multimeasure_rests {
+        let style = scorewing_core::parse_xml(
+            b"<Style><createMultiMeasureRests>1</createMultiMeasureRests></Style>",
+            "section style",
+        )
+        .unwrap();
+        score.children.push(scorewing_core::XMLNode::Element(style));
+    }
+    for staff in score
         .children
         .iter_mut()
         .filter_map(scorewing_core::XMLNode::as_mut_element)
         .filter(|e| e.name == "Staff")
     {
-        let prefix = if reference {
-            ""
-        } else {
-            r#"
-          <Measure len="1/4"><irregular>1</irregular><voice><TimeSig><sigN>3</sigN><sigD>4</sigD></TimeSig><Rest><durationType>quarter</durationType></Rest></voice></Measure>
-          <Measure><startRepeat/><voice><TimeSig><sigN>3</sigN><sigD>4</sigD></TimeSig><KeySig><concertKey>2</concertKey></KeySig><Tempo><tempo>1</tempo><text>60</text></Tempo><Rest><durationType>half</durationType></Rest><Chord><durationType>quarter</durationType><Note><pitch>64</pitch><tpc>18</tpc><Spanner type="Tie"><Tie/><next><location><measures>1</measures><fractions>-1/2</fractions></location></next></Spanner></Note></Chord></voice></Measure>"#
-        };
-        let initial = if reference {
-            "<TimeSig><sigN>3</sigN><sigD>4</sigD></TimeSig><KeySig><concertKey>2</concertKey></KeySig><Tempo><tempo>1</tempo><text>60</text></Tempo>"
-        } else {
-            ""
-        };
-        let repeat = if reference {
-            ""
-        } else {
-            "<endRepeat>2</endRepeat>"
-        };
-        let tie_end = if reference {
-            ""
-        } else {
-            r#"<Spanner type="Tie"><prev><location><measures>-1</measures><fractions>1/2</fractions></location></prev></Spanner>"#
-        };
-        let tie_start = if reference {
-            ""
-        } else {
-            r#"<Spanner type="Tie"><Tie/><next><location><measures>1</measures><fractions>-1/2</fractions></location></next></Spanner>"#
-        };
-        let suffix = if reference {
-            ""
-        } else {
-            r#"<Measure><voice><RehearsalMark><text>B</text></RehearsalMark><TimeSig><sigN>2</sigN><sigD>4</sigD></TimeSig><Tempo><tempo>3</tempo><text>180</text></Tempo><Chord><durationType>half</durationType><Note><pitch>64</pitch><tpc>18</tpc><Spanner type="Tie"><prev><location><measures>-1</measures><fractions>1/2</fractions></location></prev></Spanner></Note><Note><pitch>96</pitch><tpc>14</tpc></Note></Chord><Jump><jumpTo>start</jumpTo><playUntil>end</playUntil><continueAt/></Jump></voice></Measure>"#
-        };
-        let xml = format!(
-            r#"<Staff>{prefix}
-          <Measure><voice>{initial}<RehearsalMark><text>A</text></RehearsalMark><Chord><durationType>quarter</durationType><Note><pitch>64</pitch><tpc>18</tpc>{tie_end}</Note></Chord><Rest><durationType>half</durationType></Rest></voice></Measure>
-          <Measure>{repeat}<voice><Rest><durationType>half</durationType></Rest><Chord><durationType>quarter</durationType><Note><pitch>64</pitch><tpc>18</tpc>{tie_start}</Note></Chord></voice></Measure>
-          {suffix}</Staff>"#
-        );
+        let xml = format!("<Staff>{}</Staff>", measures.join(""));
         staff.children = scorewing_core::parse_xml(xml.as_bytes(), "section measures")
             .unwrap()
             .children;
@@ -468,11 +437,287 @@ fn section_score(reference: bool) -> Vec<u8> {
     bytes
 }
 
+fn section_settings(key: &str) -> PracticeOptions {
+    let mut settings = options();
+    settings.parts.iter_mut().for_each(|p| {
+        p.create_track = p.key == "part-1";
+        p.include_in_background = false;
+    });
+    settings.include_whole_song = false;
+    settings.section_keys = vec![key.into()];
+    settings
+}
+
+fn route_bar(number: usize, controls: &str) -> String {
+    let pitches = [60, 62, 64, 65, 67, 69];
+    // Native navigation expansion needs these annotations in the voice containing the notes.
+    let (measure_controls, voice_controls) = match controls.split_once("<voice>") {
+        Some((before, rest)) => {
+            let (voice, after) = rest.split_once("</voice>").unwrap();
+            (format!("{before}{after}"), voice)
+        }
+        None => (controls.into(), ""),
+    };
+    format!(
+        "<Measure>{measure_controls}<voice>{voice_controls}<TimeSig><sigN>4</sigN><sigD>4</sigD></TimeSig><Tempo><tempo>2</tempo><text>120</text></Tempo><Chord><durationType>quarter</durationType><Note><pitch>{}</pitch><tpc>14</tpc></Note></Chord><Rest><durationType>half</durationType><dots>1</dots></Rest></voice></Measure>",
+        pitches[number - 1]
+    )
+}
+
+fn assert_audio_duration(label: &str, section: &[f32], reference: &[f32]) {
+    assert!(
+        (section.len() as f64 - reference.len() as f64).abs() < RATE * 0.1,
+        "{label}: section duration differs from independently written score: {} vs {}",
+        section.len(),
+        reference.len()
+    );
+}
+
+#[test]
+#[ignore = "Requires MuseScore 4.7.x, MS Basic, FFmpeg, and an isolated Linux profile"]
+fn native_rehearsal_sections_follow_played_navigation() {
+    let mut native = Native::new();
+    let mark_a = "<voice><RehearsalMark><text>A</text></RehearsalMark></voice>";
+    let mark_b = "<voice><RehearsalMark><text>B</text></RehearsalMark></voice>";
+    let mark_c = "<voice><RehearsalMark><text>C</text></RehearsalMark></voice>";
+    let segno = "<Marker><label>segno</label><text>Segno</text></Marker>";
+    let fine = "<Marker><label>fine</label><text>Fine</text></Marker>";
+    let to_coda = "<Marker><label>tocoda</label><text>To Coda</text></Marker>";
+    let coda = "<Marker><label>coda</label><text>Coda</text></Marker>";
+    let dc = "<Jump><jumpTo>start</jumpTo><playUntil>end</playUntil><continueAt/></Jump>";
+    let ds = "<Jump><jumpTo>segno</jumpTo><playUntil>end</playUntil><continueAt/></Jump>";
+    let dc_fine = "<Jump><jumpTo>start</jumpTo><playUntil>fine</playUntil><continueAt/></Jump>";
+    let ds_coda = "<Jump><jumpTo>segno</jumpTo><playUntil>tocoda</playUntil><continueAt>coda</continueAt></Jump>";
+    let first_ending = r#"<voice><Spanner type="Volta"><Volta><endings>1</endings></Volta><next><location><measures>1</measures></location></next></Spanner></voice>"#;
+    let first_ending_end = r#"<voice><Spanner type="Volta"><prev><location><measures>-1</measures></location></prev></Spanner></voice>"#;
+    let cases = [
+        (
+            "backward repeat exits B into exactly two bars of A",
+            vec![
+                format!("{mark_a}<startRepeat/>"),
+                "".into(),
+                mark_b.into(),
+                "<endRepeat>2</endRepeat>".into(),
+                mark_c.into(),
+            ],
+            "measure-3",
+            vec![3, 4, 1, 2],
+        ),
+        (
+            "internal repeat and first ending finish before two-bar tail",
+            vec![
+                format!("{mark_a}<startRepeat/>"),
+                format!("{first_ending}<endRepeat>2</endRepeat>"),
+                first_ending_end.into(),
+                mark_b.into(),
+                mark_c.into(),
+                "".into(),
+            ],
+            "measure-1",
+            vec![1, 2, 1, 3, 4, 5],
+        ),
+        (
+            "D.C. exits B into A",
+            vec![
+                mark_a.into(),
+                "".into(),
+                mark_b.into(),
+                dc.into(),
+                mark_c.into(),
+            ],
+            "measure-3",
+            vec![3, 4, 1, 2],
+        ),
+        (
+            "D.S. uses the segno target",
+            vec![
+                "".into(),
+                format!("{mark_a}{segno}"),
+                mark_b.into(),
+                ds.into(),
+                mark_c.into(),
+            ],
+            "measure-3",
+            vec![3, 4, 2, 3],
+        ),
+        (
+            "D.S. al Coda follows the coda during the two-bar tail",
+            vec![
+                format!("{mark_a}{segno}{to_coda}"),
+                "".into(),
+                mark_b.into(),
+                ds_coda.into(),
+                format!("{mark_c}{coda}"),
+                "".into(),
+            ],
+            "measure-3",
+            vec![3, 4, 1, 5],
+        ),
+        (
+            "D.C. al Fine clamps the tail after one bar",
+            vec![
+                format!("{mark_a}{fine}"),
+                "".into(),
+                mark_b.into(),
+                dc_fine.into(),
+                mark_c.into(),
+            ],
+            "measure-3",
+            vec![3, 4, 1],
+        ),
+        (
+            "last section clamps at playback end",
+            vec![mark_a.into(), "".into(), mark_b.into(), "".into()],
+            "measure-3",
+            vec![3, 4],
+        ),
+    ];
+    for (label, controls, key, expected) in cases {
+        eprintln!("Native section route: {label}");
+        let source = section_score(
+            &controls
+                .iter()
+                .enumerate()
+                .map(|(i, c)| route_bar(i + 1, c))
+                .collect::<Vec<_>>(),
+            false,
+        );
+        let mut settings = section_settings(key);
+        let section = native.export(&source, &settings, None).remove(0);
+        // Explicit expected routes are independent of the production mapping and range helpers.
+        let reference_score = section_score(
+            &expected
+                .iter()
+                .map(|&bar| route_bar(bar, ""))
+                .collect::<Vec<_>>(),
+            false,
+        );
+        settings.include_whole_song = true;
+        settings.section_keys.clear();
+        eprintln!("Native reference route: {label}");
+        let reference = native.export(&reference_score, &settings, None).remove(0);
+        assert_audio_duration(label, &section, &reference);
+        for (played, written) in expected.iter().enumerate() {
+            let offset = played * (2.0 * RATE) as usize;
+            let similarity = correlation(&section[offset..], &reference[offset..]);
+            assert!(
+                similarity > 0.98,
+                "{label}: played bar {} should be written bar {written}, correlation={similarity}",
+                played + 1
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "Requires MuseScore 4.7.x, MS Basic, FFmpeg, and an isolated Linux profile"]
+fn native_rehearsal_sections_restore_inherited_tempo_on_navigation() {
+    let mut native = Native::new();
+    let tempo_120 = "<Tempo><tempo>2</tempo><text>120</text></Tempo>";
+    let tempo_180 = "<Tempo><tempo>3</tempo><text>180</text></Tempo>";
+    let mark_a = "<voice><RehearsalMark><text>A</text></RehearsalMark></voice>";
+    let mark_b = "<voice><RehearsalMark><text>B</text></RehearsalMark></voice>";
+    let mark_c = "<voice><RehearsalMark><text>C</text></RehearsalMark></voice>";
+    let cases = [
+        (
+            "internal repeat restores inherited 120 BPM before returning to 180 BPM",
+            true,
+            format!("{mark_a}<startRepeat/>"),
+            "<endRepeat>2</endRepeat>".into(),
+            mark_b.to_owned(),
+            "measure-2",
+            vec![(2, 2), (3, 3), (2, 2), (3, 3), (4, 3), (5, 3)],
+        ),
+        (
+            "D.S. restores implicit default 120 BPM within the two-bar tail",
+            false,
+            format!("{mark_a}<Marker><label>segno</label><text>Segno</text></Marker>"),
+            format!("{mark_b}<Marker><label>fine</label><text>Fine</text></Marker>"),
+            "<Jump><jumpTo>segno</jumpTo><playUntil>fine</playUntil><continueAt/></Jump>".into(),
+            "measure-3",
+            vec![(3, 3), (4, 3), (2, 2), (3, 3)],
+        ),
+    ];
+    for (label, explicit_initial_tempo, target, outgoing, fourth, key, expected) in cases {
+        eprintln!("Native section tempo: {label}");
+        let source = section_score(
+            &[
+                route_bar(1, "").replace(
+                    tempo_120,
+                    if explicit_initial_tempo {
+                        tempo_120
+                    } else {
+                        ""
+                    },
+                ),
+                route_bar(2, &target).replace(tempo_120, ""),
+                route_bar(3, &outgoing).replace(tempo_120, tempo_180),
+                route_bar(4, &fourth).replace(tempo_120, ""),
+                route_bar(5, mark_c).replace(tempo_120, ""),
+            ],
+            false,
+        );
+        let mut settings = section_settings(key);
+        settings.metronome_enabled = true;
+        let section = native.export(&source, &settings, None).remove(0);
+        // Every reference bar declares its independently expected effective tempo.
+        let reference_score = section_score(
+            &expected
+                .iter()
+                .map(|&(bar, tempo)| {
+                    route_bar(bar, "")
+                        .replace(tempo_120, if tempo == 2 { tempo_120 } else { tempo_180 })
+                })
+                .collect::<Vec<_>>(),
+            false,
+        );
+        settings.include_whole_song = true;
+        settings.section_keys.clear();
+        eprintln!("Native reference tempo: {label}");
+        let reference = native.export(&reference_score, &settings, None).remove(0);
+        assert_audio_duration(label, &section, &reference);
+        let mut elapsed = 0.0;
+        for (played, &(written, tempo)) in expected.iter().enumerate() {
+            let offset = (elapsed * RATE).round() as usize;
+            let similarity = correlation(&section[offset..], &reference[offset..]);
+            assert!(similarity > 0.98,
+                "{label}: played bar {} should be written bar {written} at {} BPM, correlation={similarity}",
+                played + 1, tempo * 60);
+            elapsed += 4.0 / f64::from(tempo);
+        }
+    }
+}
+
 #[test]
 #[ignore = "Requires MuseScore 4.7.x, MS Basic, FFmpeg, and an isolated Linux profile"]
 fn native_rehearsal_sections_match_standalone_score() {
     let mut native = Native::new();
-    let source = section_score(false);
+    let initial = "<TimeSig><sigN>3</sigN><sigD>4</sigD></TimeSig><KeySig><concertKey>2</concertKey></KeySig><Tempo><tempo>1</tempo><text>60</text></Tempo>";
+    let tie_start = r#"<Spanner type="Tie"><Tie/><next><location><measures>1</measures><fractions>-1/2</fractions></location></next></Spanner>"#;
+    let tie_end = r#"<Spanner type="Tie"><prev><location><measures>-1</measures><fractions>1/2</fractions></location></prev></Spanner>"#;
+    let note = |duration: &str, pitch: usize, tie: &str| {
+        format!("<Chord><durationType>{duration}</durationType><Note><pitch>{pitch}</pitch><tpc>18</tpc>{tie}</Note></Chord>")
+    };
+    let rest = "<Rest><durationType>half</durationType></Rest>";
+    let at_a = |initial: &str, tie: &str| {
+        format!("<Measure><voice>{initial}<RehearsalMark><text>A</text></RehearsalMark>{}{rest}</voice></Measure>", note("quarter", 64, tie))
+    };
+    let before_b = format!(
+        "<Measure><voice>{rest}{}</voice></Measure>",
+        note("quarter", 64, tie_start)
+    );
+    let at_b = format!("<Measure><voice><RehearsalMark><text>B</text></RehearsalMark><TimeSig><sigN>2</sigN><sigD>4</sigD></TimeSig><Tempo><tempo>3</tempo><text>180</text></Tempo>{}</voice></Measure>", note("half", 64, tie_end));
+    let source = section_score(&[
+        "<Measure len=\"1/4\"><irregular>1</irregular><voice><TimeSig><sigN>4</sigN><sigD>4</sigD></TimeSig><Rest><durationType>quarter</durationType></Rest></voice></Measure>".into(),
+        format!("<Measure><voice>{initial}<Rest><durationType>measure</durationType><duration>3/4</duration></Rest></voice></Measure>"),
+        "<Measure><voice><Rest><durationType>measure</durationType><duration>3/4</duration></Rest></voice></Measure>".into(),
+        format!("<Measure><voice>{rest}{}</voice></Measure>", note("quarter", 64, tie_start)),
+        at_a("", tie_end),
+        before_b.clone(),
+        at_b.clone(),
+        format!("<Measure><voice>{}</voice></Measure>", note("half", 72, tie_start)),
+        format!("<Measure><voice><RehearsalMark><text>C</text></RehearsalMark>{}</voice></Measure>", note("half", 72, tie_end)),
+    ], true);
     let archive = practice_tracks::ScoreArchive::read_bytes(&source, "sections").unwrap();
     let sections = archive.rehearsal_sections().unwrap();
     assert_eq!(
@@ -480,27 +725,28 @@ fn native_rehearsal_sections_match_standalone_score() {
             .iter()
             .map(|s| (s.name.as_str(), s.start_measure, s.end_measure))
             .collect::<Vec<_>>(),
-        [("Intro", 1, 2), ("A", 3, 4), ("B", 5, 5)]
+        [("Intro", 1, 4), ("A", 5, 6), ("B", 7, 8), ("C", 9, 9)]
     );
-    let mut settings = options();
-    settings.parts.iter_mut().for_each(|p| {
-        p.create_track = p.key == "part-1";
-        p.include_in_background = false;
-    });
+    let mut settings = section_settings("measure-5");
     settings.metronome_enabled = true;
-    settings.include_whole_song = false;
-    settings.section_keys = vec!["measure-3".into()];
     let section = native.export(&source, &settings, None).remove(0);
     settings.include_whole_song = true;
     settings.section_keys.clear();
-    let reference = native
-        .export(&section_score(true), &settings, None)
-        .remove(0);
-    assert!(
-        (section.len() as f64 - reference.len() as f64).abs() < RATE * 0.1,
-        "Section duration differs from the standalone score: {} vs {}",
-        section.len(),
-        reference.len()
+    // Written bars 5, 6, 7, 8: repair the entry/exit ties, retaining the internal tie.
+    let reference_score = section_score(
+        &[
+            at_a(initial, ""),
+            before_b,
+            at_b,
+            format!("<Measure><voice>{}</voice></Measure>", note("half", 72, "")),
+        ],
+        false,
+    );
+    let reference = native.export(&reference_score, &settings, None).remove(0);
+    assert_audio_duration(
+        "pickup, multimeasure rests, tempo and ties",
+        &section,
+        &reference,
     );
     for beat in [1.0, 2.0, 3.0, 4.0] {
         let pulse = rms(&section, beat + 0.01, beat + 0.1);
@@ -514,7 +760,7 @@ fn native_rehearsal_sections_match_standalone_score() {
     assert!(similarity > 0.99,
         "Section start differs from standalone score: correlation={similarity}, section rms={}, reference rms={}",
         rms(&section, 0.1, 0.3), rms(&reference, 0.1, 0.3));
-    for (start, end) in [(5.1, 5.3), (6.01, 6.1), (6.2, 6.4)] {
+    for (start, end) in [(5.1, 5.3), (6.01, 6.1), (6.8, 6.9), (7.4, 7.6)] {
         let difference = db_ratio(rms(&section, start, end), rms(&reference, start, end));
         assert!(
             difference.abs() < 0.2,
@@ -522,7 +768,7 @@ fn native_rehearsal_sections_match_standalone_score() {
         );
     }
     assert!(
-        rms(&section, 6.01, 6.1) > 1e-6,
-        "Final sound was cut off at the next mark"
+        rms(&section, 7.4, 7.6) > 1e-6,
+        "Final sound was cut off before its natural decay"
     );
 }

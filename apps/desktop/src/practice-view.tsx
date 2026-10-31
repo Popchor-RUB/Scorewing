@@ -111,7 +111,7 @@ export function PracticeView({
           <Description>Measures {section.start_measure}–{section.end_measure}</Description>
         </Checkbox>)}
         <Description>{sections.length
-          ? "Sections start at the marked measure and play once, without repeats or jumps. Each range has its own output folder."
+          ? "Sections start on the first playback arrival at their mark, follow repeats and jumps, and include up to two played measures after leaving the displayed range. Each range has its own output folder."
           : "No rehearsal marks found. Whole-song export is available."}</Description>
         {!options.include_whole_song && !options.section_keys.length &&
           <p className="text-danger" role="alert">Choose the whole song or at least one rehearsal section.</p>}

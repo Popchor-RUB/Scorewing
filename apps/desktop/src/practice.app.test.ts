@@ -36,6 +36,7 @@ test("practice ranges support section-only exports, preserve choices, and count 
     assert.equal(app.find<HTMLInputElement>('[data-action="practice-whole-song"] input').checked, true);
     assert.equal(app.document.querySelectorAll('[data-section-key]').length, 3);
     assert.match(app.find('[data-section-key="measure-3"]').textContent!, /A.*Measures 3–5/s);
+    assert.match(app.find('[aria-label="Practice ranges"]').textContent!, /first playback arrival.*follow repeats and jumps.*up to two played measures after leaving the displayed range/s);
     await app.click('[data-action="practice-whole-song"]');
     await app.click('[data-action="practice-export"]');
     assert.equal(requests.length, 0);

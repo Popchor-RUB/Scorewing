@@ -12,9 +12,11 @@ whole-song tracks. Identify sections from genuine MuseScore rehearsal marks.
 - Support the existing `.mscx` and `.mscz` score inputs.
 - Offer a list of detected sections with independent selection. Whole-song export
   is also selectable and is enabled by default. Users may export sections only.
-- A section starts at the beginning of the measure containing its rehearsal mark
-  and ends immediately before the next marked measure. A mid-measure mark snaps
-  to that measure's start; it does not create a beat-level boundary.
+- A section's displayed written range starts at the beginning of the measure
+  containing its rehearsal mark and ends immediately before the next marked
+  measure. A mid-measure mark snaps to that measure's start; it does not create
+  a beat-level boundary. The range identifies the section, not every measure
+  played in its track.
 - If there are measures before the first marked measure, offer an `Intro` section
   covering them. Do not create an empty Intro when the first measure is marked.
 - The last marked section continues through the end of the score.
@@ -24,11 +26,21 @@ whole-song tracks. Identify sections from genuine MuseScore rehearsal marks.
 - Use the existing instrument selection, foreground/background sounds, background
   volume, and metronome settings for every selected section and the whole song.
   Do not add per-section mix settings.
-- Section playback starts immediately, with no count-in or preceding measure.
-  Play the written section once, ignoring repeats and navigation jumps. Preserve
-  the existing repeat/jump behavior for whole-song tracks.
-- Do not play music from the next section. Allow final notes and reverb to decay
-  naturally instead of applying a hard cutoff or fade.
+- Section playback begins at the first normal playback arrival at its marked
+  measure, preserving MuseScore's repeat/ending/jump state at that arrival.
+  It starts immediately, with no count-in or preceding measure. Follow repeats,
+  numbered endings, D.C., D.S., Coda and Fine as MuseScore plays them.
+- Finish repeats whose playback stays within the section's written range. At
+  the first playback move outside that range, include exactly two more played
+  measures, following navigation during those measures too. Stop sooner if
+  playback ends or reaches Fine; do not pad the track. Count pickups and other
+  partial measures as individual played measures.
+- For example, a next mark at measure 20 includes measures 20 and 21 before
+  stopping. If B instead repeats back to A, B's track includes the first two
+  played measures of A. Produce one track per section and selected target,
+  without later-pass variants or an overlap control.
+- Preserve the existing repeat/jump behavior for whole-song tracks. Allow final
+  notes and reverb to decay naturally instead of applying a hard cutoff or fade.
 - Place each selected range in its own ordered folder under the existing export
   directory. Use `00 - Whole song` when included, then section folders in score
   order, for example `01 - Intro`, `02 - A`, and `03 - B`. Keep the existing
@@ -65,8 +77,9 @@ one-based measure and staff numbers, for example:
 
 The option is `--region '<JSON>'` with an output score supplied through `-o`.
 The implementation uses this capability to extract all-staff section scores once
-per selected range before using the existing mixing/rendering pipeline. Native
-checks confirmed that the start and end measure numbers are both inclusive.
+per selected range from an expanded playback score before using the existing
+mixing/rendering pipeline. Native checks confirmed that the start and end
+measure numbers are both inclusive.
 
 Authoritative MuseScore 4.7 sources:
 
@@ -78,21 +91,32 @@ Authoritative MuseScore 4.7 sources:
 
 ## Implementation and verification
 
-Native MuseScore 4.7.0 checks verified measure boundaries, selection across staves,
-inherited key/meter, and part identity. A decoded MP3 comparison against an
-independently authored standalone score verifies inherited tempo, immediate
-playback, pickup handling, repeat/jump suppression, ties across both boundaries,
-final-note decay, and exclusion of the next section's music. No fixed-duration
-bar calculations or audio cropping are used.
+Native MuseScore 4.7.0 checks previously verified inclusive region boundaries,
+selection across staves, inherited key/meter and part identity. Section playback
+regressions compare against independently expected playback sequences and
+standalone scores, including inherited tempo, immediate playback, pickups,
+navigation, boundary ties and final-note decay. See [validation](VALIDATION.md)
+for the native test setup and coverage. No fixed-duration bar calculations or
+audio cropping are used.
 
 Native region export drops tempo annotations from before the section and retains
 tie references to notes outside it. The archive layer restores the preceding
 tempo at the beginning of the extracted score and removes only ties crossing its
 boundaries. Ties within the section remain intact.
 
-Section copies suppress repeats, volta navigation, and jumps without changing the
-source score or whole-song playback. MuseScore's `--unroll-repeats` expands repeats;
-it does not implement the agreed straight-through behavior and is not used.
+Native expansion restores inherited key and meter at repeat/jump destinations,
+but can leave the outgoing tempo active when the destination has no tempo mark.
+The archive layer restores the written destination's inherited tempo at each
+playback jump, including the default 120 BPM before any explicit tempo mark.
+This repair also applies to jumps within a section and within its transition tail.
+
+Section preparation uses MuseScore's playback positions and `--unroll-repeats`
+output to map written measures to playback order. It locates the selected
+section's first arrival and crops the expanded score through the two-measure
+transition tail, clamped to playback end. Invalid mappings and unreachable
+section starts fail with an explanation. Residual navigation is removed after
+expansion so the cropped score cannot execute it again. Source scores and
+whole-song playback remain unchanged.
 
 Each selected range is extracted once and reused for the chosen instrument mixes.
 The existing scheduler, progress, cancellation, and publication behavior account
@@ -110,9 +134,12 @@ The backend validates section IDs against its immutable score snapshot.
    label text. Every offered section contains at least one measure.
 3. Export only selected sections, optionally alongside the whole song, using the
    shared mix settings and ordered section directories. Reject empty selection.
-4. Verify that sections play straight through while whole-song repeats/jumps
-   retain existing behavior. Use native rendering checks for inherited musical
-   state, boundary notes, and natural decay.
+4. Verify first-arrival selection, internal repeats, forward and backward exits,
+   and navigation during the exact two-measure tail. Check alternate endings,
+   D.C./D.S./Coda/Fine and early playback end, including unreachable starts and
+   invalid native mappings. Whole-song repeats/jumps retain existing behavior.
+   Use native rendering checks for inherited musical state, pickups,
+   multimeasure rests, boundary notes and natural decay.
 5. Verify progress and cancellation across multiple ranges and mixes, plus
    completed-output preservation if a later render fails.
 

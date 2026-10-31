@@ -11,6 +11,7 @@ Rust unit/integration tests cover musical timing, transformations, file safety, 
 | CLI split/merge roundtrips, mixed name/position selectors, invalid groups and file protection | `crates/scorewing-cli/tests/cli.rs` |
 | MuseScore archives, MS Basic presets, sound roles, membership, normalization, fixed dynamics and native metronome configuration | `crates/practice-tracks/src/archive.rs` and `catalog.rs` unit tests |
 | Renderer failures/timeouts, partial results, atomic publication, metronome preference locking/restoration/crash recovery | Practice-track renderer, service and preference unit tests using isolated fake stores |
+| Rehearsal discovery, written-to-played mapping validation, first-arrival selection, internal repeats, two-measure transition tails and playback-end clamping | Practice-track archive section unit tests and service regression tests |
 | Opt-in real MuseScore MP3 gain, sound roles, dynamics, excluded-part silence and built-in metronome audio/restoration | `crates/practice-tracks/tests/native.rs` |
 
 Before removing the reference suite, the expanded Rust workspace tests passed alongside all 73 Python reference cases and 42 Rust-engine parity cases. Equivalent assertions extend existing Rust tests where possible rather than duplicating each Python test function. Ambiguous ties/slurs retain the current Rust warning-and-export behavior. Archive path tests exercise raw member names directly, replacing the Python-specific separator monkeypatch.
@@ -49,11 +50,29 @@ cargo test -p practice-tracks --test native --locked -- --ignored --nocapture
 
 GUI installations retain their ordinary display environment; the two Qt platform overrides above are for this headless test. Native Windows/macOS rendering and preference restoration require verification on their respective hosts. Windows renderer code can be type-checked against the Windows APIs, but that alone does not establish native process cleanup or audio compatibility.
 
-The native rehearsal-section test compares an extracted section against an independently
-authored standalone score. It covers an earlier pickup, inherited 60 BPM and 3/4 meter,
-repeat/jump suppression, immediate playback, ties crossing both boundaries, and natural
-decay without the next section's music. It passed with the official MuseScore 4.7.0
-AppImage and bundled MS Basic. A separate native region check verified inclusive
-measure boundaries, all-staff selection, and inherited key signature and part identity.
-Native region export drops earlier tempo annotations and retains external tie references;
-section preparation repairs both before applying the existing instrument mixes.
+Rehearsal-section regressions use independently expected playback sequences and
+standalone scores. The required native coverage includes first arrival at the selected
+mark, repeats within its written range, a repeat back to a previous section, numbered
+endings, D.C./D.S./Coda/Fine, and navigation during the two played measures after the
+first exit. Tracks stop sooner at playback end or Fine, without padding. Pickups and
+other partial measures count as individual played measures; multimeasure rests must
+map to the same expanded measure order as MuseScore playback positions.
+
+Native section checks also cover inherited tempo and meter, immediate playback, ties
+crossing both extraction boundaries, and natural decay after the transition tail.
+All three section tests passed together with MuseScore 4.7.0 on Linux: seven
+navigation/audio cases, the standalone pickup/rest/tempo/tie reference, and
+independent internal-repeat/D.S. references proving inherited/default tempo
+restoration at playback jumps. The existing general native audio acceptance test
+passed separately. Navigation fixtures keep controls and notes in the same primary
+voice; an empty primary voice caused a native expansion crash during fixture development.
+A previous MuseScore 4.7.0 region check verified inclusive measure boundaries,
+all-staff selection, inherited key signature and part identity. Native region export
+drops earlier tempo annotations and retains external tie references; section preparation
+repairs both before applying the existing instrument mixes. Native unrolling also
+omits inherited tempo at jump destinations; playback preparation restores its
+normalized numeric rate, including default 120 BPM before any tempo mark. Native
+timing checks confirmed key and meter are already restored by expansion.
+Skipping the ignored native
+suite does not establish playback correctness. Frontend workflow tests retain the
+written measure labels and verify the explanation of repeats, jumps and transition tails.

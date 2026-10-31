@@ -42,6 +42,37 @@ impl Fixture {
         drop(zip);
         self.bytes.clear();
         source.write(&mut self.bytes).unwrap();
+        let mut expanded = source.clone();
+        for staff in expanded
+            .get_mut_child("Score")
+            .unwrap()
+            .children
+            .iter_mut()
+            .filter_map(scorewing_core::XMLNode::as_mut_element)
+            .filter(|e| e.name == "Staff")
+        {
+            let measures: Vec<_> = staff
+                .children
+                .iter()
+                .filter_map(scorewing_core::XMLNode::as_element)
+                .filter(|e| e.name == "Measure")
+                .cloned()
+                .collect();
+            staff.children = [0, 1, 2, 1, 2]
+                .map(|i| scorewing_core::XMLNode::Element(measures[i].clone()))
+                .into();
+        }
+        let mut expanded_bytes = vec![];
+        expanded.write(&mut expanded_bytes).unwrap();
+        ScoreArchive::read_bytes(&expanded_bytes, "expanded")
+            .unwrap()
+            .write(&self.dir.path().join("expanded.mscz"))
+            .unwrap();
+        fs::write(
+            self.dir.path().join("playback.mpos"),
+            br#"<score><elements><element id="0"/><element id="1"/><element id="2"/></elements><events><event elid="0" position="0"/><event elid="1" position="1000"/><event elid="2" position="2000"/><event elid="1" position="3000"/><event elid="2" position="4000"/></events></score>"#,
+        )
+        .unwrap();
         for staff in source
             .get_mut_child("Score")
             .unwrap()
@@ -50,7 +81,14 @@ impl Fixture {
             .filter_map(scorewing_core::XMLNode::as_mut_element)
             .filter(|e| e.name == "Staff")
         {
-            staff.children.truncate(1);
+            let first_measure = staff
+                .children
+                .iter()
+                .filter_map(scorewing_core::XMLNode::as_element)
+                .find(|e| e.name == "Measure")
+                .unwrap()
+                .clone();
+            staff.children = vec![scorewing_core::XMLNode::Element(first_measure); 3];
         }
         let mut region = vec![];
         source.write(&mut region).unwrap();
@@ -70,7 +108,9 @@ impl Fixture {
 root="$(dirname "$0")"
 if [ "$1" = "--version" ]; then echo 'MuseScore Studio 4.7.5'; exit 0; fi
 if [ "$1" = "--sound-profile" ]; then echo normalized >> "$root/normalizations"; cp "$5" "$4"; exit $?; fi
-if [ "$1" = "--region" ]; then printf '%s\n' "$2" >> "$root/regions"; cp "$5" "$root/straight.mscz"; cp "$root/region.mscz" "$4"; exit $?; fi
+if [ "$1" = "-o" ]; then echo mapped >> "$root/preparations"; cp "$root/playback.mpos" "$2"; exit $?; fi
+if [ "$1" = "--unroll-repeats" ]; then echo unrolled >> "$root/preparations"; cp "$root/expanded.mscz" "$3"; exit $?; fi
+if [ "$1" = "--region" ]; then printf '%s\n' "$2" >> "$root/regions"; cp "$5" "$root/linear.mscz"; cp "$root/region.mscz" "$4"; exit $?; fi
 track="$(basename "$(dirname "$5")")"
 n="${{track#track-}}"
 cp "$5" "$root/mix-$n.mscz" || exit 92
@@ -362,6 +402,7 @@ fn two_workers_overlap_bound_concurrency_and_publish_in_completion_order() {
         fs::read_to_string(fixture.dir.path().join("normalizations")).unwrap(),
         "normalized\n"
     );
+    assert!(!fixture.dir.path().join("preparations").exists());
     let mix1 = fixture.dir.path().join("mix-0001.mscz");
     let mix2 = fixture.dir.path().join("mix-0002.mscz");
     assert_ne!(
@@ -543,8 +584,19 @@ fn selected_ranges_share_mix_settings_and_render_once_per_range() {
             .collect();
         assert_eq!(regions.len(), 2, "extract each section once, before mixing");
         assert_eq!(regions[0]["start"]["measure"], 2);
+        assert_eq!(regions[0]["end"]["measure"], 4);
         assert_eq!(regions[0]["end"]["staff"], 2);
         assert_eq!(regions[1]["start"]["measure"], 3);
+        assert_eq!(regions[1]["end"]["measure"], 5);
+        assert_eq!(
+            fs::read_to_string(fixture.dir.path().join("normalizations")).unwrap(),
+            "normalized\n"
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.dir.path().join("preparations")).unwrap(),
+            "mapped\nunrolled\n",
+            "prepare native playback once per export, shared by all sections and mixes"
+        );
         let keys: Vec<_> = report.completed.iter().map(|t| t.key.as_str()).collect();
         assert_eq!(
             &keys[keys.len() - 4..],
@@ -560,12 +612,12 @@ fn selected_ranges_share_mix_settings_and_render_once_per_range() {
             assert!(path.is_file());
             assert!(path.parent().unwrap().parent().unwrap() == Path::new(&report.directory));
         }
-        let straight = String::from_utf8(archive_entry(
-            &fixture.dir.path().join("straight.mscz"),
+        let linear = String::from_utf8(archive_entry(
+            &fixture.dir.path().join("linear.mscz"),
             "score.mscx",
         ))
         .unwrap();
-        assert!(!straight.contains("startRepeat") && !straight.contains("endRepeat"));
+        assert!(!linear.contains("startRepeat") && !linear.contains("endRepeat"));
         fixture.assert_clean();
     }
 }

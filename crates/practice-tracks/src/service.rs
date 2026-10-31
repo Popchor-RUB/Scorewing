@@ -156,9 +156,43 @@ fn export_with_preference(
             ranges.push((None, normalized.clone()));
         }
         if !sections.is_empty() {
-            let straight_path = staging.path().join("straight.mscz");
-            normalized.without_repeats().write(&straight_path)?;
-            for section in &sections {
+            let playback = normalized.playback_source();
+            let playback_path = staging.path().join("playback.mscz");
+            let positions_path = staging.path().join("playback.mpos");
+            let expanded_path = staging.path().join("expanded.mscz");
+            playback.write(&playback_path)?;
+            renderer::run(
+                &executable,
+                &[
+                    "-o".into(),
+                    positions_path.as_os_str().into(),
+                    playback_path.as_os_str().into(),
+                ],
+                CONVERSION_TIMEOUT,
+                cancelled,
+            )?;
+            renderer::run(
+                &executable,
+                &[
+                    "--unroll-repeats".into(),
+                    "-o".into(),
+                    expanded_path.as_os_str().into(),
+                    playback_path.as_os_str().into(),
+                ],
+                CONVERSION_TIMEOUT,
+                cancelled,
+            )?;
+            let mut expanded =
+                ScoreArchive::read_bytes(&read_bounded_score(&expanded_path)?, "expanded.mscz")?;
+            let played_ranges = playback.prepare_playback(
+                &mut expanded,
+                &read_bounded_score(&positions_path)?,
+                &sections,
+            )?;
+            let linear = expanded.without_repeats();
+            let linear_path = staging.path().join("linear.mscz");
+            linear.write(&linear_path)?;
+            for (section, played_range) in sections.iter().zip(&played_ranges) {
                 check_cancelled(cancelled)?;
                 progress(Progress {
                     stage: format!("Preparing {}", section.name),
@@ -171,18 +205,18 @@ fn export_with_preference(
                     &executable,
                     &[
                         "--region".into(),
-                        normalized.region(section).to_string().into(),
+                        linear.region(played_range).to_string().into(),
                         "-o".into(),
                         region_path.as_os_str().into(),
-                        straight_path.as_os_str().into(),
+                        linear_path.as_os_str().into(),
                     ],
                     CONVERSION_TIMEOUT,
                     cancelled,
                 )?;
                 let mut region =
                     ScoreArchive::read_bytes(&read_bounded_score(&region_path)?, "section.mscz")?;
-                region.verify_region(&normalized, section)?;
-                region.prepare_section(&normalized, section);
+                region.verify_region(&linear, played_range)?;
+                region.prepare_section(&linear, played_range);
                 region.merge_assets_from(&normalized);
                 ranges.push((Some(section), region));
             }
@@ -447,13 +481,13 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
 fn read_bounded_score(path: &Path) -> Result<Vec<u8>> {
     use std::io::Read;
     let file = File::open(path)
-        .map_err(|e| format!("MuseScore did not create the normalized score: {e}"))?;
+        .map_err(|e| format!("Cannot read MuseScore output {}: {e}", path.display()))?;
     let mut bytes = vec![];
     file.take(64 * 1024 * 1024 + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     if bytes.len() > 64 * 1024 * 1024 {
-        return Err("Normalized score exceeds the 64 MiB limit.".into());
+        return Err("MuseScore output exceeds the 64 MiB limit.".into());
     }
     Ok(bytes)
 }

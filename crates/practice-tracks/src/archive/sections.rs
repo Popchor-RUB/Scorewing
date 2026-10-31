@@ -1,5 +1,6 @@
 use super::*;
 use crate::PracticeSection;
+use std::ops::RangeInclusive;
 
 impl ScoreArchive {
     pub fn rehearsal_sections(&self) -> Result<Vec<PracticeSection>> {
@@ -7,7 +8,7 @@ impl ScoreArchive {
         let mut measure_count = None;
         let mut consistent = true;
         for staff in children(self.master(), "Staff") {
-            let measures: Vec<_> = children(staff, "Measure").collect();
+            let measures: Vec<_> = written_measures(staff).collect();
             if measure_count.is_some_and(|count| count != measures.len()) {
                 consistent = false;
             }
@@ -76,10 +77,118 @@ impl ScoreArchive {
             .collect())
     }
 
-    pub(crate) fn region(&self, section: &PracticeSection) -> Value {
+    pub(crate) fn playback_source(&self) -> Self {
+        let mut score = self.clone();
+        let master = score.master_mut();
+        if master.get_child("Style").is_none() {
+            master
+                .children
+                .insert(0, XMLNode::Element(Element::new("Style")));
+        }
+        set_child(
+            master.get_mut_child("Style").unwrap(),
+            "createMultiMeasureRests",
+            "0",
+        );
+        for staff in master
+            .children
+            .iter_mut()
+            .filter_map(XMLNode::as_mut_element)
+            .filter(|n| n.name == "Staff")
+        {
+            // Cached layout bars otherwise collapse .mpos IDs and are not written measures.
+            staff.children.retain(|child| {
+                child.as_element().is_none_or(|n| {
+                    n.name != "Measure" || n.get_child("multiMeasureRest").is_none()
+                })
+            });
+        }
+        score
+    }
+
+    pub(crate) fn prepare_playback(
+        &self,
+        expanded: &mut Self,
+        positions: &[u8],
+        sections: &[PracticeSection],
+    ) -> Result<Vec<RangeInclusive<usize>>> {
+        expanded.verify_normalized(self)?;
+        let written = consistent_measure_count(self)?;
+        let played = consistent_measure_count(expanded)?;
+        let map = parse_xml(positions, "playback.mpos")
+            .map_err(|e| format!("Invalid MuseScore playback positions: {e}"))?;
+        let invalid = || "MuseScore playback positions do not match the expanded score".to_owned();
+        if map.name != "score" {
+            return Err(invalid());
+        }
+        let elements = map.get_child("elements").ok_or_else(invalid)?;
+        let ids: Vec<_> = children(elements, "element")
+            .map(|node| {
+                node.attributes
+                    .get("id")
+                    .and_then(|id| id.parse::<usize>().ok())
+            })
+            .collect();
+        if ids.len() != written || ids.iter().enumerate().any(|(index, id)| *id != Some(index)) {
+            return Err(invalid());
+        }
+        let events = map.get_child("events").ok_or_else(invalid)?;
+        let mut route = vec![];
+        let mut previous = 0;
+        for event in children(events, "event") {
+            let id = event
+                .attributes
+                .get("elid")
+                .and_then(|id| id.parse::<usize>().ok())
+                .ok_or_else(invalid)?;
+            let position = event
+                .attributes
+                .get("position")
+                .and_then(|p| p.parse::<u64>().ok())
+                .ok_or_else(invalid)?;
+            if id >= written || position < previous || (route.is_empty() && position != 0) {
+                return Err(invalid());
+            }
+            previous = position;
+            route.push(id + 1);
+        }
+        if route.len() != played {
+            return Err(invalid());
+        }
+        let ranges = sections
+            .iter()
+            .map(|section| section_playback_range(&route, section))
+            .collect::<Result<Vec<_>>>()?;
+        let tempos = inherited_tempos(self);
+        let staff = expanded.master_mut().get_mut_child("Staff").unwrap();
+        for (index, measure) in staff
+            .children
+            .iter_mut()
+            .filter_map(XMLNode::as_mut_element)
+            .filter(|n| n.name == "Measure")
+            .enumerate()
+            .skip(1)
+        {
+            if route[index] != route[index - 1] + 1 {
+                // Native unrolling restores meter/key at jumps, but drops inherited tempo.
+                let tempo = tempos[route[index] - 1]
+                    .as_deref()
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        let mut tempo = Element::new("Tempo");
+                        set_child(&mut tempo, "tempo", "2");
+                        tempo
+                    });
+                insert_initial_tempo(measure, tempo);
+            }
+        }
+        Ok(ranges)
+    }
+
+    pub(crate) fn region(&self, range: &RangeInclusive<usize>) -> Value {
         json!({
-            "start": {"measure": section.start_measure, "staff": 1},
-            "end": {"measure": section.end_measure, "staff": children(self.master(), "Staff").count()}
+            "start": {"measure": range.start(), "staff": 1},
+            "end": {"measure": range.end(), "staff": children(self.master(), "Staff").count()}
         })
     }
 
@@ -99,9 +208,9 @@ impl ScoreArchive {
         score
     }
 
-    pub(crate) fn verify_region(&self, source: &Self, section: &PracticeSection) -> Result<()> {
+    pub(crate) fn verify_region(&self, source: &Self, range: &RangeInclusive<usize>) -> Result<()> {
         self.verify_normalized(source)?;
-        let expected = section.end_measure - section.start_measure + 1;
+        let expected = range.end() - range.start() + 1;
         let staves: Vec<_> = children(self.master(), "Staff").collect();
         if staves.is_empty()
             || staves.len() != children(source.master(), "Staff").count()
@@ -114,7 +223,7 @@ impl ScoreArchive {
         Ok(())
     }
 
-    pub(crate) fn prepare_section(&mut self, source: &Self, section: &PracticeSection) {
+    pub(crate) fn prepare_section(&mut self, source: &Self, range: &RangeInclusive<usize>) {
         for staff in self
             .master_mut()
             .children
@@ -140,41 +249,100 @@ impl ScoreArchive {
                 });
             }
         }
-        let mut active = None;
-        for staff in children(source.master(), "Staff") {
-            for (index, measure) in children(staff, "Measure")
-                .enumerate()
-                .take(section.start_measure - 1)
-            {
-                visit(measure, &mut |node| {
-                    if node.name == "Tempo" && active.as_ref().is_none_or(|(at, _)| index >= *at) {
-                        active = Some((index, node.clone()));
-                    }
-                });
-            }
-        }
-        if let Some((_, tempo)) = active {
+        if let Some(tempo) = inherited_tempos(source)[range.start() - 1].as_deref() {
             // Native region export drops tempo annotations before the selected measures.
-            let staff = self
+            let measure = self
                 .master_mut()
-                .children
-                .iter_mut()
-                .filter_map(XMLNode::as_mut_element)
-                .find(|node| node.name == "Staff")
-                .unwrap();
-            let measure = staff.get_mut_child("Measure").unwrap();
-            if measure.get_child("voice").is_none() {
-                measure
-                    .children
-                    .push(XMLNode::Element(Element::new("voice")));
-            }
-            measure
-                .get_mut_child("voice")
+                .get_mut_child("Staff")
                 .unwrap()
-                .children
-                .insert(0, XMLNode::Element(tempo));
+                .get_mut_child("Measure")
+                .unwrap();
+            insert_initial_tempo(measure, tempo.clone());
         }
     }
+}
+
+fn inherited_tempos(score: &ScoreArchive) -> Vec<Option<Arc<Element>>> {
+    let count = children(score.master(), "Staff")
+        .next()
+        .map_or(0, |staff| children(staff, "Measure").count());
+    let mut changes = vec![None; count];
+    for staff in children(score.master(), "Staff") {
+        for (index, measure) in children(staff, "Measure").enumerate() {
+            visit(measure, &mut |node| {
+                if node.name == "Tempo" {
+                    let mut tempo = node.clone();
+                    tempo
+                        .children
+                        .retain(|child| child.as_element().is_none_or(|e| e.name != "eid"));
+                    // Restore the normalized rate; do not reinterpret relative tempo text.
+                    set_child(&mut tempo, "followText", "0");
+                    changes[index] = Some(Arc::new(tempo));
+                }
+            });
+        }
+    }
+    let mut active = None;
+    changes
+        .into_iter()
+        .map(|change| {
+            let inherited = active.clone();
+            if change.is_some() {
+                active = change;
+            }
+            inherited
+        })
+        .collect()
+}
+
+fn insert_initial_tempo(measure: &mut Element, tempo: Element) {
+    if measure.get_child("voice").is_none() {
+        measure
+            .children
+            .push(XMLNode::Element(Element::new("voice")));
+    }
+    measure
+        .get_mut_child("voice")
+        .unwrap()
+        .children
+        .insert(0, XMLNode::Element(tempo));
+}
+
+fn written_measures(staff: &Element) -> impl Iterator<Item = &Element> {
+    children(staff, "Measure").filter(|measure| measure.get_child("multiMeasureRest").is_none())
+}
+
+fn consistent_measure_count(score: &ScoreArchive) -> Result<usize> {
+    let counts: Vec<_> = children(score.master(), "Staff")
+        .map(|staff| {
+            let count = written_measures(staff).count();
+            (count, children(staff, "Measure").count())
+        })
+        .collect();
+    match counts.first() {
+        Some(&(count, _)) if count > 0 && counts.iter().all(|n| *n == (count, count)) => Ok(count),
+        _ => Err("MuseScore playback score has empty or inconsistent measure counts".into()),
+    }
+}
+
+fn section_playback_range(
+    route: &[usize],
+    section: &PracticeSection,
+) -> Result<RangeInclusive<usize>> {
+    let start = route
+        .iter()
+        .position(|n| *n == section.start_measure)
+        .ok_or_else(|| {
+            format!(
+                "Rehearsal section {} is unreachable in score playback",
+                section.name
+            )
+        })?;
+    let end = route[start..]
+        .iter()
+        .position(|n| !(section.start_measure..=section.end_measure).contains(n))
+        .map_or(route.len(), |exit| (start + exit + 2).min(route.len()));
+    Ok(start + 1..=end)
 }
 
 fn tie_outside_section(spanner: &Element, measure: i64, count: i64) -> bool {
@@ -315,8 +483,9 @@ mod tests {
         );
         let mut region =
             score("<Measure><voice><Chord/><Tempo><tempo>3</tempo></Tempo></voice></Measure>");
-        region.verify_region(&source, section).unwrap();
-        region.prepare_section(&source, section);
+        let range = section.start_measure..=section.end_measure;
+        region.verify_region(&source, &range).unwrap();
+        region.prepare_section(&source, &range);
         let voice = region
             .master()
             .get_child("Staff")
@@ -351,8 +520,9 @@ mod tests {
           <Spanner type="Tie"><Tie/><next><location><measures>1</measures></location></next></Spanner>
           </Note></Chord></voice></Measure>"#,
         );
-        region.verify_region(&source, section).unwrap();
-        region.prepare_section(&source, section);
+        let range = section.start_measure..=section.end_measure;
+        region.verify_region(&source, &range).unwrap();
+        region.prepare_section(&source, &range);
         let mut types = vec![];
         visit(region.master(), &mut |node| {
             if node.name == "Spanner" {
@@ -360,5 +530,182 @@ mod tests {
             }
         });
         assert_eq!(types, ["Tie", "Slur", "Tie"]);
+    }
+
+    #[test]
+    fn section_ranges_follow_first_arrival_internal_repeats_and_two_played_tail_bars() {
+        let section = PracticeSection {
+            key: "measure-3".into(),
+            name: "B".into(),
+            start_measure: 3,
+            end_measure: 4,
+        };
+        for (route, expected) in [
+            (vec![1, 2, 3, 4, 5, 6, 7], 3..=6),
+            (vec![1, 2, 3, 4, 1, 2, 3, 4], 3..=6),
+            (vec![1, 2, 3, 4, 3, 4, 5, 6, 7], 3..=8),
+            // Navigation during the tail can return into B; it still counts as the second bar.
+            (vec![1, 2, 3, 4, 1, 3, 4, 5], 3..=6),
+            (vec![1, 2, 3, 4, 5], 3..=5),
+            (vec![1, 2, 3], 3..=3),
+            (vec![1, 2, 3, 4, 3, 4], 3..=6),
+        ] {
+            assert_eq!(
+                section_playback_range(&route, &section).unwrap(),
+                expected,
+                "{route:?}"
+            );
+        }
+        assert!(section_playback_range(&[1, 2, 5, 6], &section)
+            .unwrap_err()
+            .contains("unreachable"));
+    }
+
+    fn positions(ids: &[usize], events: &[usize]) -> Vec<u8> {
+        format!(
+            "<score><elements>{}</elements><events>{}</events></score>",
+            ids.iter()
+                .map(|id| format!("<element id=\"{id}\"/>"))
+                .collect::<String>(),
+            events
+                .iter()
+                .enumerate()
+                .map(|(at, id)| format!("<event elid=\"{id}\" position=\"{}\"/>", at * 1000))
+                .collect::<String>()
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn validates_native_mapping_before_using_played_coordinates() {
+        let source = score("<Measure/><Measure><voice><RehearsalMark><text>B</text></RehearsalMark></voice></Measure><Measure/>");
+        let mut expanded = score(&"<Measure/>".repeat(5));
+        let sections = source.rehearsal_sections().unwrap();
+        let native = positions(&[0, 1, 2], &[0, 1, 0, 1, 2]);
+        assert_eq!(
+            source
+                .prepare_playback(&mut expanded, &native, &sections)
+                .unwrap(),
+            [1..=3, 2..=4]
+        );
+        for invalid in [
+            positions(&[0, 1], &[0, 1, 0, 1, 2]),
+            positions(&[0, 2, 1], &[0, 1, 0, 1, 2]),
+            positions(&[0, 1, 2], &[0, 1, 0, 1, 3]),
+            positions(&[0, 1, 2], &[0, 1, 2]),
+            b"<score><elements/><events/></score>".to_vec(),
+            b"not XML".to_vec(),
+            native
+                .iter()
+                .copied()
+                .chain(b"garbage".iter().copied())
+                .collect(),
+        ] {
+            assert!(source
+                .prepare_playback(&mut expanded, &invalid, &sections)
+                .is_err());
+        }
+        assert!(source
+            .prepare_playback(&mut score("<Measure/>"), &native, &sections)
+            .is_err());
+        assert!(consistent_measure_count(&score("")).is_err());
+    }
+
+    #[test]
+    fn collapsed_rest_layout_does_not_change_written_section_metadata_or_mapping() {
+        let source = score("<Measure/><Measure len=\"8/4\"><multiMeasureRest>2</multiMeasureRest></Measure><Measure/><Measure><voice><RehearsalMark><text>A</text></RehearsalMark></voice></Measure>");
+        let sections = source.rehearsal_sections().unwrap();
+        assert_eq!((sections[0].start_measure, sections[0].end_measure), (1, 2));
+        assert_eq!((sections[1].start_measure, sections[1].end_measure), (3, 3));
+        let playback = source.playback_source();
+        assert!(
+            consistent_measure_count(&source).is_err(),
+            "cached layout bars must be removed before playback mapping"
+        );
+        assert_eq!(playback.rehearsal_sections().unwrap(), sections);
+        assert_eq!(
+            children(playback.master().get_child("Staff").unwrap(), "Measure").count(),
+            3
+        );
+        assert_eq!(
+            child_text(
+                playback.master().get_child("Style").unwrap(),
+                "createMultiMeasureRests"
+            )
+            .as_deref(),
+            Some("0")
+        );
+        assert_eq!(
+            children(source.master().get_child("Staff").unwrap(), "Measure").count(),
+            4
+        );
+        assert_eq!(
+            playback
+                .prepare_playback(
+                    &mut playback.clone(),
+                    &positions(&[0, 1, 2], &[0, 1, 2]),
+                    &sections
+                )
+                .unwrap(),
+            [1..=3, 3..=3]
+        );
+    }
+
+    #[test]
+    fn expanded_jumps_restore_inherited_and_default_tempo_before_local_changes() {
+        let source = score("<Measure/><Measure/><Measure><voice><Tempo><tempo>3</tempo><followText>1</followText><eid>original</eid></Tempo></voice></Measure><Measure/>");
+        // Native expansion has omitted the default inherited tempo at the jump back to bar 2.
+        let mut expanded = score("<Measure/><Measure/><Measure><voice><Tempo><tempo>3</tempo></Tempo></voice></Measure><Measure/><Measure/><Measure><voice><Tempo><tempo>3</tempo></Tempo></voice></Measure>");
+        source
+            .prepare_playback(
+                &mut expanded,
+                &positions(&[0, 1, 2, 3], &[0, 1, 2, 3, 1, 2]),
+                &[],
+            )
+            .unwrap();
+        let bars: Vec<_> =
+            children(expanded.master().get_child("Staff").unwrap(), "Measure").collect();
+        assert_eq!(
+            child_text(
+                bars[4]
+                    .get_child("voice")
+                    .unwrap()
+                    .get_child("Tempo")
+                    .unwrap(),
+                "tempo"
+            )
+            .as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            child_text(
+                bars[5]
+                    .get_child("voice")
+                    .unwrap()
+                    .get_child("Tempo")
+                    .unwrap(),
+                "tempo"
+            )
+            .as_deref(),
+            Some("3")
+        );
+        let source = score("<Measure><voice><Tempo><tempo>1</tempo><followText>1</followText><eid>original</eid></Tempo></voice></Measure><Measure/><Measure><voice><Tempo><tempo>3</tempo></Tempo></voice></Measure>");
+        let mut expanded = score("<Measure/><Measure/><Measure/><Measure><voice><Tempo><tempo>4</tempo></Tempo></voice></Measure><Measure/>");
+        source
+            .prepare_playback(&mut expanded, &positions(&[0, 1, 2], &[0, 1, 2, 1, 2]), &[])
+            .unwrap();
+        let bar = children(expanded.master().get_child("Staff").unwrap(), "Measure")
+            .nth(3)
+            .unwrap();
+        let tempos: Vec<_> = children(bar.get_child("voice").unwrap(), "Tempo").collect();
+        assert_eq!(
+            tempos
+                .iter()
+                .map(|t| child_text(t, "tempo").unwrap())
+                .collect::<Vec<_>>(),
+            ["1", "4"]
+        );
+        assert_eq!(child_text(tempos[0], "followText").as_deref(), Some("0"));
+        assert!(tempos[0].get_child("eid").is_none());
     }
 }

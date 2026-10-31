@@ -312,6 +312,8 @@ test("successful practice exports open a dismissible completion modal with a ret
     await act(async () => finish(result(directory)));
     await app.settle();
     assert.equal(app.document.querySelector('[role="progressbar"]'), null);
+    assert.equal(app.document.querySelector(".practice-results"), null, "successful exports show results only in the modal");
+    assert.equal(app.find(".status").textContent, "Practice tracks created.");
   };
   try {
     await app.click('[data-action="open"]');
@@ -343,7 +345,8 @@ test("successful practice exports open a dismissible completion modal with a ret
     await app.click('[data-action="practice-export-done"]');
     assert.equal(app.document.querySelector('[role="dialog"]'), null);
     assert.equal(app.document.activeElement?.getAttribute("data-action"), "practice-export", "focus returns to the export action");
-    assert.ok(app.find(".practice-results"), "dismissing keeps the export results");
+    assert.equal(app.document.querySelector(".practice-results"), null, "dismissing does not show export paths in the main window");
+    assert.ok(!app.document.body.textContent!.includes(directory), "the output path disappears with the modal");
     await app.click("#practice-metronome");
     await app.event("practice-progress", { id: "practice", completed: 1, running: 0, total: 1, stage: "Late event" });
     assert.equal(app.document.querySelector('[role="dialog"]'), null, "rerenders do not reopen a dismissed modal");

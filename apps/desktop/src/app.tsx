@@ -426,9 +426,13 @@ export function mountApp(container: HTMLElement): () => void {
           id: session.document.id, options, config: { ...config },
         });
         if (!disposed && current === session) {
-          session.result = result ?? undefined;
-          if (result && !result.cancelled && !result.error) completedExport = result;
-          notify(result ? `${result.cancelled ? "Rendering cancelled." : result.error ? "Rendering stopped." : "Practice tracks created."} ${result.completed.length} completed tracks retained in ${result.directory}${result.error ? `\n${result.error}` : ""}` : "Export cancelled.", !!result?.error);
+          if (result && !result.cancelled && !result.error) {
+            completedExport = result;
+            notify("Practice tracks created.");
+          } else {
+            session.result = result ?? undefined;
+            notify(result ? `${result.cancelled ? "Rendering cancelled." : "Rendering stopped."} ${result.completed.length} completed tracks retained in ${result.directory}${result.error ? `\n${result.error}` : ""}` : "Export cancelled.", !!result?.error);
+          }
         }
       } else {
         const result = await invoke<{ path: string; warnings: string[] } | null>("export_document", {

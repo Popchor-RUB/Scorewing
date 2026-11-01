@@ -1,0 +1,175 @@
+name: Build platform installers
+
+on:
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+
+jobs:
+  platform:
+    strategy:
+      fail-fast: false
+      # Each release upload merges latest.json; preserve all platform entries.
+      max-parallel: ${{ inputs.release && 1 || 4 }}
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            artifact: scorewing-linux-x64
+          - runner: windows-2022
+            artifact: scorewing-windows-x64
+          - runner: macos-15-intel
+            artifact: scorewing-macos-x64
+          - runner: macos-15
+            artifact: scorewing-macos-arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      APPLE_SIGNING_ENABLED: ${{ github.repository == 'Popchor-RUB/Scorewing' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+      - name: Validate stable version tag and signing setup
+        if: inputs.release
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const config = JSON.parse(readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
+          const frontend = JSON.parse(readFileSync('apps/desktop/package.json', 'utf8'));
+          const rust = readFileSync('apps/desktop/src-tauri/Cargo.toml', 'utf8').match(/^version = "([^"]+)"/m)?.[1];
+          assert.match(config.version, /^\d+\.\d+\.\d+$/, 'Only stable versions belong on the latest-release feed');
+          assert.equal(process.env.GITHUB_REF_NAME, `v${config.version}`, 'Tag must match the app version');
+          assert.equal(frontend.version, config.version, 'Frontend version must match');
+          assert.equal(rust, config.version, 'Rust desktop version must match');
+          assert.ok(process.env.TAURI_SIGNING_PRIVATE_KEY, 'Set the TAURI_SIGNING_PRIVATE_KEY Actions secret');
+          JS
+      - name: Refuse to modify a published release
+        if: inputs.release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const { data } = await github.rest.repos.getReleaseByTag({
+                owner: 'Popchor-RUB', repo: 'Scorewing', tag: context.ref.replace('refs/tags/', '')
+              });
+              if (!data.draft) core.setFailed('This release is already published; use a new version tag.');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+      - name: Prepare Apple signing and notarization
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_PRIVATE_KEY: ${{ secrets.APPLE_API_PRIVATE_KEY }}
+        run: node tools/prepare-apple-signing.mjs
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libclang-dev libssl-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf file libfuse2t64 xdg-utils
+      - name: Windows XML dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          vcpkg install "libxml2[core]:x64-windows-static"
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          "VCPKGRS_TRIPLET=x64-windows-static" >> $env:GITHUB_ENV
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake pkg-config llvm
+          if [[ "$(uname -m)" == arm64 ]]; then export MACOSX_DEPLOYMENT_TARGET=11.0; else export MACOSX_DEPLOYMENT_TARGET=10.13; fi
+          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+      - name: Static XML dependencies
+        if: runner.os != 'Windows'
+        run: |
+          bash tools/build-libxml2.sh "$RUNNER_TEMP/libxml2"
+          echo "PKG_CONFIG_PATH=$RUNNER_TEMP/libxml2/lib/pkgconfig" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.runner }}-${{ hashFiles('.github/workflows/build-platforms.yml', 'tools/build-libxml2.sh') }}
+      - name: Frontend dependencies and checks
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Rust and tooling checks
+        run: |
+          node --test tools/*.test.mjs
+          cargo fmt --all -- --check
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo build -p scorewing-cli --release --locked
+      - name: Build installers and upload tag releases
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.release && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.release && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true' && secrets.APPLE_API_KEY || '' }}
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+        with:
+          owner: Popchor-RUB
+          repo: Scorewing
+          projectPath: apps/desktop
+          tagName: ${{ inputs.release && github.ref_name || '' }}
+          releaseName: ${{ inputs.release && format('Scorewing {0}', github.ref_name) || '' }}
+          releaseBody: Review all platform installers and latest.json before publishing this release.
+          releaseDraft: true
+          prerelease: false
+          updaterJsonPreferNsis: true
+          args: >-
+            ${{ inputs.release && '--config ''{"bundle":{"createUpdaterArtifacts":true}}''' || '' }}
+            ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED != 'true' && '--no-sign' || '' }}
+            -- --locked
+      - name: Verify macOS signature and notarization ticket
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true'
+        run: |
+          codesign --verify --deep --strict target/release/bundle/macos/Scorewing.app
+          xcrun stapler validate target/release/bundle/macos/Scorewing.app
+      - name: Smoke test CLI and linkage
+        shell: bash
+        run: |
+          target/release/scorewing --version
+          node tools/check-linkage.mjs target/release/scorewing${{ runner.os == 'Windows' && '.exe' || '' }}
+          node tools/check-linkage.mjs --desktop target/release/scorewing-desktop${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Collect artifacts and checksums
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp docs/THIRD_PARTY_NOTICES.txt dist/
+          cp target/release/scorewing.exe dist/ 2>/dev/null || cp target/release/scorewing dist/
+          find target/release/bundle -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.tar.gz' -o -name '*.sig' \) -exec cp {} dist/ \;
+          node tools/checksum.mjs dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/*
+          if-no-files-found: error
+      - name: Remove notarization private key
+        if: always() && runner.os == 'macOS'
+        run: rm -f "$RUNNER_TEMP/scorewing-notarization.p8"

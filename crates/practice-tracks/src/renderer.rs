@@ -135,6 +135,7 @@ pub(crate) fn find_soundfont(executable: &Path, explicit: Option<&Path>) -> Resu
     let mut candidates = vec![
         parent.join("../Resources/sound/MS Basic.sf3"),
         parent.join("sound/MS Basic.sf3"),
+        parent.join("../sound/MS Basic.sf3"),
     ];
     for base in [
         parent.to_path_buf(),
@@ -479,6 +480,20 @@ pub(crate) fn validate_mp3(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finds_soundfont_in_installation_sound_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let installation = dir.path().join("MuseScore 4");
+        fs::create_dir_all(installation.join("bin")).unwrap();
+        fs::create_dir_all(installation.join("sound")).unwrap();
+        let soundfont = installation.join("sound/MS Basic.sf3");
+        fs::write(&soundfont, []).unwrap();
+
+        assert_eq!(
+            find_soundfont(&installation.join("bin/MuseScore4.exe"), None).unwrap(),
+            soundfont.canonicalize().unwrap()
+        );
+    }
     #[test]
     fn mp3_requires_audio_not_just_a_tag() {
         let dir = tempfile::tempdir().unwrap();

@@ -27,7 +27,7 @@ Updater signatures establish the identity of updates. They are separate from App
 
 ## Apple signing and notarization
 
-Both branch pushes and version-tag pushes to **Popchor-RUB/Scorewing** build Developer ID signed, notarized macOS installers. Manual workflow runs in that repository do the same. Pull-request builds and builds in forks remain unsigned and receive no Apple credentials. Missing Apple secrets fail trusted macOS builds rather than silently producing unsigned installers.
+Apple signing and notarization are optional. Branch pushes, version-tag pushes, and manual workflow runs in **Popchor-RUB/Scorewing** use them only when all six Apple secrets below are set. If any are missing, macOS builds continue without Developer ID signing or notarization and skip the signature/ticket checks. Pull-request builds and builds in forks remain unsigned and receive no Apple credentials. Invalid credentials still fail when signing is enabled. Version-tag builds continue to require the separate Tauri updater signing key even when Apple signing is skipped.
 
 You need an Apple Developer Program membership, a **Developer ID Application** certificate with its private key, and an App Store Connect API key with permission to notarize applications. Configure these repository Actions secrets:
 
@@ -50,7 +50,7 @@ gh secret set APPLE_API_PRIVATE_KEY --repo Popchor-RUB/Scorewing < /secure/path/
 
 The workflow writes the API private key to a temporary file readable only by the runner user and removes it in an always-run cleanup step. Tauri imports the signing certificate, signs with the hardened runtime, submits to Apple's notary service, and staples the ticket during packaging. CI then verifies the app signature and stapled ticket. Apple signing credentials are passed only to the macOS packaging and credential-preparation steps.
 
-Every trusted macOS push build contacts Apple, including branch builds. Allow for the notarization service's latency and availability. Keep local builds ad-hoc signed unless you explicitly configure Apple credentials yourself. See [Tauri's macOS signing instructions](https://v2.tauri.app/distribute/sign/macos/) for obtaining the certificate and API key.
+When all Apple credentials are configured, every trusted macOS push build contacts Apple, including branch builds. Allow for the notarization service's latency and availability. Builds without Apple credentials can show macOS Gatekeeper warnings when downloaded. Keep local builds ad-hoc signed unless you explicitly configure Apple credentials yourself. See [Tauri's macOS signing instructions](https://v2.tauri.app/distribute/sign/macos/) for obtaining the certificate and API key.
 
 ## Shared build pipeline
 
@@ -62,7 +62,7 @@ Ordinary builds run platforms in parallel, upload GitHub Actions artifacts, and 
 
 1. Set the same stable version in `apps/desktop/package.json` (and its lockfile), `apps/desktop/src-tauri/Cargo.toml` (and the workspace lockfile), and `apps/desktop/src-tauri/tauri.conf.json`.
 2. Run the checks, commit, and push a matching tag such as `v0.1.0` to `Popchor-RUB/Scorewing`.
-3. The **Test and build Rust CLI and desktop** workflow's release job tests and builds Linux x64, Windows x64, macOS Intel, and macOS Apple Silicon, including macOS code signing and notarization. Platform jobs run sequentially so their updates to `latest.json` cannot overwrite each other.
+3. The **Test and build Rust CLI and desktop** workflow's release job tests and builds Linux x64, Windows x64, macOS Intel, and macOS Apple Silicon, including macOS code signing and notarization when the Apple credentials are configured. Platform jobs run sequentially so their updates to `latest.json` cannot overwrite each other.
 4. Confirm all four jobs succeeded. Inspect the draft's installers, updater archives, signatures, and `latest.json`. It must include `linux-x86_64`, `windows-x86_64`, `darwin-x86_64`, and `darwin-aarch64` entries, each with a URL and signature. Windows updates use NSIS.
 5. Install and smoke-test the platform packages, then publish the draft manually. The workflow never publishes a release and refuses to modify an already-published tag. Failed runs leave a draft that can be retried before publishing.
 

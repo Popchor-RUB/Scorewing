@@ -1,18 +1,22 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import test from 'node:test';
 
 const script = fileURLToPath(new URL('./prepare-apple-signing.mjs', import.meta.url));
+const credentialNames = ['APPLE_CERTIFICATE', 'APPLE_CERTIFICATE_PASSWORD', 'APPLE_SIGNING_IDENTITY',
+  'APPLE_API_ISSUER', 'APPLE_API_KEY', 'APPLE_API_PRIVATE_KEY'];
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'scorewing-signing-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const env = {
     ...process.env,
+    APPLE_SIGNING_ENABLED: 'true',
     APPLE_CERTIFICATE: 'test-certificate',
     APPLE_CERTIFICATE_PASSWORD: 'test-password',
     APPLE_SIGNING_IDENTITY: 'Developer ID Application: Test (TEAMID)',
@@ -39,7 +43,7 @@ test('prepares a private key file and exports only its path without logging cred
 
 test('missing credentials fail before writing a key or exporting a path', (t) => {
   const f = fixture(t);
-  for (const name of Object.keys(f.env).filter((name) => name.startsWith('APPLE_'))) {
+  for (const name of credentialNames) {
     const value = f.env[name];
     f.env[name] = '';
     const result = f.run();
@@ -50,6 +54,29 @@ test('missing credentials fail before writing a key or exporting a path', (t) =>
     assert.ok(!result.stderr.includes(f.env.APPLE_API_PRIVATE_KEY || 'second-line'));
     f.env[name] = value;
   }
+});
+
+test('workflow enables Apple signing only for trusted builds with complete credentials', (t) => {
+  const f = fixture(t);
+  const workflow = readFileSync(new URL('../.github/workflows/build-platforms.yml', import.meta.url), 'utf8');
+  const expression = workflow.match(/APPLE_SIGNING_ENABLED: \$\{\{ (.+) \}\}/)[1];
+  const github = { repository: 'Popchor-RUB/Scorewing', event_name: 'push' };
+  const secrets = Object.fromEntries(credentialNames.map(name => [name, f.env[name]]));
+  const enabled = () => runInNewContext(expression, { github, secrets });
+  assert.equal(enabled(), true);
+  for (const name of credentialNames) {
+    const value = secrets[name];
+    secrets[name] = '';
+    assert.equal(enabled(), false, `Signing must be skipped without ${name}`);
+    secrets[name] = value;
+  }
+  github.event_name = 'workflow_dispatch';
+  assert.equal(enabled(), true);
+  github.event_name = 'pull_request';
+  assert.equal(enabled(), false);
+  github.event_name = 'push';
+  github.repository = 'fork/Scorewing';
+  assert.equal(enabled(), false);
 });
 
 test('rejects a development identity before writing the notarization key', (t) => {
@@ -67,4 +94,29 @@ test('refuses to overwrite an existing key file', (t) => {
   assert.notEqual(f.run().status, 0);
   assert.equal(readFileSync(f.keyPath, 'utf8'), 'existing-key');
   assert.ok(!existsSync(f.env.GITHUB_ENV));
+});
+
+test('unsigned macOS builds omit Apple credentials and preserve updater signing', { skip: process.platform === 'win32' }, (t) => {
+  const f = fixture(t);
+  const workflow = readFileSync(new URL('../.github/workflows/build-platforms.yml', import.meta.url), 'utf8');
+  const command = workflow.match(/tauriScript:.*&& '(env -u [^']+)' \|\| ''/)[1].split(' ');
+  const binDir = join(f.env.RUNNER_TEMP, 'node_modules', '.bin');
+  mkdirSync(binDir, { recursive: true });
+  writeFileSync(join(binDir, 'tauri'), `#!/usr/bin/env node
+console.log(JSON.stringify({
+  apple: ['APPLE_CERTIFICATE', 'APPLE_CERTIFICATE_PASSWORD', 'APPLE_SIGNING_IDENTITY',
+    'APPLE_API_ISSUER', 'APPLE_API_KEY', 'APPLE_API_KEY_PATH'].map(name => process.env[name]),
+  updater: process.env.TAURI_SIGNING_PRIVATE_KEY,
+  args: process.argv.slice(2),
+}));
+`, { mode: 0o755 });
+  const args = ['build', '--config', '{"bundle":{"createUpdaterArtifacts":true}}', '--', '--locked'];
+  const result = spawnSync(command[0], [...command.slice(1), ...args], {
+    cwd: f.env.RUNNER_TEMP,
+    env: { ...f.env, APPLE_API_KEY_PATH: 'unused-apple-key.p8', TAURI_SIGNING_PRIVATE_KEY: 'test-updater-key' },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { apple: Array(6).fill(null), updater: 'test-updater-key', args });
+  assert.ok(!workflow.includes('--no-sign'));
 });

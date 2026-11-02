@@ -25,7 +25,7 @@ jobs:
             artifact: scorewing-macos-arm64
     runs-on: ${{ matrix.runner }}
     env:
-      APPLE_SIGNING_ENABLED: ${{ github.repository == 'Popchor-RUB/Scorewing' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') }}
+      APPLE_SIGNING_ENABLED: ${{ github.repository == 'Popchor-RUB/Scorewing' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' && secrets.APPLE_API_ISSUER != '' && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_PRIVATE_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -142,9 +142,10 @@ jobs:
           releaseDraft: true
           prerelease: false
           updaterJsonPreferNsis: true
+          # Strip empty Apple variables without disabling Tauri updater signatures.
+          tauriScript: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED != 'true' && 'env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD -u APPLE_SIGNING_IDENTITY -u APPLE_API_ISSUER -u APPLE_API_KEY -u APPLE_API_KEY_PATH ./node_modules/.bin/tauri' || '' }}
           args: >-
             ${{ inputs.release && '--config ''{"bundle":{"createUpdaterArtifacts":true}}''' || '' }}
-            ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED != 'true' && '--no-sign' || '' }}
             -- --locked
       - name: Verify macOS signature and notarization ticket
         if: runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true'

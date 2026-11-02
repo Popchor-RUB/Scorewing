@@ -77,7 +77,7 @@ export PKG_CONFIG_PATH="$PWD/target/libxml2/lib/pkgconfig"
 export LIBCLANG_PATH="$(brew --prefix llvm)/lib"
 ```
 
-Cargo enables static libxml2 linking through `.cargo/config.toml`. A plain system libxml2 installation is not a replacement for the private static build. Release checks inspect both executables and reject non-platform shared libraries. OS frameworks, Windows WebView2, and Linux GTK/WebKitGTK remain platform requirements; Tauri cannot build fully static desktop executables on all operating systems. Trusted macOS CI builds use Developer ID signing and notarization; version-tag builds also sign updater artifacts. See [release credential setup](RELEASING.md). The local macOS script uses ad-hoc signing.
+Cargo enables static libxml2 linking through `.cargo/config.toml`. A plain system libxml2 installation is not a replacement for the private static build. Release checks inspect both executables and reject non-platform shared libraries. OS frameworks, Windows WebView2, and Linux GTK/WebKitGTK remain platform requirements; Tauri cannot build fully static desktop executables on all operating systems. Trusted macOS CI builds use Developer ID signing and notarization when all Apple credentials are configured, and otherwise build without them; version-tag builds still sign updater artifacts. See [release credential setup](RELEASING.md). The local macOS script uses ad-hoc signing.
 
 ## Local compilation without installing dependencies
 

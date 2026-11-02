@@ -13,30 +13,50 @@ fn merged(parts: &[(&str, Vec<String>)]) -> Score {
 }
 
 #[test]
-fn reports_overlap_errors_across_groups_measures_and_original_voices() {
-    let broken = || n("C").duration(3).voice("7").xml() + &backup(2) + &n("F").voice("9").xml();
+fn independent_source_voices_are_preserved_across_groups_and_measures() {
+    let polyphony = || n("C").duration(3).voice("7").xml() + &backup(2) + &n("F").voice("9").xml();
     let input = score(&[
-        ("Soprano", vec![broken(), broken()]),
-        ("Alto", vec![broken(), broken()]),
-        ("Tenor", vec![broken(), broken()]),
-        ("Bass", vec![n("G").xml(), n("G").xml()]),
+        ("Soprano", vec![polyphony(), polyphony()]),
+        ("Alto", vec![polyphony(), polyphony()]),
+        ("Tenor", vec![polyphony(), polyphony()]),
+        (
+            "Bass",
+            vec![n("G").duration(3).xml(), n("G").duration(3).xml()],
+        ),
     ]);
-    let error = merge_score(&input, &groups(&[&["P1", "P2"], &["P3", "P4"]]))
-        .unwrap_err()
-        .to_string();
-    for part in ["Soprano", "Alto", "Tenor"] {
-        for measure in 1..=2 {
-            for (voice, note) in [("7", "C4"), ("9", "F4")] {
-                assert!(
-                    error.lines().any(|line| line.contains(part)
-                        && line.contains(&format!("measure {measure}"))
-                        && line.contains(&format!("voice {voice}"))
-                        && line.contains(note)
-                        && line.contains("overlapping rhythmic spans")),
-                    "{error}"
-                );
-            }
+    let output = merge_score(&input, &groups(&[&["P1", "P2"], &["P3", "P4"]])).unwrap();
+    scorewing_core::validate_score(&output).unwrap();
+    let result = parse_score(output).unwrap();
+    for measure in &result.parts[0].measures {
+        assert_eq!(measure.length, frac(3));
+        assert_eq!(
+            measure
+                .events
+                .iter()
+                .map(|e| e.voice.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from(["1", "2", "3", "4"])
+        );
+        for event in &measure.events {
+            assert_eq!(
+                (event.start.clone(), event.duration.clone()),
+                if text(&event.notes[0], "pitch/step") == "C" {
+                    (frac(0), frac(3))
+                } else {
+                    (frac(1), frac(1))
+                }
+            );
         }
+    }
+    for measure in &result.parts[1].measures {
+        assert_eq!(
+            measure
+                .events
+                .iter()
+                .map(|e| e.voice.as_str())
+                .collect::<HashSet<_>>(),
+            HashSet::from(["1", "2", "3"])
+        );
     }
 }
 
@@ -91,7 +111,7 @@ fn invalid_groups_rejected_by_backend() {
 }
 
 #[test]
-fn explicit_stems_deduplicate_matching_chord_tones_after_divergence() {
+fn explicit_stems_pack_matching_rhythms_into_chords_and_deduplicate_unisons() {
     let input = score(&[
         ("S", vec![n("C").xml() + &n("E").xml() + &n("F").xml()]),
         ("A", vec![n("D").xml() + &n("E").extra("<notations><articulations><accent/></articulations></notations><lyric><text>word</text></lyric>").xml()
@@ -99,26 +119,24 @@ fn explicit_stems_deduplicate_matching_chord_tones_after_divergence() {
     ]);
     let groups = groups(&[&["P1", "P2"]]);
     for stem in ["up", "down"] {
-        let output =
+        let root =
             merge_score_with_stems(&input, &groups, &[vec![stem.into(), stem.into()]]).unwrap();
-        scorewing_core::validate_score(&output).unwrap();
-        let output = parse_score(output).unwrap();
+        scorewing_core::validate_score(&root).unwrap();
+        let output = parse_score(root).unwrap();
         let events = &output.parts[0].measures[0].events;
-        assert_eq!(
-            event_notes(events),
-            [
-                ("1", "C".into(), stem.into()),
-                ("1", "E".into(), stem.into()),
-                ("1", "F".into(), stem.into()),
-                ("2", "D".into(), stem.into()),
-                ("2", "G".into(), stem.into()),
-            ]
-        );
-        let shared = &events
+        assert_eq!(events.len(), 3);
+        assert!(events
             .iter()
-            .find(|e| e.start == frac(1) && e.voice == "1")
-            .unwrap()
-            .notes[0];
+            .all(|event| event.voice == if stem == "up" { "1" } else { "2" }));
+        assert_eq!(
+            pitches(&output.parts[0], 0),
+            [vec!["C", "D"], vec!["E"], vec!["F", "G"]]
+        );
+        assert!(events
+            .iter()
+            .flat_map(|e| &e.notes)
+            .all(|note| text(note, "stem") == stem));
+        let shared = &events[1].notes[0];
         assert_eq!(text(shared, "lyric/text"), "word");
         assert!(shared
             .get_child("notations")
@@ -127,11 +145,9 @@ fn explicit_stems_deduplicate_matching_chord_tones_after_divergence() {
             .unwrap()
             .get_child("accent")
             .is_some());
-        let remaining = events
+        assert!(events
             .iter()
-            .find(|e| e.start == frac(2) && e.voice == "2")
-            .unwrap();
-        assert!(remaining.notes[0].get_child("chord").is_none());
+            .all(|e| e.notes[0].get_child("chord").is_none()));
     }
     let opposite = parse_score(
         merge_score_with_stems(&input, &groups, &[vec!["down".into(), "up".into()]]).unwrap(),
@@ -166,7 +182,7 @@ fn stem_settings_require_one_valid_direction_for_each_source() {
 }
 
 #[test]
-fn same_stems_keep_distinct_rhythms_ties_pitches_and_grace_repetitions() {
+fn same_stems_preserve_distinct_rhythms_ties_pitches_and_grace_repetitions() {
     let different_notes = [
         (
             n("C").duration(2).kind("half").xml(),
@@ -191,7 +207,7 @@ fn same_stems_keep_distinct_rhythms_ties_pitches_and_grace_repetitions() {
                 .replace("<octave>", "<alter>-1</alter><octave>"),
         ),
     ];
-    for (upper, lower) in different_notes {
+    for (index, (upper, lower)) in different_notes.into_iter().enumerate() {
         let input = score(&[("S", vec![upper]), ("A", vec![lower])]);
         let output = merge_score_with_stems(
             &input,
@@ -200,10 +216,42 @@ fn same_stems_keep_distinct_rhythms_ties_pitches_and_grace_repetitions() {
         )
         .unwrap();
         scorewing_core::validate_score(&output).unwrap();
-        assert!(parse_score(output).unwrap().parts[0].measures[0]
-            .events
-            .iter()
-            .any(|e| e.voice == "2"));
+        let result = parse_score(output).unwrap();
+        let events = &result.parts[0].measures[0].events;
+        if index == 0 {
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|event| event.voice.as_str())
+                    .collect::<HashSet<_>>(),
+                HashSet::from(["1", "3"])
+            );
+            assert_eq!(events[0].duration, frac(2));
+        } else {
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].voice, "1");
+            assert_eq!(events[0].notes.len(), 2);
+            if index == 1 {
+                assert!(events[0].notes[0].get_child("tie").is_some());
+            }
+            if index == 2 {
+                assert!(events[0].notes[0]
+                    .get_child("notations")
+                    .unwrap()
+                    .get_child("tied")
+                    .is_some());
+            }
+            if index == 3 {
+                assert_eq!(
+                    events[0]
+                        .notes
+                        .iter()
+                        .map(|note| text(note, "pitch/step"))
+                        .collect::<Vec<_>>(),
+                    ["C", "D"]
+                );
+            }
+        }
     }
     let graces = n("D").grace().xml() + &n("D").grace().xml();
     let input = score(&[
@@ -230,7 +278,7 @@ fn same_stems_keep_distinct_rhythms_ties_pitches_and_grace_repetitions() {
 #[test]
 fn reports_all_compatibility_conflicts_and_checks_remaining_measures() {
     let key = "<attributes><key><fifths>1</fifths></key></attributes>";
-    let broken = n("C").duration(3).voice("7").xml() + &backup(2) + &n("F").voice("9").xml();
+    let broken = n("C").voice("7").extra("<time-modification><actual-notes>3</actual-notes><normal-notes>0</normal-notes></time-modification>").xml();
     let input = score(&[
         ("Soprano", vec![n("C").xml()]),
         ("Alto", vec![key.to_owned() + &n("C").xml(), broken]),
@@ -251,41 +299,37 @@ fn reports_all_compatibility_conflicts_and_checks_remaining_measures() {
     assert!(
         error.lines().any(|line| line.contains("Alto")
             && line.contains("measure 2")
-            && line.contains("overlapping rhythmic spans")),
+            && line.contains("Invalid tuplet")),
         "{error}"
     );
 }
 
 #[test]
-fn common_prefix_diverges_and_resets_each_bar() {
+fn opposite_stem_unisons_retain_both_groups_in_every_measure() {
     let first = n("C").xml() + &n("D").xml() + &n("E").xml() + &n("F").xml();
     let second = n("C").xml() + &n("E").xml() + &n("E").xml() + &n("F").xml();
     let result = merged(&[
         ("S", vec![first.clone(), first.clone()]),
         ("A", vec![second, first]),
     ]);
-    let measures = &result.parts[0].measures;
-    assert_eq!(
-        measures[0]
-            .events
-            .iter()
-            .map(|e| (e.start.clone(), e.voice.as_str()))
-            .collect::<Vec<_>>(),
-        [
-            (frac(0), "1"),
-            (frac(1), "1"),
-            (frac(2), "1"),
-            (frac(3), "1"),
-            (frac(1), "2"),
-            (frac(2), "2"),
-            (frac(3), "2")
-        ]
-    );
-    assert!(measures[1].events.iter().all(|e| e.voice == "1"));
+    for measure in &result.parts[0].measures {
+        assert_eq!(measure.events.len(), 8);
+        for voice in ["1", "2"] {
+            assert_eq!(
+                measure
+                    .events
+                    .iter()
+                    .filter(|event| event.voice == voice)
+                    .map(|event| event.start.clone())
+                    .collect::<Vec<_>>(),
+                [frac(0), frac(1), frac(2), frac(3)]
+            );
+        }
+    }
 }
 
 #[test]
-fn reports_slicing_errors_for_each_source_in_a_measure() {
+fn reports_invalid_tuplets_for_each_source_without_rewriting_notes() {
     let invalid = "<time-modification><actual-notes>3</actual-notes><normal-notes>0</normal-notes></time-modification>";
     let upper = n("C").duration(4).voice("7").extra(invalid).xml();
     let lower = n("C").duration(4).voice("9").extra(invalid).xml()
@@ -318,14 +362,15 @@ fn three_sources_stems_and_common_rests() {
     scorewing_core::validate_score(&output).unwrap();
     let result = parse_score(output).unwrap();
     let events = &result.parts[0].measures[0].events;
-    assert_eq!(events.len(), 4);
+    assert_eq!(events.len(), 3);
     assert!(events[0].notes[0].get_child("rest").is_some());
+    assert_eq!(events[1].notes.len(), 2);
     assert_eq!(
         events[1..]
             .iter()
             .map(|e| text(&e.notes[0], "stem"))
             .collect::<Vec<_>>(),
-        ["up", "down", "up"]
+        ["up", "down"]
     );
 }
 
@@ -365,7 +410,7 @@ fn common_rests_after_divergence_only_appear_in_voice_one() {
             .unwrap()
             .get_child("fermata")
             .is_some());
-        for voice in 1..=group.len() {
+        for voice in 1..=2 {
             let notes: Vec<_> = measure
                 .events
                 .iter()
@@ -379,7 +424,7 @@ fn common_rests_after_divergence_only_appear_in_voice_one() {
 }
 
 #[test]
-fn rests_stay_separate_when_not_shared_by_every_voice_or_duration() {
+fn subset_rest_duplicates_collapse_but_different_durations_remain() {
     let rest = n("C").rest().xml();
     let input = score(&[
         ("S", vec![n("C").xml() + &rest + &rest + &rest]),
@@ -404,16 +449,13 @@ fn rests_stay_separate_when_not_shared_by_every_voice_or_duration() {
             ("1", frac(1), frac(1)),
             ("1", frac(2), frac(1)),
             ("1", frac(3), frac(1)),
-            ("2", frac(1), frac(1)),
             ("2", frac(2), frac(2)),
-            ("3", frac(2), frac(1)),
-            ("3", frac(3), frac(1)),
         ]
     );
 }
 
 #[test]
-fn flatten_chords_deduplicate_unisons_and_reject_overlapping_rhythmic_spans() {
+fn source_polyphony_compacts_chords_and_allocates_independent_rhythms() {
     let chord = n("C").duration(2).kind("half").xml()
         + &backup(2)
         + &n("E").duration(2).voice("7").kind("half").xml();
@@ -431,19 +473,32 @@ fn flatten_chords_deduplicate_unisons_and_reject_overlapping_rhythmic_spans() {
     );
     let same = n("C").xml() + &backup(1) + &n("C").voice("2").xml();
     let result = merged(&[("S", vec![same]), ("A", vec![n("C").xml()])]);
-    assert_eq!(result.parts[0].measures[0].events.len(), 1);
-    assert_eq!(result.parts[0].measures[0].events[0].notes.len(), 1);
-    let incompatible =
-        n("C").duration(2).xml() + &backup(2) + &n("E").voice("2").xml() + &n("F").voice("2").xml();
-    let input = score(&[
-        ("S", vec![incompatible]),
-        ("A", vec![n("C").duration(2).xml()]),
+    assert_eq!(result.parts[0].measures[0].events.len(), 2);
+    assert!(result.parts[0].measures[0]
+        .events
+        .iter()
+        .all(|event| event.notes.len() == 1));
+    let independent = n("C").duration(2).kind("half").xml()
+        + &backup(2)
+        + &n("E").voice("2").xml()
+        + &n("F").voice("2").xml();
+    let result = merged(&[
+        ("S", vec![independent]),
+        ("A", vec![n("C").duration(2).kind("half").xml()]),
     ]);
-    let error = merge_score(&input, &groups(&[&["P1", "P2"]]))
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("measure 1, position 0"), "{error}");
-    assert!(error.contains("incompatible overlapping"), "{error}");
+    let events = &result.parts[0].measures[0].events;
+    assert_eq!(
+        events
+            .iter()
+            .map(|e| (e.voice.as_str(), e.start.clone(), e.duration.clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("1", frac(0), frac(2)),
+            ("2", frac(0), frac(2)),
+            ("3", frac(0), frac(1)),
+            ("3", frac(1), frac(1))
+        ]
+    );
 }
 
 #[test]
@@ -492,7 +547,7 @@ fn rhythms_spelled_pitches_and_sound_or_visual_tie_differences_do_not_collapse()
 }
 
 #[test]
-fn differing_graces_cut_sustained_note_with_ties_and_unique_identifiers() {
+fn differing_graces_preserve_sustained_note_values_and_unique_identifiers() {
     let held = n("C")
         .duration(4)
         .kind("whole")
@@ -503,31 +558,25 @@ fn differing_graces_cut_sustained_note_with_ties_and_unique_identifiers() {
     let ordinary: Vec<_> = result.parts[0].measures[0]
         .events
         .iter()
-        .filter(|e| !e.grace())
+        .filter(|event| !event.grace())
         .collect();
     assert_eq!(
         ordinary
             .iter()
             .map(|e| (e.start.clone(), e.duration.clone(), e.voice.as_str()))
             .collect::<Vec<_>>(),
-        [
-            (frac(0), frac(2), "1"),
-            (frac(2), frac(2), "1"),
-            (frac(2), frac(2), "2")
-        ]
+        [(frac(0), frac(4), "1"), (frac(0), frac(4), "2")]
     );
-    assert_eq!(
-        ordinary
-            .iter()
-            .map(|e| {
-                elements(&e.notes[0])
-                    .filter(|n| n.name == "tie")
-                    .map(|n| n.attributes["type"].as_str())
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>(),
-        [vec!["start"], vec!["stop"], vec!["stop"]]
-    );
+    assert!(ordinary
+        .iter()
+        .all(|event| text(&event.notes[0], "type") == "whole"
+            && event.notes[0].get_child("tie").is_none()));
+    let grace = result.parts[0].measures[0]
+        .events
+        .iter()
+        .find(|event| event.grace())
+        .unwrap();
+    assert_eq!(grace.start, frac(2));
     let ids = ids(&result.parts[0].source);
     assert_eq!(ids.len(), ids.iter().collect::<HashSet<_>>().len());
     let grace = n("D").grace().xml() + &n("E").grace().xml();
@@ -541,29 +590,58 @@ fn differing_graces_cut_sustained_note_with_ties_and_unique_identifiers() {
             .iter()
             .map(|e| (text(&e.notes[0], "pitch/step"), e.grace()))
             .collect::<Vec<_>>(),
-        [("D".into(), true), ("E".into(), true), ("C".into(), false)]
+        [
+            ("D".into(), true),
+            ("E".into(), true),
+            ("C".into(), false),
+            ("D".into(), true),
+            ("E".into(), true),
+            ("C".into(), false)
+        ]
     );
 }
 
 #[test]
-fn lyric_lines_stable_and_identical_text_deduplicated() {
+fn lyric_lines_follow_stems_and_identical_sung_content_is_deduplicated() {
     let lyric = |text: &str| format!("<lyric number=\"1\"><text>{text}</text></lyric>");
     let upper = n("C").extra(&lyric("hello")).xml() + &n("D").extra(&lyric("same")).xml();
-    let lower = n("C").extra(&lyric("world")).xml() + &n("D").extra(&lyric("same")).xml();
-    let result = merged(&[("S", vec![upper]), ("A", vec![lower])]);
-    let events = &result.parts[0].measures[0].events;
+    let lower = n("E").extra(&lyric("world")).xml() + &n("F").extra(&lyric("same")).xml();
+    let input = score(&[("Lower", vec![lower]), ("Upper", vec![upper])]);
+    let output = merge_score_with_stems(
+        &input,
+        &groups(&[&["P1", "P2"]]),
+        &[vec!["down".into(), "up".into()]],
+    )
+    .unwrap();
+    scorewing_core::validate_score(&output).unwrap();
+    let result = parse_score(output).unwrap();
+    let lyrics: Vec<_> = result.parts[0].measures[0]
+        .events
+        .iter()
+        .flat_map(|event| {
+            event
+                .notes
+                .iter()
+                .flat_map(elements)
+                .filter(|node| node.name == "lyric")
+                .map(move |lyric| {
+                    (
+                        event.voice.as_str(),
+                        event.start.clone(),
+                        lyric.attributes["number"].as_str(),
+                        text(lyric, "text"),
+                        lyric.attributes["placement"].as_str(),
+                    )
+                })
+        })
+        .collect();
     assert_eq!(
-        elements(&events[0].notes[0])
-            .filter(|n| n.name == "lyric")
-            .map(|n| (n.attributes["number"].as_str(), text(n, "text")))
-            .collect::<Vec<_>>(),
-        [("1", "hello".into()), ("2", "world".into())]
-    );
-    assert_eq!(
-        elements(&events[1].notes[0])
-            .filter(|n| n.name == "lyric")
-            .count(),
-        1
+        lyrics,
+        [
+            ("1", frac(0), "1", "hello".into(), "below"),
+            ("1", frac(1), "1", "same".into(), "below"),
+            ("2", frac(0), "2", "world".into(), "below")
+        ]
     );
 }
 
@@ -609,16 +687,17 @@ fn annotations_directions_clef_stemless_and_metadata() {
         .collect();
     assert_eq!(directions.len(), 1);
     assert_eq!(text(directions[0], "voice"), "1");
-    let note = &measure.events[0].notes[0];
-    assert!(note.get_child("stem").is_none());
+    assert!(measure
+        .events
+        .iter()
+        .all(|event| event.notes[0].get_child("stem").is_none()));
     assert_eq!(
-        elements(
-            note.get_child("notations")
-                .unwrap()
-                .get_child("articulations")
-                .unwrap()
-        )
-        .count(),
+        measure
+            .events
+            .iter()
+            .flat_map(|event| descendants(&event.notes[0]))
+            .filter(|node| ["staccato", "accent"].contains(&node.name.as_str()))
+            .count(),
         2
     );
     assert_eq!(text(&result.root, "work/work-title"), "Choir fixture");
@@ -703,7 +782,12 @@ fn exact_changing_divisions_and_hidden_signatures_zero_transpose() {
             .iter()
             .map(|e| (e.start.clone(), e.duration.clone()))
             .collect::<Vec<_>>(),
-        [(frac(0), frac(1)), (frac(1), frac(1) / frac(3))]
+        [
+            (frac(0), frac(1)),
+            (frac(1), frac(1) / frac(3)),
+            (frac(0), frac(1)),
+            (frac(1), frac(1) / frac(3))
+        ]
     );
     let mut input = score(&[("S", vec![n("C").xml()]), ("A", vec![n("D").xml()])]);
     let second = input
@@ -738,7 +822,7 @@ fn exact_changing_divisions_and_hidden_signatures_zero_transpose() {
 }
 
 #[test]
-fn relationships_renumbered_before_prefix_merge() {
+fn relationships_remain_distinct_across_stem_groups() {
     let start = "<notations><slur type=\"start\" number=\"1\"/></notations>";
     let stop = "<notations><slur type=\"stop\" number=\"1\"/></notations>";
     let upper = n("C").extra(start).xml() + &n("D").extra(stop).xml();
@@ -753,7 +837,7 @@ fn relationships_renumbered_before_prefix_merge() {
                 n.attributes["number"].as_str()
             ))
             .collect::<Vec<_>>(),
-        [("start", "1"), ("start", "2"), ("stop", "1"), ("stop", "2")]
+        [("start", "1"), ("stop", "1"), ("start", "2"), ("stop", "2")]
     );
 }
 
@@ -790,7 +874,13 @@ fn names_instruments_players_lyrics_play_and_overrides_survive() {
         ),
     ]);
     let note = &shared.parts[0].measures[0].events[0].notes[0];
-    assert_eq!(text(note, "lyric/text"), "word");
+    assert_eq!(
+        text(
+            &shared.parts[0].measures[0].events[1].notes[0],
+            "lyric/text"
+        ),
+        "word"
+    );
     assert!(note.get_child("play").is_some());
     for shared_prefix in [false, true] {
         let mut input = score(&[
@@ -866,19 +956,9 @@ fn names_instruments_players_lyrics_play_and_overrides_survive() {
                     e.notes[0].get_child("instrument").unwrap().attributes["id"].as_str()
                 ))
                 .collect::<Vec<_>>(),
-            if shared_prefix {
-                vec![("1", "I1"), ("1", "I1"), ("2", "AltOverride")]
-            } else {
-                vec![("1", "I1"), ("1", "I1"), ("2", "I2"), ("2", "AltOverride")]
-            }
+            vec![("1", "I1"), ("1", "I1"), ("2", "I2"), ("2", "AltOverride")]
         );
         assert!(events[0].notes[0].get_child("play").is_some());
-        assert_eq!(
-            text(
-                &events[if shared_prefix { 0 } else { 2 }].notes[0],
-                "lyric/text"
-            ),
-            "word"
-        );
+        assert_eq!(text(&events[2].notes[0], "lyric/text"), "word");
     }
 }

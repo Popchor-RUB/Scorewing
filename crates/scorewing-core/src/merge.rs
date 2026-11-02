@@ -1,7 +1,7 @@
 //! Merge selected single-staff parts into ordered, stem-directed voices.
 
 use crate::model::{
-    build_score, insert_note_child, render_measure, rest_event, set_child, slice_event, Event,
+    build_score, insert_note_child, render_measure, set_child, set_written_duration, Event,
     Fraction, Measure, Part, Score, TimedElement,
 };
 use crate::split::{
@@ -13,6 +13,8 @@ use num_bigint::BigInt;
 use num_traits::Zero;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use xmltree::{Element, XMLNode};
+
+mod dynamics;
 
 fn canonical(element: &Element) -> String {
     fn field(result: &mut String, value: &str) {
@@ -109,16 +111,6 @@ fn tie_state(note: &Element) -> TieState {
     (sounding, visual)
 }
 
-fn signature(event: &Event) -> Result<Vec<(Pitch, TieState)>> {
-    let mut result: Vec<_> = event
-        .notes
-        .iter()
-        .map(|note| Ok((pitch(note)?, tie_state(note))))
-        .collect::<Result<_>>()?;
-    result.sort();
-    Ok(result)
-}
-
 fn select_groups(score: &Score, groups: &[Vec<String>]) -> Result<Vec<Vec<usize>>> {
     if groups.is_empty() {
         return Err(ScoreError::new(
@@ -158,124 +150,105 @@ fn select_groups(score: &Score, groups: &[Vec<String>]) -> Result<Vec<Vec<usize>
     Ok(result)
 }
 
-fn source_context(measure: &Measure, event: &Event) -> String {
-    measure
-        .events
-        .iter()
-        .filter(|source| {
-            if event.grace() {
-                source.grace() && source.start == event.start
-            } else {
-                !source.grace() && source.start < event.end() && source.end() > event.start
-            }
-        })
-        .map(|source| source.context(measure))
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-fn flatten(measure: &Measure, voice: &str) -> Result<Vec<Event>> {
+fn source_events(measure: &Measure) -> Result<Vec<Event>> {
     let mut errors = Vec::new();
-    let mut by_span = Vec::<Event>::new();
-    let mut indices = HashMap::new();
-    let mut grace_counts = HashMap::new();
     for event in &measure.events {
-        let mut invalid = false;
         for note in &event.notes {
-            if let Err(error) = pitch(note) {
+            let validation = pitch(note).and_then(|_| {
+                if note.get_child("time-modification").is_some() {
+                    set_written_duration(&mut note.clone(), event.duration.clone())?;
+                }
+                Ok(())
+            });
+            if let Err(error) = validation {
                 errors.push(ScoreError::new(format!(
                     "{}: {error}",
                     event.context(measure)
                 )));
-                invalid = true;
             }
         }
-        if invalid {
-            continue;
-        }
-        let ordinal = if event.grace() {
-            let count = grace_counts
-                .entry((event.start.clone(), event.voice.clone()))
-                .or_insert(0_usize);
-            let ordinal = *count;
-            *count += 1;
-            ordinal
-        } else {
-            0
-        };
-        let key = (
-            event.start.clone(),
-            event.duration.clone(),
-            event.grace(),
-            ordinal,
-        );
-        if let Some(index) = indices.get(&key) {
-            let index: usize = *index;
-            by_span[index].notes.extend(event.notes.clone());
-        } else {
-            indices.insert(key, by_span.len());
-            let mut event = event.clone();
-            event.voice = voice.into();
-            by_span.push(event);
-        }
-    }
-    by_span.sort_by(|a, b| {
-        a.start
-            .cmp(&b.start)
-            .then_with(|| b.grace().cmp(&a.grace()))
-    });
-    let mut end = Fraction::zero();
-    let mut completed = Vec::new();
-    for mut event in by_span {
-        if event.grace() {
-            completed.push(event);
-            continue;
-        }
-        if event.start < end {
-            let context = source_context(measure, &event);
-            errors.push(ScoreError::new(format!("{context}: incompatible overlapping rhythmic spans cannot be flattened into one voice")));
-        }
-        if event.start > end {
-            completed.push(rest_event(end.clone(), &event.start - &end, voice)?);
-        }
-        let sounded: Vec<_> = event
-            .notes
-            .iter()
-            .filter(|n| n.get_child("rest").is_none())
-            .cloned()
-            .collect();
-        event.notes = if sounded.is_empty() {
-            event.notes.into_iter().take(1).collect()
-        } else {
-            sounded
-        };
-        let mut unique = Vec::<Element>::new();
-        let mut keys = HashMap::new();
-        for note in event.notes {
-            let key = (pitch(&note)?, tie_state(&note));
-            if let Some(index) = keys.get(&key) {
-                combine_note(&mut unique[*index], &note);
-            } else {
-                keys.insert(key, unique.len());
-                unique.push(note);
-            }
-        }
-        event.notes = unique;
-        end = end.max(event.end());
-        completed.push(event);
-    }
-    if end < measure.length {
-        completed.push(rest_event(end.clone(), &measure.length - &end, voice)?);
     }
     check_errors(errors)?;
-    Ok(completed)
+    Ok(measure.events.clone())
 }
 
 fn lyric_identity(lyric: &Element) -> String {
     let mut identity = lyric.clone();
-    identity.attributes.remove("number");
-    identity.attributes.remove("name");
+    // Verse and sung content matter; engraving coordinates and typography do not.
+    walk_mut(&mut identity, &mut |node| {
+        node.attributes.retain(|key, _| {
+            if node.name == "lyric" {
+                ["number", "name", "time-only"].contains(&key.as_str())
+            } else {
+                ["type", "xml:lang", "lang"].contains(&key.as_str())
+            }
+        });
+        node.children.retain(|child| {
+            !matches!(
+                child,
+                XMLNode::Comment(_) | XMLNode::ProcessingInstruction(..)
+            )
+        });
+    });
+    identity
+        .attributes
+        .entry("number".into())
+        .or_insert_with(|| "1".into());
+    let mut content: Vec<XMLNode> = Vec::new();
+    for node in elements(&identity) {
+        if ["end-line", "end-paragraph"].contains(&node.name.as_str())
+            || node.name == "syllabic" && node.get_text().as_deref() == Some("single")
+        {
+            continue;
+        }
+        if let Some(previous) = content.last_mut().and_then(XMLNode::as_mut_element) {
+            if node.name == "text"
+                && previous.name == "text"
+                && node.attributes == previous.attributes
+            {
+                previous.children.extend(node.children.clone());
+                continue;
+            }
+        }
+        content.push(XMLNode::Element(node.clone()));
+    }
+    identity.children = content;
     canonical(&identity)
+}
+
+fn deduplicate_lyrics(streams: &mut [Vec<Event>], stems: &[String]) {
+    let mut seen = HashSet::new();
+    let mut sources: Vec<_> = (0..streams.len()).collect();
+    sources.sort_by_key(|source| stems[*source] != "up");
+    for source in sources {
+        let mut grace_counts = HashMap::new();
+        for event in &mut streams[source] {
+            let grace = event.grace();
+            let ordinal = if grace {
+                let count = grace_counts
+                    .entry((event.start.clone(), event.voice.clone()))
+                    .or_insert(0);
+                let ordinal = *count;
+                *count += 1;
+                ordinal
+            } else {
+                0
+            };
+            for note in &mut event.notes {
+                note.children.retain(|node| {
+                    node.as_element().is_none_or(|lyric| {
+                        lyric.name != "lyric"
+                            || seen.insert((
+                                event.start.clone(),
+                                grace,
+                                ordinal,
+                                lyric_identity(lyric),
+                            ))
+                    })
+                });
+            }
+        }
+    }
 }
 
 fn combine_note(target: &mut Element, source: &Element) {
@@ -317,9 +290,12 @@ fn combine_note(target: &mut Element, source: &Element) {
 
 type LyricLines = HashMap<(usize, String), String>;
 
-fn lyric_lines(parts: &[&Part]) -> LyricLines {
+fn lyric_lines(parts: &[&Part], stems: &[String]) -> LyricLines {
     let mut mapping = HashMap::new();
-    for (source, part) in parts.iter().enumerate() {
+    let mut sources: Vec<_> = (0..parts.len()).collect();
+    sources.sort_by_key(|source| stems[*source] != "up");
+    for source in sources {
+        let part = parts[source];
         let mut verses: Vec<_> = part
             .measures
             .iter()
@@ -371,6 +347,10 @@ fn prepare(
                 lyric
                     .attributes
                     .insert("number".into(), lines[&(source, verse)].clone());
+                lyric.attributes.insert("placement".into(), "below".into());
+                for attribute in ["default-y", "relative-y"] {
+                    lyric.attributes.remove(attribute);
+                }
             }
             let stemless = note.get_child("rest").is_some()
                 || ["whole", "breve", "long", "maxima"]
@@ -566,6 +546,7 @@ fn clef(parts: &[&Part]) -> Result<(&'static str, &'static str)> {
 
 fn extras(
     measures: &[&Measure],
+    stems: &[String],
     clef: (&str, &str),
     first: bool,
     relationships: &Relationships,
@@ -590,7 +571,9 @@ fn extras(
                     continue;
                 }
                 let mut voice = Element::new("voice");
-                voice.children.push(XMLNode::Text((source + 1).to_string()));
+                voice.children.push(XMLNode::Text(
+                    if stems[source] == "up" { "1" } else { "2" }.into(),
+                ));
                 let index = node
                     .children
                     .iter()
@@ -648,7 +631,13 @@ fn relationships(parts: &[&Part]) -> Result<Relationships> {
     let mut errors = Vec::new();
     for (source, part) in parts.iter().enumerate() {
         for measure in &part.measures {
-            for node in descendants(&measure.source) {
+            for node in measure
+                .events
+                .iter()
+                .flat_map(|event| &event.notes)
+                .chain(measure.extras.iter().map(|extra| &extra.element))
+                .flat_map(descendants)
+            {
                 if NUMBERED_RELATIONSHIPS.contains(&node.name.as_str()) {
                     let key = (
                         source,
@@ -758,218 +747,241 @@ fn unique_ids(output: &mut Element, definition: &mut Element, used: &mut HashSet
     }
 }
 
+#[derive(Default)]
+struct VoiceSlots {
+    extra: HashMap<(usize, usize), String>,
+    ties: HashMap<(usize, String, Pitch), usize>,
+}
+
+impl VoiceSlots {
+    fn voice(&mut self, group: usize, lane: usize) -> String {
+        if lane == 0 {
+            return (group + 1).to_string();
+        }
+        let next = (self.extra.len() + 3).to_string();
+        self.extra.entry((group, lane)).or_insert(next).clone()
+    }
+}
+
+fn rhythm(event: &Event) -> Vec<String> {
+    elements(&event.notes[0])
+        .filter(|node| ["type", "dot", "time-modification", "grace"].contains(&node.name.as_str()))
+        .map(|node| {
+            let mut node = node.clone();
+            walk_mut(&mut node, &mut |node| node.attributes.clear());
+            canonical(&node)
+        })
+        .collect()
+}
+
+fn combine_events(target: &mut Event, other: &Event) -> Result<()> {
+    for note in &other.notes {
+        let key = (pitch(note)?, tie_state(note));
+        if let Some(own) = target
+            .notes
+            .iter_mut()
+            .find(|own| pitch(own).ok().as_ref() == Some(&key.0) && tie_state(own) == key.1)
+        {
+            combine_note(own, note);
+        } else {
+            target.notes.push(note.clone());
+        }
+    }
+    Ok(())
+}
+
+fn has_tie(note: &Element, kind: &str) -> bool {
+    let (sound, visual) = tie_state(note);
+    sound
+        .iter()
+        .chain(&visual)
+        .any(|value| value == kind || value == "continue")
+}
+
 fn merge_events(
     streams: &[Vec<Event>],
-    length: &Fraction,
-    measures: &[&Measure],
+    stems: &[String],
+    slots: &mut VoiceSlots,
 ) -> Result<Vec<Event>> {
-    let ordinary: Vec<Vec<_>> = streams
-        .iter()
-        .map(|s| s.iter().filter(|e| !e.grace()).collect())
-        .collect();
-    let grace: Vec<Vec<_>> = streams
-        .iter()
-        .map(|s| s.iter().filter(|e| e.grace()).collect())
-        .collect();
-    let mut boundaries = BTreeSet::from([Fraction::zero(), length.clone()]);
-    for stream in &ordinary {
-        for event in stream {
-            boundaries.extend([event.start.clone(), event.end()]);
-        }
-    }
-    let boundaries: Vec<_> = boundaries.into_iter().collect();
-    let mut divergence = length.clone();
-    for pair in boundaries.windows(2) {
-        let start = &pair[0];
-        let active: Vec<_> = ordinary
+    let mut result = Vec::new();
+    let mut voice_groups = HashMap::new();
+    for (group, stem) in ["up", "down"].into_iter().enumerate() {
+        let mut spans: Vec<(Vec<(usize, &Event)>, usize)> = Vec::new();
+        let mut indices = HashMap::new();
+        for (source, stream) in streams
             .iter()
-            .map(|s| {
-                s.iter()
-                    .find(|e| e.start <= *start && *start < e.end())
-                    .copied()
-            })
-            .collect();
-        let different = if active.iter().any(Option::is_none) {
-            true
-        } else {
-            let reference = active[0].unwrap();
-            let signature = signature(reference)?;
-            let mut different = false;
-            for other in active.iter().skip(1).flatten() {
-                if other.start != reference.start
-                    || other.duration != reference.duration
-                    || self::signature(other)? != signature
-                {
-                    different = true;
-                    break;
+            .enumerate()
+            .filter(|(source, _)| stems[*source] == stem)
+        {
+            let mut grace_counts = HashMap::new();
+            for event in stream {
+                let ordinal = if event.grace() {
+                    let count = grace_counts
+                        .entry((event.start.clone(), event.voice.clone()))
+                        .or_insert(0);
+                    let ordinal = *count;
+                    *count += 1;
+                    ordinal
+                } else {
+                    0
+                };
+                let key = (
+                    event.start.clone(),
+                    event.duration.clone(),
+                    event.grace(),
+                    ordinal,
+                    rhythm(event),
+                    event.notes[0].get_child("rest").is_some(),
+                );
+                if let Some(index) = indices.get(&key) {
+                    let index: usize = *index;
+                    spans[index].0.push((source, event));
+                } else {
+                    indices.insert(key, spans.len());
+                    spans.push((vec![(source, event)], ordinal));
                 }
             }
-            different
-        };
-        if different {
-            divergence = start.clone();
-            break;
         }
-    }
-    let grace_positions: BTreeSet<_> = grace
-        .iter()
-        .flat_map(|s| s.iter().map(|e| e.start.clone()))
-        .collect();
-    for position in grace_positions {
-        let groups: Vec<Vec<_>> = grace
-            .iter()
-            .map(|s| {
-                s.iter()
-                    .filter(|e| e.start == position)
-                    .map(|e| signature(e))
-                    .collect::<Result<_>>()
-            })
-            .collect::<Result<_>>()?;
-        if groups.iter().skip(1).any(|g| *g != groups[0]) {
-            divergence = divergence.min(position);
-        }
-    }
-    let mut result = Vec::new();
-    let mut errors = Vec::new();
-    for event in ordinary[0].iter().filter(|e| e.start < divergence) {
-        let end = event.end().min(divergence.clone());
-        let mut merged = match slice_event(event, event.start.clone(), end.clone()) {
-            Ok(event) => event,
-            Err(error) => {
-                errors.push(ScoreError::new(format!(
-                    "{}: {error}",
-                    source_context(measures[0], event)
-                )));
-                continue;
-            }
-        };
-        merged.voice = "1".into();
-        for stream in ordinary.iter().skip(1) {
-            for other in stream
-                .iter()
-                .filter(|other| other.start < end && other.end() > event.start)
-            {
-                for note in &mut merged.notes {
-                    for other_note in &other.notes {
-                        if pitch(note)? == pitch(other_note)? {
-                            combine_note(note, other_note);
+        spans.sort_by(|(a, ai), (b, bi)| {
+            let (a, b) = (a[0].1, b[0].1);
+            a.start
+                .cmp(&b.start)
+                .then_with(|| b.grace().cmp(&a.grace()))
+                .then(ai.cmp(bi))
+                .then_with(|| b.duration.cmp(&a.duration))
+        });
+        let mut ends: Vec<Fraction> = Vec::new();
+        for (owners, _) in spans {
+            let mut partitions: BTreeMap<Option<usize>, Vec<(usize, &Event)>> = BTreeMap::new();
+            for (source, event) in owners {
+                let mut required = BTreeSet::new();
+                for note in &event.notes {
+                    if has_tie(note, "stop") {
+                        if let Some(lane) =
+                            slots.ties.get(&(source, event.voice.clone(), pitch(note)?))
+                        {
+                            required.insert(*lane);
                         }
                     }
                 }
+                partitions
+                    .entry(required.first().copied())
+                    .or_default()
+                    .push((source, event));
             }
-        }
-        result.push(merged);
-    }
-    for (source, stream) in ordinary.iter().enumerate() {
-        for event in stream.iter().filter(|e| e.end() > divergence) {
-            match slice_event(
-                event,
-                divergence.clone().max(event.start.clone()),
-                event.end(),
-            ) {
-                Ok(event) => result.push(event),
-                Err(error) => errors.push(ScoreError::new(format!(
-                    "{}: {error}",
-                    source_context(measures[source], event)
-                ))),
+            if partitions.len() > 1 {
+                if let Some(unbound) = partitions.remove(&None) {
+                    partitions.first_entry().unwrap().get_mut().extend(unbound);
+                }
             }
-        }
-    }
-    for (source, stream) in grace.iter().enumerate() {
-        let mut ordinals = HashMap::new();
-        for event in stream {
-            let ordinal = ordinals.entry(event.start.clone()).or_insert(0_usize);
-            let index = *ordinal;
-            *ordinal += 1;
-            if event.start >= divergence {
-                result.push((*event).clone());
-            } else if source == 0 {
-                let mut merged = (*event).clone();
-                for other_stream in grace.iter().skip(1) {
-                    let other = other_stream
-                        .iter()
-                        .filter(|e| e.start == event.start)
-                        .nth(index)
-                        .unwrap();
-                    for (note, other_note) in merged.notes.iter_mut().zip(&other.notes) {
-                        combine_note(note, other_note);
+            for (required, owners) in partitions {
+                let mut event = owners[0].1.clone();
+                for (_, other) in owners.iter().skip(1) {
+                    combine_events(&mut event, other)?;
+                }
+                let lane = if event.grace() {
+                    required.unwrap_or(0)
+                } else {
+                    // A previously shared tied chord may now require independent rhythms.
+                    required
+                        .filter(|lane| ends.get(*lane).is_none_or(|end| *end <= event.start))
+                        .unwrap_or_else(|| {
+                            ends.iter()
+                                .position(|end| *end <= event.start)
+                                .unwrap_or(ends.len())
+                        })
+                };
+                if !event.grace() {
+                    ends.resize_with(ends.len().max(lane + 1), Fraction::zero);
+                    ends[lane] = event.end();
+                }
+                for (source, original) in owners {
+                    for note in &original.notes {
+                        let key = (source, original.voice.clone(), pitch(note)?);
+                        if has_tie(note, "stop") {
+                            slots.ties.remove(&key);
+                        }
+                        if has_tie(note, "start") {
+                            slots.ties.insert(key, lane);
+                        }
                     }
                 }
-                result.push(merged);
+                event.voice = slots.voice(group, lane);
+                voice_groups.insert(event.voice.clone(), group);
+                result.push(event);
             }
         }
     }
-    result.sort_by(|a, b| {
-        a.start
-            .cmp(&b.start)
-            .then_with(|| b.grace().cmp(&a.grace()))
-    });
-    check_errors(errors)?;
-    deduplicate_notes(result, streams.len())
-}
-
-fn deduplicate_notes(events: Vec<Event>, voice_count: usize) -> Result<Vec<Event>> {
-    let mut rest_counts = HashMap::<_, usize>::new();
-    for event in events.iter().filter(|event| {
-        !event.grace()
+    result.sort_by(|a, b| voice_cmp(&a.voice, &b.voice).then(a.start.cmp(&b.start)));
+    let mut rests: HashMap<_, usize> = HashMap::new();
+    let mut deduplicated: Vec<Event> = Vec::new();
+    let mut removed_rest = false;
+    for event in result {
+        if !event.grace()
             && event
                 .notes
                 .iter()
                 .all(|note| note.get_child("rest").is_some())
-    }) {
-        *rest_counts
-            .entry((event.start.clone(), event.duration.clone()))
-            .or_default() += 1;
-    }
-    let mut result: Vec<Event> = Vec::new();
-    let mut seen: HashMap<_, (usize, usize)> = HashMap::new();
-    let mut grace_counts = HashMap::new();
-    for mut event in events {
-        let common_rest =
-            rest_counts.get(&(event.start.clone(), event.duration.clone())) == Some(&voice_count);
-        let ordinal = if event.grace() {
-            let count = grace_counts
-                .entry((event.start.clone(), event.voice.clone()))
-                .or_insert(0_usize);
-            let ordinal = *count;
-            *count += 1;
-            ordinal
-        } else {
-            0
-        };
-        for note in std::mem::take(&mut event.notes) {
-            let stem = child_text(&note, "stem");
-            let rest = note.get_child("rest").is_some();
-            if rest && !common_rest || !rest && !matches!(stem.as_deref(), Some("up" | "down")) {
-                event.notes.push(note);
+        {
+            let key = (event.start.clone(), event.duration.clone());
+            if let Some(index) = rests.get(&key) {
+                combine_note(&mut deduplicated[*index].notes[0], &event.notes[0]);
+                removed_rest = true;
                 continue;
             }
-            let key = (
-                event.start.clone(),
-                event.duration.clone(),
-                event.grace(),
-                ordinal,
-                pitch(&note)?,
-                tie_state(&note),
-                stem,
-            );
-            if let Some(&(event_index, note_index)) = seen.get(&key) {
-                let target = if event_index == result.len() {
-                    &mut event.notes[note_index]
-                } else {
-                    &mut result[event_index].notes[note_index]
-                };
-                combine_note(target, &note);
-            } else {
-                seen.insert(key, (result.len(), event.notes.len()));
-                event.notes.push(note);
+            rests.insert(key, deduplicated.len());
+        }
+        deduplicated.push(event);
+    }
+    if removed_rest {
+        compact_after_rests(&mut deduplicated, &voice_groups, slots);
+    }
+    Ok(deduplicated)
+}
+
+fn compact_after_rests(
+    events: &mut [Event],
+    groups: &HashMap<String, usize>,
+    slots: &mut VoiceSlots,
+) {
+    let connected = |event: &Event| {
+        event
+            .notes
+            .iter()
+            .any(|note| has_tie(note, "start") || has_tie(note, "stop"))
+    };
+    let fixed: Vec<_> = events
+        .iter()
+        .filter(|event| !event.grace() && connected(event))
+        .map(|event| (event.voice.clone(), event.start.clone(), event.end()))
+        .collect();
+    events.sort_by(|a, b| {
+        a.start
+            .cmp(&b.start)
+            .then_with(|| b.grace().cmp(&a.grace()))
+            .then_with(|| b.duration.cmp(&a.duration))
+    });
+    let mut ends: HashMap<String, Fraction> = HashMap::new();
+    for event in events.iter_mut().filter(|event| !event.grace()) {
+        if !connected(event) {
+            let group = groups[&event.voice];
+            let mut lane = 0;
+            loop {
+                let voice = slots.voice(group, lane);
+                if ends.get(&voice).is_none_or(|end| *end <= event.start)
+                    && !fixed.iter().any(|(fixed_voice, start, end)| {
+                        *fixed_voice == voice && *start < event.end() && *end > event.start
+                    })
+                {
+                    event.voice = voice;
+                    break;
+                }
+                lane += 1;
             }
         }
-        if !event.notes.is_empty() {
-            result.push(event);
-        }
+        ends.insert(event.voice.clone(), event.end());
     }
-    Ok(result)
+    events.sort_by(|a, b| voice_cmp(&a.voice, &b.voice).then(a.start.cmp(&b.start)));
 }
 
 fn collect_retained_ids(element: &Element, replaced: &HashSet<&str>, used: &mut HashSet<String>) {
@@ -989,7 +1001,7 @@ fn collect_retained_ids(element: &Element, replaced: &HashSet<&str>, used: &mut 
     }
 }
 
-/// Merge disjoint groups of stable part IDs; group order controls voice order.
+/// Merge disjoint groups of stable part IDs, with alternating up/down source stems.
 pub fn merge_score(score: &Score, groups: &[Vec<String>]) -> Result<Element> {
     let stems: Vec<Vec<String>> = groups
         .iter()
@@ -1002,7 +1014,7 @@ pub fn merge_score(score: &Score, groups: &[Vec<String>]) -> Result<Element> {
     merge_score_with_stems(score, groups, &stems)
 }
 
-/// Merge with one explicit up/down stem direction per source, in group voice order.
+/// Merge sources into as few rhythm-compatible voices as possible per stem group.
 pub fn merge_score_with_stems(
     score: &Score,
     groups: &[Vec<String>],
@@ -1031,7 +1043,12 @@ pub fn merge_score_with_stems(
     let mut replacements = HashMap::new();
     let mut errors = Vec::new();
     for (indices, stems) in groups.into_iter().zip(stems) {
-        let parts: Vec<_> = indices.iter().map(|i| &score.parts[*i]).collect();
+        let mut owned_parts: Vec<_> = indices.iter().map(|i| score.parts[*i].clone()).collect();
+        if let Err(error) = dynamics::normalize(&mut owned_parts, stems) {
+            errors.push(error);
+            continue;
+        }
+        let parts: Vec<_> = owned_parts.iter().collect();
         if parts
             .iter()
             .any(|p| p.measures.len() != parts[0].measures.len())
@@ -1079,7 +1096,8 @@ pub fn merge_score_with_stems(
         }
         let mut output = Element::new("part");
         output.attributes = anchor.source.attributes.clone();
-        let lines = lyric_lines(&parts);
+        let lines = lyric_lines(&parts, stems);
+        let mut slots = VoiceSlots::default();
         let relationships = match relationships(&parts) {
             Ok(relationships) => Some(relationships),
             Err(error) => {
@@ -1102,8 +1120,8 @@ pub fn merge_score_with_stems(
                 failed = true;
             }
             let mut streams = Vec::new();
-            for (source, measure) in measures.iter().enumerate() {
-                match flatten(measure, &(source + 1).to_string()) {
+            for measure in &measures {
+                match source_events(measure) {
                     Ok(stream) => streams.push(stream),
                     Err(error) => {
                         errors.push(error);
@@ -1117,6 +1135,7 @@ pub fn merge_score_with_stems(
             let (Some(relationships), Some(clef)) = (&relationships, clef) else {
                 continue;
             };
+            deduplicate_lyrics(&mut streams, stems);
             for (source, stream) in streams.iter_mut().enumerate() {
                 let instrument = parts[source]
                     .definition
@@ -1132,14 +1151,14 @@ pub fn merge_score_with_stems(
                     instrument,
                 );
             }
-            let events = match merge_events(&streams, &measures[0].length, &measures) {
+            let events = match merge_events(&streams, stems, &mut slots) {
                 Ok(events) => events,
                 Err(error) => {
                     errors.push(error);
                     continue;
                 }
             };
-            let extras = extras(&measures, clef, index == 0, relationships);
+            let extras = extras(&measures, stems, clef, index == 0, relationships);
             match render_measure(measures[0], &events, Some(&extras), None, None) {
                 Ok(rendered) => append(&mut output, rendered),
                 Err(error) => errors.push(error),

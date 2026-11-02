@@ -1217,7 +1217,8 @@ mod tests {
         .unwrap();
         let score = scorewing_core::parse_score(result.root).unwrap();
         let events = &score.parts[0].measures[0].events;
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].notes.len(), 2);
         assert!(events
             .iter()
             .flat_map(|e| &e.notes)
@@ -1228,7 +1229,7 @@ mod tests {
                 .find(|e| e.start == scorewing_core::frac(1))
                 .unwrap()
                 .voice,
-            "1"
+            "2"
         );
         for stems in [
             vec![],

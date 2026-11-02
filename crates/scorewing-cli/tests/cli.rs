@@ -142,7 +142,7 @@ fn split_merge_compressed_roundtrip_and_output_protection() {
             .iter()
             .map(|event| event.voice.as_str())
             .collect::<std::collections::BTreeSet<_>>(),
-        ["1", "2", "3"].into_iter().collect()
+        ["1", "2"].into_iter().collect()
     );
     let before = fs::read(&merged).unwrap();
     assert!(!cli()

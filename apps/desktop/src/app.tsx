@@ -525,7 +525,7 @@ export function mountApp(container: HTMLElement): () => void {
             onChange={(selected) => update(({ arrangement }) => { arrangement.insertFallbackSlurs = selected; })}>
             <Checkbox.Content><Checkbox.Control><Checkbox.Indicator /></Checkbox.Control><Label>Automatically insert slurs at fallback voice transitions</Label></Checkbox.Content>
           </Checkbox><Description>Matching pitches continue existing ties. When pitches differ, this option uses a slur and marks its endpoint notes red for review. When disabled, the fallback note becomes a rest of the same duration.</Description></div>
-        </Card.Content></Card> : <Card className="options-card"><Card.Header className="section-heading flex-row flex-wrap items-center justify-between gap-4"><div className="grid min-w-0 gap-2"><Description>02 / MERGE GROUPS</Description><Card.Title>Arrange the voices.</Card.Title><Card.Description>Each group becomes one staff. Top to bottom sets its voice order.</Card.Description></div>
+        </Card.Content></Card> : <Card className="options-card"><Card.Header className="section-heading flex-row flex-wrap items-center justify-between gap-4"><div className="grid min-w-0 gap-2"><Description>02 / MERGE GROUPS</Description><Card.Title>Arrange the voices.</Card.Title><Card.Description>Each group becomes one staff. Up stems share voice 1, down stems share voice 2. Different rhythms use extra voices.</Card.Description></div>
           <div className="merge-create"><Description>{state.selected.size} instruments selected</Description><Button data-action="add-group" variant="secondary" isDisabled={busy() || state.selected.size < 2} onPress={() => update(({ arrangement }) => {
             const error = addGroup(arrangement, score.parts);
             message = error ?? "Merge group created. Reorder its instruments if needed."; messageError = !!error;
@@ -536,13 +536,13 @@ export function mountApp(container: HTMLElement): () => void {
               <ol>{group.map((id, pi) => {
                 const name = score.parts.find((part) => part.id === id)?.name || id;
                 return <li className="merge-part" key={id}><div className="merge-instrument" role="group" aria-labelledby={`merge-part-${id}`}>
-                  <div className="group-part"><h5 id={`merge-part-${id}`}>{name}</h5><Description>Voice {pi + 1}</Description></div>
+                  <div className="group-part"><h5 id={`merge-part-${id}`}>{name}</h5><Description>{stemDirection(state, id, pi) === "up" ? "Up-stem group" : "Down-stem group"}</Description></div>
                   <Choice id={`stem-${id}`} label="Stem direction" value={stemDirection(state, id, pi)}
                     disabled={busy()} options={[{ key: "up", label: "Up" }, { key: "down", label: "Down" }]}
                     onChange={(value) => update(({ arrangement }) => { arrangement.stems.set(id, value as "up" | "down"); })} />
-                  <div className="merge-order"><span className="text-sm">Voice order</span><span className="reorder flex gap-2"><Button isIconOnly variant="secondary" aria-label={`Move ${name}, voice ${pi + 1}, up in group ${gi + 1}`} data-action="up" data-group={gi} data-index={pi} isDisabled={busy() || pi === 0}
+                  <div className="merge-order"><span className="text-sm">Source order</span><span className="reorder flex gap-2"><Button isIconOnly variant="secondary" aria-label={`Move ${name}, source ${pi + 1}, up in group ${gi + 1}`} data-action="up" data-group={gi} data-index={pi} isDisabled={busy() || pi === 0}
                     onPress={() => update(({ arrangement }) => movePart(arrangement.groups[gi], pi, -1))}>↑</Button>
-                    <Button isIconOnly variant="secondary" aria-label={`Move ${name}, voice ${pi + 1}, down in group ${gi + 1}`} data-action="down" data-group={gi} data-index={pi} isDisabled={busy() || pi === group.length - 1}
+                    <Button isIconOnly variant="secondary" aria-label={`Move ${name}, source ${pi + 1}, down in group ${gi + 1}`} data-action="down" data-group={gi} data-index={pi} isDisabled={busy() || pi === group.length - 1}
                       onPress={() => update(({ arrangement }) => movePart(arrangement.groups[gi], pi, 1))}>↓</Button></span></div>
                 </div></li>;
               })}</ol>

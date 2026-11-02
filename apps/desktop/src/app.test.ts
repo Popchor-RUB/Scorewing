@@ -242,7 +242,7 @@ test("HeroUI split and merge controls retain choices, validate, and send unchang
     assert.equal(app.document.querySelectorAll(".merge-group").length, 2);
     assert.ok(app.find(".merge-part").querySelector("#stem-P2"), "reordered instruments retain the correct stem controls");
     assert.deepEqual(Array.from(app.document.querySelectorAll(".merge-group .score-select [data-slot='label']"), (label) => label.textContent), ["Stem direction", "Stem direction", "Stem direction", "Stem direction"]);
-    assert.equal(app.find(".group-part [data-slot='description']").textContent, "Voice 1", "voice context has no internal part ID");
+    assert.equal(app.find(".group-part [data-slot='description']").textContent, "Up-stem group", "stem context has no internal part ID");
     await app.choose("#stem-P1", "Up");
     await app.choose("#stem-P3", "Down");
     await app.click('[data-action="up"][data-group="1"][data-index="1"]');

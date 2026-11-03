@@ -141,6 +141,7 @@ jobs:
           releaseBody: Review all platform installers and latest.json before publishing this release.
           releaseDraft: true
           prerelease: false
+          assetNamePattern: '[name]_[version]_[platform]_[arch][setup][ext]'
           updaterJsonPreferNsis: true
           # Strip empty Apple variables without disabling Tauri updater signatures.
           tauriScript: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED != 'true' && 'env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD -u APPLE_SIGNING_IDENTITY -u APPLE_API_ISSUER -u APPLE_API_KEY -u APPLE_API_KEY_PATH ./node_modules/.bin/tauri' || '' }}

@@ -70,7 +70,7 @@ git add -- Cargo.toml Cargo.lock apps/desktop/package.json apps/desktop/package-
 git commit -m "chore: release $tag"
 git tag -a "$tag" -m "Release $tag"
 
-printf 'Push %s and tag %s to %s? [y/N] ' "$branch" "$tag" "$remote"
+printf 'Push %s and tag %s? [y/N] ' "$branch" "$tag" 
 read -r answer || answer=
 case "$answer" in
   y|Y|yes|YES) git push --atomic origin "$branch" "$tag" ;;

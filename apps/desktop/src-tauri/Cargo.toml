@@ -1,6 +1,6 @@
 [package]
 name = "scorewing-desktop"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "MusicXML arranging and MuseScore practice tracks"
 

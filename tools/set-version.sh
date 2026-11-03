@@ -24,11 +24,6 @@ if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
   exit 1
 fi
 
-remote=$(git remote get-url origin)
-case "$remote" in
-  https://github.com/Popchor-RUB/Scorewing|https://github.com/Popchor-RUB/Scorewing.git|git@github.com:Popchor-RUB/Scorewing.git) ;;
-  *) printf 'origin must point to Popchor-RUB/Scorewing before releasing.\n' >&2; exit 1 ;;
-esac
 
 node - "$version" <<'NODE'
 const fs = require('node:fs');

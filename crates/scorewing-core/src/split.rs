@@ -727,13 +727,32 @@ fn lane_measure(
     let mut extras = Vec::new();
     for extra in &measure.extras {
         if let Some(source_voice) = child_text(&extra.element, "voice") {
+            // Navigation and rehearsal directions apply to every derived lane.
+            let global = extra.element.name == "direction"
+                && elements(&extra.element).any(|node| match node.name.as_str() {
+                    "direction-type" => elements(node)
+                        .any(|mark| matches!(mark.name.as_str(), "rehearsal" | "segno" | "coda")),
+                    "sound" => [
+                        "dacapo",
+                        "segno",
+                        "dalsegno",
+                        "coda",
+                        "tocoda",
+                        "fine",
+                        "forward-repeat",
+                    ]
+                    .iter()
+                    .any(|attribute| node.attributes.contains_key(*attribute)),
+                    _ => false,
+                });
             let occupied: HashSet<_> = measure
                 .events
                 .iter()
                 .filter(|e| e.start <= extra.position && extra.position < e.end())
                 .map(|e| e.voice.as_str())
                 .collect();
-            if Some(source_voice.as_str()) != voice_at(&extra.position)
+            if !global
+                && Some(source_voice.as_str()) != voice_at(&extra.position)
                 && !(shared && occupied.len() == 1 && occupied.contains(source_voice.as_str()))
             {
                 continue;

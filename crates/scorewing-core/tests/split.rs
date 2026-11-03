@@ -2,7 +2,7 @@ mod common;
 use common::*;
 use scorewing_core::{
     model::{frac, parse_score},
-    split::split_score,
+    split::{split_plan, split_score, split_score_with_options, SplitFallback, SplitOptions},
 };
 use std::collections::HashSet;
 
@@ -209,6 +209,87 @@ fn directions_follow_their_explicit_voice_and_are_renumbered() {
         .unwrap();
     assert_eq!(text(direction, "voice"), "1");
     assert_eq!(text(direction, "direction-type/words"), "Lower only");
+}
+
+#[test]
+fn rehearsal_marks_and_navigation_survive_every_split_lane() {
+    let mut directions = vec![
+        "<direction><direction-type><rehearsal>A</rehearsal></direction-type><offset>-1</offset><voice>2</voice></direction>".to_owned(),
+        "<direction><direction-type><segno/></direction-type><voice>2</voice></direction>".to_owned(),
+        "<direction><direction-type><coda/></direction-type><voice>2</voice></direction>".to_owned(),
+    ];
+    for (attribute, value) in [
+        ("dacapo", "yes"),
+        ("segno", "segno-1"),
+        ("dalsegno", "segno-1"),
+        ("coda", "coda-1"),
+        ("tocoda", "coda-1"),
+        ("fine", "yes"),
+        ("forward-repeat", "yes"),
+    ] {
+        directions.push(format!(
+            "<direction><direction-type><words>{attribute}</words></direction-type><voice>2</voice><sound {attribute}=\"{value}\"/></direction>"
+        ));
+    }
+    let left = "<barline location=\"left\"><repeat direction=\"forward\"/></barline>";
+    let right = "<barline location=\"right\"><ending number=\"1\" type=\"stop\"/><repeat direction=\"backward\" times=\"2\"/></barline>";
+    let body = left.to_owned()
+        + &n("C").xml()
+        + &n("E").chord().xml()
+        + &directions.concat()
+        + &backup(1)
+        + &n("G").voice("2").xml()
+        + right;
+    let original = score(&[("S", vec![body])]);
+    for mode in ["chords", "voices"] {
+        let lanes = split_plan(&original.parts[0], mode).unwrap();
+        let fallbacks: Vec<_> = lanes
+            .into_iter()
+            .map(|lane| SplitFallback {
+                part_id: "P1".into(),
+                voice: lane.voice,
+                tone: lane.tone,
+                fallback_voice: None,
+            })
+            .collect();
+        for configured in [false, true] {
+            let result = split_score_with_options(
+                &original,
+                mode,
+                None,
+                SplitOptions {
+                    fallbacks: configured.then_some(fallbacks.as_slice()),
+                    ..SplitOptions::default()
+                },
+            )
+            .unwrap();
+            scorewing_core::validate_score(&result.root).unwrap();
+            let result = parse_score(result.root).unwrap();
+            assert_eq!(result.parts[0].source, original.parts[0].source);
+            for part in &result.parts[1..] {
+                let measure = &part.measures[0];
+                let copied: Vec<_> = elements(&measure.source)
+                    .filter(|e| e.name == "direction")
+                    .cloned()
+                    .collect();
+                let expected: Vec<_> = directions
+                    .iter()
+                    .map(|xml| element(&xml.replace("<voice>2</voice>", "<voice>1</voice>")))
+                    .collect();
+                assert_eq!(copied, expected, "{mode}, configured={configured}");
+                let barlines: Vec<_> = elements(&measure.source)
+                    .filter(|e| e.name == "barline")
+                    .cloned()
+                    .collect();
+                assert_eq!(barlines, [element(left), element(right)]);
+                assert!(measure
+                    .extras
+                    .iter()
+                    .filter(|e| e.element.name == "direction")
+                    .all(|e| e.position == frac(1)));
+            }
+        }
+    }
 }
 
 #[test]

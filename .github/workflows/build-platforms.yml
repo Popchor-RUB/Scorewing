@@ -17,12 +17,16 @@ jobs:
         include:
           - runner: ubuntu-24.04
             artifact: scorewing-linux-x64
+            bundle: appimage
           - runner: windows-2022
             artifact: scorewing-windows-x64
+            bundle: nsis
           - runner: macos-15-intel
             artifact: scorewing-macos-x64
+            bundle: app
           - runner: macos-15
             artifact: scorewing-macos-arm64
+            bundle: app
     runs-on: ${{ matrix.runner }}
     env:
       APPLE_SIGNING_ENABLED: ${{ github.repository == 'Popchor-RUB/Scorewing' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' && secrets.APPLE_API_ISSUER != '' && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_PRIVATE_KEY != '' }}
@@ -121,6 +125,7 @@ jobs:
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo build -p scorewing-cli --release --locked
       - name: Build installers and upload tag releases
+        id: bundle
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -146,8 +151,37 @@ jobs:
           # Strip empty Apple variables without disabling Tauri updater signatures.
           tauriScript: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED != 'true' && 'env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD -u APPLE_SIGNING_IDENTITY -u APPLE_API_ISSUER -u APPLE_API_KEY -u APPLE_API_KEY_PATH ./node_modules/.bin/tauri' || '' }}
           args: >-
+            --bundles ${{ inputs.release && matrix.bundle || 'all' }}
             ${{ inputs.release && '--config ''{"bundle":{"createUpdaterArtifacts":true}}''' || '' }}
             -- --locked
+      - name: Remove standalone updater signatures
+        if: inputs.release
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ steps.bundle.outputs.releaseId }}
+        with:
+          script: |
+            const assert = require('node:assert/strict');
+            const params = { ...context.repo, release_id: Number(process.env.RELEASE_ID) };
+            const { data: release } = await github.rest.repos.getRelease(params);
+            assert.ok(release.draft, 'Only draft release assets may be changed');
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, params);
+            const manifest = assets.find(asset => asset.name === 'latest.json');
+            assert.ok(manifest, 'latest.json must exist before removing signatures');
+            const { data } = await github.rest.repos.getReleaseAsset({
+              ...context.repo, asset_id: manifest.id,
+              headers: { accept: 'application/octet-stream' }
+            });
+            const platforms = Object.values(JSON.parse(Buffer.from(data).toString('utf8')).platforms);
+            assert.ok(platforms.length, 'latest.json must contain updater entries');
+            for (const entry of platforms) {
+              assert.ok(typeof entry.signature === 'string' && entry.signature.trim(), 'Updater signatures must be embedded');
+              assert.ok(assets.some(asset => asset.browser_download_url === entry.url && !asset.name.endsWith('.sig')),
+                'Every updater URL must point to a retained release asset');
+            }
+            for (const asset of assets.filter(asset => asset.name.endsWith('.sig'))) {
+              await github.rest.repos.deleteReleaseAsset({ ...context.repo, asset_id: asset.id });
+            }
       - name: Verify macOS signature and notarization ticket
         if: runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true'
         run: |

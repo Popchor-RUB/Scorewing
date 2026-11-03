@@ -60,8 +60,8 @@ Ordinary builds run platforms in parallel, upload GitHub Actions artifacts, and 
 
 ## Create a draft
 
-1. Set the same stable version in `apps/desktop/package.json` (and its lockfile), `apps/desktop/src-tauri/Cargo.toml` (and the workspace lockfile), and `apps/desktop/src-tauri/tauri.conf.json`.
-2. Run the checks, commit, and push a matching tag such as `v0.1.0` to `Popchor-RUB/Scorewing`.
+1. Run the checks with no tracked changes and make sure `origin` points to `Popchor-RUB/Scorewing`.
+2. Run `tools/set-version.sh 0.2.0` with the intended stable version. It updates the Rust, desktop, and Tauri manifests and lockfiles, commits them, creates the matching annotated tag, and asks before pushing the branch and tag together.
 3. The **Test and build Rust CLI and desktop** workflow's release job tests and builds Linux x64, Windows x64, macOS Intel, and macOS Apple Silicon, including macOS code signing and notarization when the Apple credentials are configured. Platform jobs run sequentially so their updates to `latest.json` cannot overwrite each other.
 4. Confirm all four jobs succeeded. Inspect the draft's installers, updater archives, signatures, and `latest.json`. It must include `linux-x86_64`, `windows-x86_64`, `darwin-x86_64`, and `darwin-aarch64` entries, each with a URL and signature. Windows updates use NSIS.
 5. Install and smoke-test the platform packages, then publish the draft manually. The workflow never publishes a release and refuses to modify an already-published tag. Failed runs leave a draft that can be retried before publishing.

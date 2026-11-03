@@ -29,7 +29,7 @@ fn help_version_and_error_contract() {
     assert!(version.status.success());
     assert_eq!(
         String::from_utf8_lossy(&version.stdout).trim(),
-        "scorewing 0.1.0"
+        concat!("scorewing ", env!("CARGO_PKG_VERSION"))
     );
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("invalid.xml");

@@ -1,6 +1,10 @@
 @import "tailwindcss";
 @import "@heroui/styles";
 
+.update-prompt { display: flex; flex-direction: column; justify-content: space-between; min-height: 100dvh; padding: 1.5rem; border-radius: 0; }
+.update-prompt-content { display: grid; grid-template-columns: 80px minmax(0, 1fr); align-items: start; gap: 1.5rem; }
+.update-prompt-actions { display: flex; justify-content: flex-end; gap: .75rem; padding-top: 1.5rem; }
+
 .mode-selection {
   display: grid;
   gap: 1.5rem;

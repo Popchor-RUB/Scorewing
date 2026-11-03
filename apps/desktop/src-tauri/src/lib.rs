@@ -23,6 +23,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 
 mod menu;
+mod update_prompt;
 
 #[derive(Default)]
 struct Documents {
@@ -922,6 +923,7 @@ pub fn run() {
             open_practice_export_folder,
             updater_supported,
             open_update_downloads,
+            update_prompt::show_update_prompt,
             menu::set_file_menu_state,
             menu::set_update_menu_state
         ])

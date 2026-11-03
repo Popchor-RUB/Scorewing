@@ -81,6 +81,7 @@ export function mountApp(container: HTMLElement): () => void {
   let exporting = false;
   let installing = false;
   let updateInstalled = false;
+  let updatePromptOpen = false;
   let cancelling = false;
   let dropping = false;
   let disposed = false;
@@ -99,7 +100,12 @@ export function mountApp(container: HTMLElement): () => void {
   let fileMenuState = "";
   let environmentRequest = 0;
   const unlisteners: UnlistenFn[] = [];
-  const busy = () => fileBusy || exporting || installing;
+  const busy = () => fileBusy || exporting || installing || updatePromptOpen;
+
+  function setUpdatePromptOpen(open: boolean) {
+    updatePromptOpen = open;
+    render();
+  }
 
   async function installUpdate(update: Update) {
     if (disposed || busy() || current || pendingPair || checking)
@@ -583,7 +589,7 @@ export function mountApp(container: HTMLElement): () => void {
     root.render(<RecentSoundsProvider><div className="app-shell min-h-dvh bg-background text-foreground">
       <header className="app-header mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 p-5 sm:p-7"><div className="brand flex items-center gap-3"><span aria-hidden="true">♫</span><div className="flex flex-col gap-1"><strong>Scorewing</strong><Description>A little room to rearrange.</Description></div></div>
       </header>
-      <UpdateControl checkRequest={updateCheckRequest} canInstall={!session && !pendingPair && !busy() && !checking} onInstall={installUpdate} />
+      <UpdateControl checkRequest={updateCheckRequest} canInstall={!session && !pendingPair && !busy() && !checking} onInstall={installUpdate} onPromptChange={setUpdatePromptOpen} />
       <main className="workspace mx-auto max-w-6xl p-5 sm:p-7"><section className="editor min-w-0" aria-label="Score arrangement">
         {!session ? <div className="empty flex min-h-96 flex-col items-center justify-center gap-6 py-12 text-center"><div className="text-6xl" aria-hidden="true">♫</div><Description>MAKE SPACE FOR YOUR MUSIC</Description><h1 className="text-4xl font-semibold sm:text-6xl">Every voice.<br />A little clearer.</h1>
           <p className="max-w-md text-muted">Split a staff, bring parts together, or make a practice track that lets your instrument shine.</p>

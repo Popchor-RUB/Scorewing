@@ -3,12 +3,15 @@ import { Button, Description, Modal, ProgressBar } from "@heroui/react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 
+const SKIPPED_VERSION_KEY = "scorewing.skipped-update-version";
+
 type Status = "idle" | "checking" | "available" | "downloading" | "ready" | "installing";
 
-export function UpdateControl({ checkRequest, canInstall, onInstall }: {
+export function UpdateControl({ checkRequest, canInstall, onInstall, onPromptChange }: {
   checkRequest: number;
   canInstall: boolean;
   onInstall: (update: Update) => Promise<void>;
+  onPromptChange: (open: boolean) => void;
 }) {
   const [status, setStatus] = useState<Status>("idle");
   const [open, setOpen] = useState(false);
@@ -19,6 +22,7 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
   const active = useRef(true);
   const working = useRef(false);
   const manualCheck = useRef(false);
+  const prompting = useRef(false);
 
   async function closeUpdate() {
     const resource = update.current;
@@ -40,7 +44,13 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
       if (!available) { setStatus("idle"); return; }
       const found = await check({ timeout: 15_000 });
       update.current = found;
-      if (active.current) setStatus(found ? "available" : "idle");
+      if (active.current) {
+        setStatus(found ? "available" : "idle");
+        let skipped = false;
+        try { skipped = localStorage.getItem(SKIPPED_VERSION_KEY) === found?.version; }
+        catch { /* Still offer updates when storage is unavailable. */ }
+        if (found && (manualCheck.current || !skipped)) setOpen(true);
+      }
     } catch (error) {
       if (active.current) {
         setStatus("idle");
@@ -75,13 +85,14 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
   }, [label, status]);
 
   async function download() {
-    if (working.current || !update.current) return;
+    if (working.current || !canInstall || !update.current) return;
     working.current = true;
     setStatus("downloading");
     setError("");
     setProgress(undefined);
     let downloaded = 0;
     let total: number | undefined;
+    let ready = false;
     try {
       await update.current.download((event) => {
         if (!active.current) return;
@@ -89,17 +100,18 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
         if (event.event === "Progress") downloaded += event.data.chunkLength;
         setProgress(total ? Math.min(100, downloaded / total * 100) : undefined);
       }, { timeout: 10 * 60_000 });
-      if (active.current) setStatus("ready");
+      if (active.current) { setStatus("ready"); ready = true; }
     } catch (error) {
       if (active.current) { setStatus("available"); setError(`Could not download the update: ${String(error)}`); }
     } finally {
       working.current = false;
       if (!active.current) await closeUpdate();
     }
+    if (ready) await install();
   }
 
   async function install() {
-    if (working.current || !canInstall || status !== "ready" || !update.current) return;
+    if (working.current || !canInstall || !update.current) return;
     working.current = true;
     setStatus("installing");
     setError("");
@@ -117,8 +129,41 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
     catch (error) { if (active.current) setError(`Could not open GitHub Releases: ${String(error)}`); }
   }
 
+  function skipVersion() {
+    if (!update.current || working.current) return;
+    try {
+      localStorage.setItem(SKIPPED_VERSION_KEY, update.current.version);
+      setOpen(false);
+    } catch (error) {
+      setError(`Could not remember the skipped version: ${String(error)}`);
+    }
+  }
+
+  useEffect(() => {
+    if (!open || status !== "available" || error || prompting.current) return;
+    const found = update.current;
+    if (!found) return;
+    prompting.current = true;
+    onPromptChange(true);
+    void (async () => {
+      let choice: "cancel" | "skip" | "install" | undefined;
+      try {
+        choice = await invoke("show_update_prompt", { currentVersion: found.currentVersion, version: found.version, canInstall });
+      } catch (error) {
+        if (active.current) setError(`Could not open the update dialog: ${String(error)}`);
+      } finally {
+        prompting.current = false;
+        onPromptChange(false);
+      }
+      if (!active.current) return;
+      if (choice === "cancel") setOpen(false);
+      if (choice === "skip") skipVersion();
+      if (choice === "install") await download();
+    })();
+  }, [open, status, error]);
+
   if (!isTauri()) return null;
-  return <Modal.Backdrop isOpen={open} isDismissable={status !== "installing"} isKeyboardDismissDisabled={status === "installing"}
+  return <Modal.Backdrop isOpen={open && (status !== "available" || !!error)} isDismissable={status !== "installing"} isKeyboardDismissDisabled={status === "installing"}
       onOpenChange={(value) => { if (status !== "installing") setOpen(value); }}>
       <Modal.Container size="md" scroll="inside"><Modal.Dialog>
         <Modal.Header><Modal.Heading>Scorewing updates</Modal.Heading></Modal.Header>
@@ -134,13 +179,16 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
           {status === "downloading" && <ProgressBar aria-label="Update download" value={progress ?? 0} isIndeterminate={progress === undefined}>
             <ProgressBar.Track><ProgressBar.Fill /></ProgressBar.Track>
           </ProgressBar>}
-          {status === "ready" && <Description>{canInstall ? "Installation will restart Scorewing."
+          {(status === "available" || status === "ready") && <Description>{canInstall ? "Installation will restart Scorewing."
             : "Close any open score or score selection and wait for current work to finish before installing. Closing a score discards its editing choices."}</Description>}
           {error && <p role="alert" className="text-danger wrap-anywhere">{error}</p>}
         </Modal.Body>
         <Modal.Footer>
-          <Button variant="secondary" data-action="update-later" isDisabled={status === "installing"} onPress={() => setOpen(false)}>Later</Button>
-          {status === "available" && <Button data-action="download-update" onPress={() => void download()}>Download update</Button>}
+          <Button variant="secondary" data-action="update-later" isDisabled={status === "installing"} onPress={() => setOpen(false)}>{status === "downloading" ? "Hide" : "Cancel"}</Button>
+          {status === "available" && <>
+            <Button variant="secondary" data-action="skip-update" onPress={skipVersion}>Skip this version</Button>
+            <Button data-action="download-update" isDisabled={!canInstall} onPress={() => void download()}>Download &amp; Install</Button>
+          </>}
           {status === "ready" && <Button data-action="install-update" isDisabled={!canInstall} onPress={() => void install()}>Install and restart</Button>}
           {!supported && <Button data-action="update-downloads" onPress={() => void openDownloads()}>Open GitHub Releases</Button>}
           {status === "idle" && supported && error && <Button data-action="retry-update-check" onPress={() => void checkForUpdates(true)}>Try again</Button>}

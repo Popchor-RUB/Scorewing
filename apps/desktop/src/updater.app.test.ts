@@ -7,9 +7,10 @@ import type { Inspection } from "./model.ts";
 const metadata = { rid: 10, currentVersion: "0.1.0", version: "0.2.0", body: "A better Scorewing.", rawJson: {} };
 const inspection: Inspection = { id: "score", path: "/scores/test.xml", name: "Test score", format: "musicxml", error: null, parts: [] };
 
-function native(handler: Invoke = () => undefined): Invoke {
+function native(handler: Invoke = () => undefined, prompt: (args: Record<string, unknown>) => unknown = () => "cancel"): Invoke {
   return (command, args) => {
     if (command === "updater_supported") return true;
+    if (command === "show_update_prompt") return prompt(args);
     if (command === "plugin:resources|close") return;
     if (command === "open_files") return [inspection.path];
     if (command === "inspect_file") return inspection;
@@ -57,12 +58,63 @@ test("a manual check during the startup check reports its failure", async () => 
   } finally { await app.close(); }
 });
 
-test("download requires consent; installation requires a closed score and locks file operations", async () => {
+test("skip persists across launches, manual checks override it, and newer releases prompt again", async () => {
+  let version = metadata.version;
+  let prompts = 0;
+  let choice = "skip";
+  const app = await mountTestApp(native((command) => {
+    if (command === "plugin:updater|check") return { ...metadata, version };
+    throw new Error(`Unexpected command ${command}`);
+  }, () => { prompts++; return choice; }));
+  try {
+    assert.equal(prompts, 1);
+    await app.remount();
+    assert.equal(prompts, 1, "skipped release stays quiet after restarting");
+    choice = "cancel";
+    await app.menu("check-updates");
+    assert.equal(prompts, 2, "manual checks still offer skipped releases");
+    await app.remount();
+    assert.equal(prompts, 2, "cancel leaves the saved skip unchanged");
+    version = "0.3.0";
+    await app.remount();
+    assert.equal(prompts, 3, "the next release is offered automatically");
+    await app.remount();
+    assert.equal(prompts, 4, "cancel allows the reminder on the next launch");
+  } finally { await app.close(); }
+});
+
+test("the native prompt locks score operations and failures offer a usable fallback", async () => {
+  let answer: ((choice: string) => void) | undefined;
+  let fail = false;
+  const app = await mountTestApp(native((command) => {
+    if (command === "plugin:updater|check") return metadata;
+    throw new Error(`Unexpected command ${command}`);
+  }, () => {
+    if (fail) throw new Error("Window unavailable");
+    return new Promise<string>((resolve) => { answer = resolve; });
+  }));
+  try {
+    assert.equal(app.fileMenu.openEnabled, false);
+    await app.event("tauri://drag-drop", { paths: [inspection.path], position: { x: 0, y: 0 } });
+    assert.equal(app.document.querySelector('[data-action="close"]'), null);
+    await act(async () => { answer!("cancel"); });
+    assert.equal(app.fileMenu.openEnabled, true);
+    fail = true;
+    await app.menu("check-updates");
+    assert.match(app.find('[role="dialog"] [role="alert"]').textContent!, /Window unavailable/);
+    assert.equal(app.fileMenu.openEnabled, true);
+    assert.ok(app.find('[data-action="skip-update"]'));
+  } finally { await app.close(); }
+});
+
+test("startup prompts natively; download and install require consent and lock file operations", async () => {
   let downloads = 0;
   let installs = 0;
   let restarts = 0;
   let finishDownload: ((rid: number) => void) | undefined;
   let finishInstall: (() => void) | undefined;
+  let choice = "cancel";
+  const prompts: Record<string, unknown>[] = [];
   const app = await mountTestApp(native((command, args) => {
     if (command === "plugin:updater|check") return metadata;
     if (command === "plugin:updater|download") {
@@ -81,26 +133,21 @@ test("download requires consent; installation requires a closed score and locks 
     }
     if (command === "plugin:process|restart") { restarts++; return; }
     throw new Error(`Unexpected command ${command}`);
-  }));
+  }, (args) => { prompts.push(args); return choice; }));
   try {
     assert.match(app.updateMenu.text, /Update available/);
+    assert.deepEqual(prompts, [{ currentVersion: "0.1.0", version: "0.2.0", canInstall: true }]);
     assert.equal(app.document.querySelector('[role="dialog"]'), null);
     assert.equal(downloads, 0);
     await app.menu("open-score");
     await app.menu("check-updates");
-    assert.match(app.find('[role="dialog"]').textContent!, /0.2.0.*0.1.0/);
-    await app.click('[data-action="download-update"]');
+    assert.equal(prompts.at(-1)!.canInstall, false);
+    await app.menu("close-score");
+    choice = "install";
+    await app.menu("check-updates");
     assert.equal(downloads, 1);
     assert.equal(app.find('[role="progressbar"]').getAttribute("aria-valuenow"), "30");
     await act(async () => { finishDownload!(11); });
-    assert.equal(installs, 0, "download never installs automatically");
-    assert.ok(app.find<HTMLButtonElement>('[data-action="install-update"]').disabled);
-    assert.match(app.find('[role="dialog"]').textContent!, /Closing a score discards its editing choices/);
-    await app.click('[data-action="update-later"]');
-    await app.menu("close-score");
-    await app.menu("check-updates");
-    assert.equal(app.find<HTMLButtonElement>('[data-action="install-update"]').disabled, false);
-    await app.click('[data-action="install-update"]');
     assert.equal(installs, 1);
     assert.equal(app.updateMenu.enabled, false);
     assert.match(app.updateMenu.text, /Installing/);
@@ -133,13 +180,10 @@ test("download and install failures can be retried; a restart failure never rein
       return;
     }
     throw new Error(`Unexpected command ${command}`);
-  }));
+  }, () => "install"));
   try {
-    await app.menu("check-updates");
-    await app.click('[data-action="download-update"]');
     assert.match(app.find('[role="alert"]').textContent!, /Network interrupted/);
     await app.click('[data-action="download-update"]');
-    await app.click('[data-action="install-update"]');
     assert.match(app.find('[role="alert"]').textContent!, /Disk is full/);
     assert.equal(app.fileMenu.openEnabled, true);
     await app.click('[data-action="install-update"]');
@@ -148,6 +192,26 @@ test("download and install failures can be retried; a restart failure never rein
     assert.equal(downloads, 2);
     assert.equal(installs, 2, "retrying restart must not reuse consumed updater bytes");
     assert.equal(restarts, 2);
+  } finally { await app.close(); }
+});
+
+test("opening a score during download prevents automatic installation", async () => {
+  let finishDownload: ((rid: number) => void) | undefined;
+  let installs = 0;
+  const app = await mountTestApp(native((command) => {
+    if (command === "plugin:updater|check") return metadata;
+    if (command === "plugin:updater|download") return new Promise<number>((resolve) => { finishDownload = resolve; });
+    if (command === "plugin:updater|install") { installs++; return; }
+    throw new Error(`Unexpected command ${command}`);
+  }, () => "install"));
+  try {
+    await app.click('[data-action="update-later"]');
+    await app.menu("open-score");
+    await act(async () => { finishDownload!(11); });
+    assert.equal(installs, 0);
+    await app.menu("check-updates");
+    assert.ok(app.find<HTMLButtonElement>('[data-action="install-update"]').disabled);
+    assert.match(app.find('[role="dialog"]').textContent!, /Close.*score/);
   } finally { await app.close(); }
 });
 

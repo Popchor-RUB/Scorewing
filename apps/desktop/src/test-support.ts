@@ -5,10 +5,11 @@ import { createServer } from "vite";
 
 export type Invoke = (command: string, args: Record<string, unknown>) => unknown | Promise<unknown>;
 
-export async function mountTestApp(invoke: Invoke) {
+export async function mountTestApp(invoke: Invoke, options: { entry?: string; initialize?: (browser: Window) => void } = {}) {
   const browser = new Window({ url: "http://localhost:1420" });
   const document = browser.document;
   document.body.innerHTML = '<div id="app"></div>';
+  options.initialize?.(browser);
   const globals = globalThis as unknown as Record<string, unknown>;
   for (const name of [
     "window", "document", "navigator", "HTMLElement", "HTMLButtonElement", "HTMLInputElement", "HTMLSelectElement", "HTMLTextAreaElement",
@@ -53,7 +54,7 @@ export async function mountTestApp(invoke: Invoke) {
   const timeStamp = console.timeStamp;
   Object.defineProperty(console, "timeStamp", { configurable: true, value: undefined });
   let mountApp: (container: HTMLElement) => () => void;
-  try { ({ mountApp } = await server.ssrLoadModule("/src/app.tsx")); }
+  try { ({ mountApp } = await server.ssrLoadModule(options.entry ?? "/src/app.tsx")); }
   finally { Object.defineProperty(console, "timeStamp", { configurable: true, value: timeStamp }); }
   let dispose: (() => void) | undefined;
   await act(async () => { dispose = mountApp(document.querySelector("#app") as unknown as HTMLElement); });

@@ -7,6 +7,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -229,9 +230,16 @@ pub(crate) fn run(
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000204); // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED
     }
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Cannot launch MuseScore {}: {e}", executable.display()))?;
+    let mut child = {
+        // macOS sets pipe CLOEXEC non-atomically; serialize spawns to prevent inherited sibling pipes.
+        static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = SPAWN_LOCK
+            .lock()
+            .map_err(|_| "Cannot acquire MuseScore launch lock.")?;
+        command
+            .spawn()
+            .map_err(|e| format!("Cannot launch MuseScore {}: {e}", executable.display()))?
+    };
     #[cfg(windows)]
     let job = match windows_job::Job::attach(&child) {
         Ok(job) => job,

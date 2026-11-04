@@ -357,7 +357,7 @@ mod tests {
         let source = dir.path().join("score.mscz");
         fs::write(&source, b"score").unwrap();
         assert!(plan(dir.path())
-            .protect_sources(OutputChoice::Clear, &[source.clone()])
+            .protect_sources(OutputChoice::Clear, std::slice::from_ref(&source))
             .is_err());
         plan(dir.path())
             .protect_sources(OutputChoice::Overwrite, &[source])

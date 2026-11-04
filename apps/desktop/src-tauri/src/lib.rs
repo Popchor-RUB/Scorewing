@@ -915,10 +915,10 @@ fn resolve_practice_confirmation(
         .as_mut()
         .filter(|job| job.id == id)
         .ok_or("No practice export is running for this score.")?;
-    if !job
+    if job
         .confirmation
         .as_ref()
-        .is_some_and(|(pending, _)| pending == token)
+        .is_none_or(|(pending, _)| pending != token)
     {
         return Err("This export confirmation is no longer current.".into());
     }

@@ -142,7 +142,7 @@ fn export_with_preference(
         renderer::ensure_musescore_closed(&executable)?;
         let staging = tempfile::Builder::new()
             .prefix(".working-")
-            .tempdir_in(&directory)
+            .tempdir_in(directory)
             .map_err(|e| format!("Cannot create export staging folder: {e}"))?;
         progress(Progress {
             stage: "Preparing score".into(),

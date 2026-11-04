@@ -191,9 +191,13 @@ jobs:
             });
             const platforms = Object.values(JSON.parse(Buffer.from(data).toString('utf8')).platforms);
             assert.ok(platforms.length, 'latest.json must contain updater entries');
+            // Tauri replaces GitHub's temporary draft tag with the final release tag.
+            const downloads = new Set(assets.filter(asset => !asset.name.endsWith('.sig')).map(asset =>
+              asset.browser_download_url.replace(/\/download\/untagged-[^/]+\//,
+                `/download/${encodeURIComponent(release.tag_name)}/`)));
             for (const entry of platforms) {
               assert.ok(typeof entry.signature === 'string' && entry.signature.trim(), 'Updater signatures must be embedded');
-              assert.ok(assets.some(asset => asset.browser_download_url === entry.url && !asset.name.endsWith('.sig')),
+              assert.ok(downloads.has(entry.url),
                 'Every updater URL must point to a retained release asset');
             }
             for (const asset of assets.filter(asset => asset.name.endsWith('.sig'))) {

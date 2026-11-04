@@ -107,10 +107,10 @@ export interface PracticeResult {
 }
 export interface PracticeProgress { id: string; stage: string; completed: number; running: number; total: number }
 
-export function newPractice(parts: PracticePart[], defaults: PracticeDefaults = {}): PracticeOptions {
+export function newPractice(parts: PracticePart[], defaults: PracticeDefaults = {}, sections: PracticeSection[] = []): PracticeOptions {
   return {
     include_whole_song: true,
-    section_keys: [],
+    section_keys: sections.map((section) => section.key),
     parts: parts.map((part) => ({
       key: part.key, foreground_sound: defaults.foreground_sound ?? part.existing_preset,
       background_sound: defaults.background_sound ?? part.existing_preset,

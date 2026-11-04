@@ -50,12 +50,8 @@ export async function mountTestApp(invoke: Invoke, options: { entry?: string; in
     server: { middlewareMode: true, hmr: false }, appType: "custom",
     optimizeDeps: { noDiscovery: true, include: [] },
   });
-  // Keep React's development profiler from inspecting React Aria collection getters.
-  const timeStamp = console.timeStamp;
-  Object.defineProperty(console, "timeStamp", { configurable: true, value: undefined });
   let mountApp: (container: HTMLElement) => () => void;
-  try { ({ mountApp } = await server.ssrLoadModule(options.entry ?? "/src/app.tsx")); }
-  finally { Object.defineProperty(console, "timeStamp", { configurable: true, value: timeStamp }); }
+  ({ mountApp } = await server.ssrLoadModule(options.entry ?? "/src/app.tsx"));
   let dispose: (() => void) | undefined;
   await act(async () => { dispose = mountApp(document.querySelector("#app") as unknown as HTMLElement); });
   const settle = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); };
@@ -67,9 +63,8 @@ export async function mountTestApp(invoke: Invoke, options: { entry?: string; in
   const click = async (selector: string) => {
     await act(async () => {
       const element = find<HTMLElement>(selector);
-      const control = element.matches('[data-slot="checkbox"]') ? element.querySelector("input") as unknown as HTMLElement : element;
-      control.focus();
-      control.click();
+      element.focus();
+      element.click();
     });
     await settle();
   };

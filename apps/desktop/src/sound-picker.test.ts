@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Window } from "happy-dom";
+import { Window, type HTMLInputElement as TestInput } from "happy-dom";
 import { act, createElement, useState } from "react";
 import { createServer } from "vite";
 import type { PresetId, SoundPreset } from "./model.ts";
@@ -41,7 +41,7 @@ test("instrument picker supports search, keyboard selection, recents, and persis
         createElement(SoundPicker, { label: "Background sound", presets: catalog, value: null, onChange: () => {} }));
     }
     const render = async (props = {}) => act(async () => root.render(createElement(Harness, props)));
-    const input = (index = 0) => container.querySelectorAll("input")[index]!;
+    const input = (index = 0) => container.querySelectorAll<TestInput>('input[role="combobox"]')[index]!;
     const options = () => [...browser.document.querySelectorAll('[role="option"][data-key]')];
     const separators = () => [...browser.document.querySelectorAll('[data-slot="separator"]')];
     const focus = async (index = 0) => act(async () => { input(index).focus(); });

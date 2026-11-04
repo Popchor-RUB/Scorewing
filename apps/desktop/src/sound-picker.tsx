@@ -1,5 +1,6 @@
-import { Button, ComboBox, Description, Header, Input, Label, ListBox, Separator } from "@heroui/react";
-import { useRef, useState } from "react";
+import { Combobox } from "@base-ui/react/combobox";
+import { Fragment, useId, useRef, useState } from "react";
+import { Button } from "./components/ui/button.tsx";
 import type { PresetId, SoundPreset } from "./model";
 import { soundKey, useRecentSounds } from "./recent-sounds";
 
@@ -8,6 +9,7 @@ export { RecentSoundsProvider } from "./recent-sounds";
 export interface SoundPickerProps {
   id?: string;
   label: string;
+  "aria-label"?: string;
   presets: SoundPreset[];
   value: PresetId | null;
   onChange: (value: PresetId | null) => void;
@@ -16,9 +18,12 @@ export interface SoundPickerProps {
   onSetDefault?: (sound: PresetId) => void;
 }
 
-export function SoundPicker({ id, label, presets, value, onChange, isDisabled, defaultValue, onSetDefault }: SoundPickerProps) {
+export function SoundPicker({ id, label, "aria-label": accessibleLabel, presets, value, onChange, isDisabled, defaultValue, onSetDefault }: SoundPickerProps) {
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
   const { recent, remember } = useRecentSounds();
   const [query, setQuery] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
   const focused = useRef(false);
   const key = value ? soundKey(value) : null;
   const selected = presets.find((preset) => soundKey(preset) === key);
@@ -30,62 +35,65 @@ export function SoundPicker({ id, label, presets, value, onChange, isDisabled, d
   });
   const recentKeys = new Set(recentPresets.map(soundKey));
   const catalog = presets.filter((preset) => !recentKeys.has(soundKey(preset)) && (!searching || preset.name.toLocaleLowerCase().includes(query!.toLocaleLowerCase())));
-  const item = (preset: SoundPreset) => (
-    <ListBox.Item key={soundKey(preset)} id={soundKey(preset)} textValue={preset.name} onAction={() => {
-      remember(preset);
-      onChange({ bank: preset.bank, program: preset.program });
-      setQuery(null);
-    }}>
-      <Label>{preset.name}</Label>
-      <ListBox.ItemIndicator />
-    </ListBox.Item>
-  );
+  const visible = [...recentPresets, ...catalog];
+  const groups = [
+    ...(recentPresets.length ? [{ label: "Recently selected", items: recentPresets.map(soundKey) }] : []),
+    ...(catalog.length ? [{ label: "All instruments", items: catalog.map(soundKey) }] : []),
+  ];
+  function commit(next: string | null) {
+    const preset = presets.find((entry) => soundKey(entry) === next);
+    if (!preset) return;
+    remember(preset);
+    onChange({ bank: preset.bank, program: preset.program });
+    setQuery(null);
+    setOpen(false);
+  }
+  const item = (preset: SoundPreset) => <Combobox.Item key={soundKey(preset)} value={soundKey(preset)}
+    data-key={soundKey(preset)} className="sound-option"
+    onClick={() => { if (soundKey(preset) === key) commit(key); }}>
+    <span>{preset.name}</span><Combobox.ItemIndicator aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"><path d="m3 8 3 3 7-7" /></svg></Combobox.ItemIndicator>
+  </Combobox.Item>;
 
-  return <div className="sound-picker min-w-0 w-fit max-w-full space-y-2">
-    <div className="flex flex-wrap items-end gap-3">
-      <ComboBox
-        className="w-72 max-w-full"
-        variant="secondary"
-        id={id}
-        isDisabled={isDisabled}
-        selectedKey={key}
-        inputValue={query ?? selectedLabel}
-        // Only typed input filters; Aria also resets input text when opening and closing.
-        onInputChange={() => {}}
-        defaultFilter={() => true}
-        menuTrigger="focus"
-        allowsEmptyCollection
-        onOpenChange={(isOpen) => { if (!isOpen) setQuery(null); }}
-      >
-        <Label>{label}</Label>
-        <ComboBox.InputGroup>
-          <Input
-            placeholder="Choose an instrument"
-            onChange={(event) => setQuery(event.target.value)}
-            onFocus={(event) => {
-              if (focused.current) return;
-              focused.current = true;
-              setQuery(null);
-              event.target.select();
-            }}
-            onBlur={() => { focused.current = false; setQuery(null); }}
-          />
-          <ComboBox.Trigger aria-label={`Show ${label.toLocaleLowerCase()} instruments`} />
-        </ComboBox.InputGroup>
-        <ComboBox.Popover>
-          <ListBox
-            renderEmptyState={() => <span className="p-5 text-muted">No instruments found</span>}
-          >
-            {recentPresets.length > 0 && <ListBox.Section id="recent"><Header>Recently selected</Header>{recentPresets.map(item)}</ListBox.Section>}
-            {recentPresets.length > 0 && catalog.length > 0 && <Separator />}
-            {catalog.length > 0 && <ListBox.Section id="catalog"><Header>All instruments</Header>{catalog.map(item)}</ListBox.Section>}
-          </ListBox>
-        </ComboBox.Popover>
-      </ComboBox>
+  return <div className="sound-picker min-w-0 max-w-full">
+    <div className="flex flex-wrap items-end gap-2">
+      <div className="combo-box min-w-0 flex-1">
+        <Combobox.Root items={groups} value={key} disabled={isDisabled}
+          itemToStringLabel={(itemKey) => presets.find((preset) => soundKey(preset) === itemKey)?.name ?? selectedLabel}
+          filter={null} inputValue={query ?? selectedLabel} onInputValueChange={() => {}}
+          open={open} onOpenChange={(next) => { setOpen(next); if (!next) setQuery(null); }}
+          onValueChange={commit}>
+          <label id={`${inputId}-label`} htmlFor={inputId} className="sound-label muted">{label}{accessibleLabel && <span className="sr-only"> · {accessibleLabel}</span>}</label>
+          <Combobox.InputGroup className="sound-input-group">
+            <Combobox.Input className="input" id={inputId} aria-labelledby={`${inputId}-label`} placeholder="Choose an instrument"
+              onChange={(event) => { setQuery(event.target.value); setOpen(true); }}
+              onFocus={(event) => {
+                if (focused.current) return;
+                focused.current = true;
+                setQuery(null); setOpen(true); event.target.select();
+              }}
+              onBlur={() => { focused.current = false; setQuery(null); setOpen(false); }} />
+            <Combobox.Trigger aria-label={`Show ${label.toLocaleLowerCase()} instruments`}>⌄</Combobox.Trigger>
+          </Combobox.InputGroup>
+          <Combobox.Portal>
+            <Combobox.Positioner sideOffset={4} className="sound-positioner">
+              <Combobox.Popup className="sound-popup">
+                {visible.length === 0 && <p className="muted p-3">No instruments found</p>}
+                <Combobox.List className="sound-list">{(group: typeof groups[number], index: number) => <Fragment key={group.label}>
+                  {index > 0 && <hr data-slot="separator" />}
+                  <Combobox.Group items={group.items}><Combobox.GroupLabel className="sound-group-label">{group.label}</Combobox.GroupLabel>
+                    <Combobox.Collection>{(itemKey: string) => item(presets.find((preset) => soundKey(preset) === itemKey)!)}</Combobox.Collection>
+                  </Combobox.Group>
+                </Fragment>}</Combobox.List>
+                <p className="sound-shortcuts muted">↑ ↓ Navigate · Enter Choose · Esc Close</p>
+              </Combobox.Popup>
+            </Combobox.Positioner>
+          </Combobox.Portal>
+        </Combobox.Root>
+      </div>
       {onSetDefault && selected && (!defaultValue || key !== soundKey(defaultValue)) &&
-        <Button variant="secondary" isDisabled={isDisabled} aria-label={`Set default ${label.toLocaleLowerCase()}`}
-          onPress={() => onSetDefault({ bank: selected.bank, program: selected.program })}>Set Default</Button>}
+        <Button variant="ghost" size="sm" disabled={isDisabled} aria-label={`Set default ${label.toLocaleLowerCase()}`}
+          onClick={() => onSetDefault({ bank: selected.bank, program: selected.program })}>Set Default</Button>}
     </div>
-    {value && !selected && <Description className="text-danger">This sound is unavailable in the current catalog. Choose another instrument.</Description>}
+    {value && !selected && <p className="text-danger">This sound is unavailable in the current catalog. Choose another instrument.</p>}
   </div>;
 }

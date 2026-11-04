@@ -6,12 +6,12 @@ import { RECENT_SCORES_KEY } from "./recent-scores.ts";
 import { mountTestApp } from "./test-support.ts";
 
 const trigger = 'button[aria-label="Recently opened scores"]';
-const choose = '.empty [data-action="open"]';
+const choose = '[data-action="open"]';
 const score = (path: string): Inspection => ({
   id: path, path, name: path.split(/[\\/]/).pop()!, format: "musicxml", parts: [], error: null,
 });
 
-test("landing split button checks recent files, reopens them, and handles keyboard, loading, errors, and busy states", async () => {
+test("Open menu checks recent files, reopens them, and handles keyboard, loading, errors, and busy states", async () => {
   const checked: string[][] = [];
   const inspected: string[] = [];
   const paths = ["/scores/first.xml", "/deleted.xml", "C:\\scores\\first.xml"];
@@ -144,5 +144,34 @@ test("landing split button checks recent files, reopens them, and handles keyboa
     await app.click(trigger);
     assert.ok(items()[0].textContent!.includes("/scores/drop.xml"), "history persists across remounts");
     assert.ok(!app.find('[role="menu"]').textContent!.includes("after-disposal.xml"));
+  } finally { await app.close(); }
+});
+
+test("start page validates recent rows, retries failures, and opens an existing score", async () => {
+  const paths = ["/scores/first.xml", "/deleted.xml", "C:\\scores\\second.mxl"];
+  let fail = true;
+  const opened: string[] = [];
+  const app = await mountTestApp((command, args) => {
+    if (command === "existing_score_paths") {
+      if (fail) throw new Error("Unavailable");
+      return (args.paths as string[]).filter((path) => path !== "/deleted.xml");
+    }
+    if (command === "inspect_file") { opened.push(String(args.path)); return score(String(args.path)); }
+    if (command === "release_document") return;
+    throw new Error(`Unexpected command ${command}`);
+  }, { initialize: (browser) => browser.localStorage.setItem(RECENT_SCORES_KEY, JSON.stringify(paths)) });
+  try {
+    assert.match(app.find('[aria-labelledby="recent-scores-heading"]').textContent!, /Recent scores unavailable/);
+    assert.equal(app.document.querySelectorAll(".recent-score-row").length, 0);
+    fail = false;
+    await app.click('[aria-labelledby="recent-scores-heading"] button');
+    const rows = Array.from(app.document.querySelectorAll(".recent-score-row"));
+    assert.equal(rows.length, 2);
+    assert.match(rows[0].textContent!, /first.xml.*\/scores/);
+    assert.match(rows[1].textContent!, /second.mxl.*C:\\scores/);
+    assert.ok(!app.find('[aria-labelledby="recent-scores-heading"]').textContent!.includes("deleted.xml"));
+    await app.click(".recent-score-row");
+    assert.deepEqual(opened, [paths[0]]);
+    assert.ok(app.find('[data-mode="split"]'));
   } finally { await app.close(); }
 });

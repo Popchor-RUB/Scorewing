@@ -68,13 +68,11 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
   });
   try {
     assert.equal(app.document.querySelector('[data-action="close"]'), null);
-    assert.equal(app.document.querySelector('header button'), null, "file and update actions live in the native menu");
+    assert.ok(app.find('header [data-action="open"]'), "the command bar exposes native Open");
     assert.equal(app.fileMenu.openEnabled, true);
     assert.equal(app.fileMenu.closeEnabled, false);
     assert.equal(app.find(".status").textContent, "", "landing page has no device slogan");
-    assert.equal(app.find<HTMLButtonElement>('[data-action="open"]').classList.contains("button"), true);
-    const css = await app.server.transformRequest("/src/style.css");
-    assert.ok(css?.code.includes(".button--primary"), "HeroUI styles are compiled");
+    assert.equal(app.find<HTMLButtonElement>('[data-action="open"]').textContent, "Open score");
     await app.menu("open-score");
     assert.match(app.document.body.textContent!, /first.xml/);
     assert.equal(app.fileMenu.closeEnabled, true);
@@ -88,11 +86,11 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
     assert.equal(app.document.querySelectorAll("[data-mode]").length, 4, "cancelling replacement keeps mode selection");
     await app.click('[data-mode="split"]');
     assert.equal(app.document.activeElement, app.find("#mode-config-heading"));
-    for (const checkbox of app.document.querySelectorAll(".card .checkbox"))
-      assert.ok(checkbox.classList.contains("checkbox--secondary"), "checkboxes on cards use the surface variant");
-    assert.ok(app.find(".select").classList.contains("select--secondary"), "selects on cards use the surface variant");
+    assert.ok(app.find('[aria-label="Source staves"]'));
+    assert.ok(app.find('[aria-label="Fallback configuration"]'));
+    assert.ok(app.find('[aria-label="Global split options"]'));
     await app.click('[data-part="P2"]');
-    assert.equal(app.document.activeElement, app.find('[data-part="P2"] input'), "routine changes do not steal focus");
+    assert.equal(app.document.activeElement, app.find('[data-part="P2"]'), "routine changes do not steal focus");
     await app.click("#insert-fallback-slurs");
     await app.click('[data-action="back-to-modes"]');
     assert.equal(app.document.activeElement, app.find('[data-mode="split"]'));
@@ -161,7 +159,7 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
   assert.equal(app.unregistered.length, app.registrations.length, "listeners cleaned up on unmount");
 });
 
-test("HeroUI split and merge controls retain choices, validate, and send unchanged export payloads", async () => {
+test("Split and merge controls retain choices, validate, and send unchanged export payloads", async () => {
   const exported: { id: string; operation: Operation }[] = [];
   let result: { path: string; warnings: string[] } | null = null;
   let exportError: string | undefined;
@@ -187,9 +185,11 @@ test("HeroUI split and merge controls retain choices, validate, and send unchang
     assert.equal(exported.length, 0);
     await app.click('[data-part="P2"]');
     assert.match(app.find(".split-preview").textContent!, /3 additional staves/);
-    assert.equal(app.find('[data-part="P2"] .part-name').textContent, "Violin", "instrument names have no repeated subtitle or internal ID");
-    assert.deepEqual(Array.from(app.find(".split-preview").querySelectorAll(".score-select [data-slot='label']"), (label) => label.textContent), ["Fallback voice", "Fallback voice", "Fallback voice"]);
-    assert.equal(app.document.querySelectorAll(".fallback-row[role='group'][aria-labelledby]").length, 3, "staff context stays separate from the selector label");
+    assert.equal(app.find('[data-part="P2"]').closest(".source-row")!.querySelector(".part-name")!.textContent, "Violin", "instrument names have no repeated subtitle or internal ID");
+    const fallbackLabels = Array.from(app.find(".split-preview").querySelectorAll(".score-select"), (control) => control.getAttribute("aria-label"));
+    assert.equal(new Set(fallbackLabels).size, 3, "each generated staff has a unique accessible fallback label");
+    assert.ok(fallbackLabels.every((label) => label?.startsWith("Fallback voice for Violin P2")));
+    assert.equal(app.document.querySelectorAll(".fallback-row th[scope='row']").length, 3, "generated staves have semantic row headings");
     assert.match(app.find(".options-card").textContent!, /Matching pitches continue existing ties/);
     await app.choose("#fallback-P2-2-1", "Voice 3");
     await app.click('[data-action="export"]');
@@ -241,8 +241,10 @@ test("HeroUI split and merge controls retain choices, validate, and send unchang
     await app.click('[data-action="add-group"]');
     assert.equal(app.document.querySelectorAll(".merge-group").length, 2);
     assert.ok(app.find(".merge-part").querySelector("#stem-P2"), "reordered instruments retain the correct stem controls");
-    assert.deepEqual(Array.from(app.document.querySelectorAll(".merge-group .score-select [data-slot='label']"), (label) => label.textContent), ["Stem direction", "Stem direction", "Stem direction", "Stem direction"]);
-    assert.equal(app.find(".group-part [data-slot='description']").textContent, "Up-stem group", "stem context has no internal part ID");
+    const stemLabels = Array.from(app.document.querySelectorAll(".merge-group .score-select"), (control) => control.getAttribute("aria-label"));
+    assert.equal(new Set(stemLabels).size, 4, "each source has a unique accessible stem label");
+    assert.ok(stemLabels.every((label) => label?.startsWith("Stem direction for Violin")));
+    assert.equal(app.find(".group-part").textContent, "Violin", "source name has no internal part ID");
     await app.choose("#stem-P1", "Up");
     await app.choose("#stem-P3", "Down");
     await app.click('[data-action="up"][data-group="1"][data-index="1"]');

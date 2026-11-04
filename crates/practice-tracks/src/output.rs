@@ -303,6 +303,7 @@ mod tests {
         assert_eq!(pending.conflicts(), 1);
         assert!(plan(dir.path()).prepare(OutputChoice::Create).is_err());
         let output = pending.prepare(OutputChoice::Overwrite).unwrap();
+        let path = output.directory().join("01 - Intro/01 - Piano.mp3");
         let source = dir.path().join("completed");
         fs::write(&source, b"audio").unwrap();
         output.publish(&source, &path).unwrap();
@@ -323,7 +324,10 @@ mod tests {
         let source = dir.path().join("completed");
         fs::write(&source, b"audio").unwrap();
         output
-            .publish(&source, &dir.path().join("01 - Intro/01 - Piano.mp3"))
+            .publish(
+                &source,
+                &output.directory().join("01 - Intro/01 - Piano.mp3"),
+            )
             .unwrap();
     }
 
@@ -336,6 +340,7 @@ mod tests {
         fs::write(&path, b"arrived").unwrap();
         assert!(pending.prepare(OutputChoice::Overwrite).is_err());
         let output = plan(dir.path()).prepare(OutputChoice::Overwrite).unwrap();
+        let path = output.directory().join("01 - Intro/01 - Piano.mp3");
         fs::write(&path, b"changed after confirmation").unwrap();
         let source = dir.path().join("completed");
         fs::write(&source, b"audio").unwrap();
@@ -367,8 +372,8 @@ mod tests {
     #[test]
     fn late_arrivals_never_clobber_files_or_trigger_a_clear() {
         let dir = tempfile::tempdir().unwrap();
-        let destination = dir.path().join("01 - Intro/01 - Piano.mp3");
         let output = plan(dir.path()).prepare(OutputChoice::Create).unwrap();
+        let destination = output.directory().join("01 - Intro/01 - Piano.mp3");
         let pending_clear = plan(dir.path());
         fs::create_dir(destination.parent().unwrap()).unwrap();
         fs::write(&destination, b"late arrival").unwrap();

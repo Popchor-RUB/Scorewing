@@ -1,3 +1,4 @@
 - Before starting initialize a git repository. After after making changes ask the user to commit. Propose a commit message.
 - For frontend-design updates, first update the design in the docs/design folder using the Figcraft MCP. Show the result to the user and ask for approval before starting implementation.
 - Prefer shadcn components instead of writing custom components.
+- Always use podman if you want to check something in the browser or compile the application

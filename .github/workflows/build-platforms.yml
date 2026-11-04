@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       # Each release upload merges latest.json; preserve all platform entries.
-      max-parallel: ${{ inputs.release && 1 || 4 }}
+      max-parallel: ${{ inputs.release && 1 || 3 }}
       matrix:
         include:
           - runner: ubuntu-24.04
@@ -21,14 +21,13 @@ jobs:
           - runner: windows-2022
             artifact: scorewing-windows-x64
             bundle: nsis
-          - runner: macos-15-intel
-            artifact: scorewing-macos-x64
-            bundle: app
           - runner: macos-15
-            artifact: scorewing-macos-arm64
+            artifact: scorewing-macos-universal
             bundle: app
+            target: universal-apple-darwin
     runs-on: ${{ matrix.runner }}
     env:
+      DESKTOP_RELEASE_DIR: ${{ matrix.target && format('target/{0}/release', matrix.target) || 'target/release' }}
       APPLE_SIGNING_ENABLED: ${{ github.repository == 'Popchor-RUB/Scorewing' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' && secrets.APPLE_API_ISSUER != '' && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_PRIVATE_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
@@ -100,13 +99,22 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew install cmake pkg-config llvm
-          if [[ "$(uname -m)" == arm64 ]]; then export MACOSX_DEPLOYMENT_TARGET=11.0; else export MACOSX_DEPLOYMENT_TARGET=10.13; fi
-          echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET" >> "$GITHUB_ENV"
+          rustup target add x86_64-apple-darwin aarch64-apple-darwin
+          # Intel keeps 10.13 support; Apple Silicon toolchains use at least 11.0.
+          echo "MACOSX_DEPLOYMENT_TARGET=10.13" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
       - name: Static XML dependencies
         if: runner.os != 'Windows'
         run: |
-          bash tools/build-libxml2.sh "$RUNNER_TEMP/libxml2"
+          cmake_args=()
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            cmake_args+=('-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64')
+          fi
+          bash tools/build-libxml2.sh "$RUNNER_TEMP/libxml2" "${cmake_args[@]}"
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            lipo -verify_arch x86_64 arm64 "$RUNNER_TEMP/libxml2/lib/libxml2.a"
+          fi
           echo "PKG_CONFIG_PATH=$RUNNER_TEMP/libxml2/lib/pkgconfig" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
@@ -124,6 +132,13 @@ jobs:
           cargo test --workspace --locked
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo build -p scorewing-cli --release --locked
+      - name: Build universal macOS CLI
+        if: runner.os == 'macOS'
+        run: |
+          for target in x86_64-apple-darwin aarch64-apple-darwin; do
+            cargo build -p scorewing-cli --release --locked --target "$target"
+          done
+          lipo -create target/x86_64-apple-darwin/release/scorewing target/aarch64-apple-darwin/release/scorewing -output target/release/scorewing
       - name: Build installers and upload tag releases
         id: bundle
         uses: tauri-apps/tauri-action@v0
@@ -146,12 +161,14 @@ jobs:
           releaseBody: Review all platform installers and latest.json before publishing this release.
           releaseDraft: true
           prerelease: false
-          assetNamePattern: '[name]_[version]_[platform]_[arch][setup][ext]'
+          assetNamePattern: ${{ runner.os == 'macOS' && '[name]_[version]_macos_[arch][setup][ext]' || '[name]_[version]_[platform]_[arch][setup][ext]' }}
           updaterJsonPreferNsis: true
+          updaterJsonKeepUniversal: false
           # Strip empty Apple variables without disabling Tauri updater signatures.
           tauriScript: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED != 'true' && 'env -u APPLE_CERTIFICATE -u APPLE_CERTIFICATE_PASSWORD -u APPLE_SIGNING_IDENTITY -u APPLE_API_ISSUER -u APPLE_API_KEY -u APPLE_API_KEY_PATH ./node_modules/.bin/tauri' || '' }}
           args: >-
-            --bundles ${{ inputs.release && matrix.bundle || 'all' }}
+            ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+            ${{ inputs.release && format('--bundles {0}', matrix.bundle) || '' }}
             ${{ inputs.release && '--config ''{"bundle":{"createUpdaterArtifacts":true}}''' || '' }}
             -- --locked
       - name: Remove standalone updater signatures
@@ -185,21 +202,26 @@ jobs:
       - name: Verify macOS signature and notarization ticket
         if: runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true'
         run: |
-          codesign --verify --deep --strict target/release/bundle/macos/Scorewing.app
-          xcrun stapler validate target/release/bundle/macos/Scorewing.app
+          codesign --verify --deep --strict "$DESKTOP_RELEASE_DIR/bundle/macos/Scorewing.app"
+          xcrun stapler validate "$DESKTOP_RELEASE_DIR/bundle/macos/Scorewing.app"
+      - name: Verify universal macOS architectures
+        if: runner.os == 'macOS'
+        run: |
+          lipo -verify_arch x86_64 arm64 target/release/scorewing
+          lipo -verify_arch x86_64 arm64 "$DESKTOP_RELEASE_DIR/scorewing-desktop"
       - name: Smoke test CLI and linkage
         shell: bash
         run: |
           target/release/scorewing --version
           node tools/check-linkage.mjs target/release/scorewing${{ runner.os == 'Windows' && '.exe' || '' }}
-          node tools/check-linkage.mjs --desktop target/release/scorewing-desktop${{ runner.os == 'Windows' && '.exe' || '' }}
+          node tools/check-linkage.mjs --desktop "$DESKTOP_RELEASE_DIR/scorewing-desktop${{ runner.os == 'Windows' && '.exe' || '' }}"
       - name: Collect artifacts and checksums
         shell: bash
         run: |
           mkdir -p dist
           cp docs/THIRD_PARTY_NOTICES.txt dist/
           cp target/release/scorewing.exe dist/ 2>/dev/null || cp target/release/scorewing dist/
-          find target/release/bundle -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.tar.gz' -o -name '*.sig' \) -exec cp {} dist/ \;
+          find "$DESKTOP_RELEASE_DIR/bundle" -type f \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' -o -name '*.tar.gz' -o -name '*.sig' \) -exec cp {} dist/ \;
           node tools/checksum.mjs dist/*
       - uses: actions/upload-artifact@v4
         with:

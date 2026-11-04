@@ -9,13 +9,15 @@ const cleanup = new AsyncFunction('require', 'github', 'context', 'process', sou
 
 function fixture() {
   const names = ['Scorewing_linux.AppImage', 'Scorewing_windows-setup.exe',
-    'Scorewing_darwin_x64.app.tar.gz', 'Scorewing_darwin_aarch64.app.tar.gz'];
+    'Scorewing_macos_universal.app.tar.gz'];
   const assets = ['latest.json', ...names, ...names.map(name => `${name}.sig`)].map((name, id) => ({
     id, name, browser_download_url: `https://github.com/Popchor-RUB/Scorewing/releases/download/v1.0.0/${name}`,
   }));
-  const manifest = { platforms: Object.fromEntries(names.map((name, i) => [name, {
-    url: assets[i + 1].browser_download_url, signature: `signature-${i}`,
-  }])) };
+  const platforms = ['linux-x86_64', 'windows-x86_64', 'darwin-x86_64', 'darwin-aarch64'];
+  const manifest = { platforms: Object.fromEntries(platforms.map((platform, i) => {
+    const asset = assets[Math.min(i, 2) + 1];
+    return [platform, { url: asset.browser_download_url, signature: `signature-${asset.id}` }];
+  })) };
   const release = { draft: true };
   const deleted = [];
   const github = {
@@ -40,10 +42,11 @@ function fixture() {
   ) };
 }
 
-test('removes only standalone signatures after validating embedded signatures and download URLs', async () => {
+test('removes only standalone signatures while preserving the shared universal macOS archive', async () => {
   const f = fixture();
   await f.run();
   assert.deepEqual(f.deleted, f.assets.filter(asset => asset.name.endsWith('.sig')).map(asset => asset.id));
+  assert.deepEqual(f.manifest.platforms['darwin-x86_64'], f.manifest.platforms['darwin-aarch64']);
 });
 
 test('preserves all assets when the manifest or an updater signature or download is missing', async () => {

@@ -24,6 +24,14 @@ test("Linux permits GTK/WebKit only for the desktop and rejects external librari
   }
 });
 
+test("macOS checks dependencies from both slices of a universal binary", () => {
+  const intel = macho("/usr/lib/libSystem.B.dylib").replace('app:', 'app (architecture x86_64):');
+  const arm = macho("/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit").replace('app:', 'app (architecture arm64):');
+  assert.equal(checkDependencies("darwin", intel + arm).length, 2);
+  assert.throws(() => checkDependencies("darwin", intel + macho("/opt/homebrew/lib/libxml2.dylib")), /Unexpected shared/);
+  assert.throws(() => checkDependencies("darwin", macho("/usr/local/lib/libxml2.dylib") + arm), /Unexpected shared/);
+});
+
 test("Windows allows OS DLLs and rejects application DLLs and dynamic VC runtimes", () => {
   checkDependencies("win32", pe("KERNEL32.dll") + pe("api-ms-win-core-synch-l1-2-0.dll"));
   for (const name of ["libxml2.dll", "zlib1.dll", "iconv-2.dll", "VCRUNTIME140.dll", "MSVCP140.dll", "unknown.dll", "some library.dll"]) {

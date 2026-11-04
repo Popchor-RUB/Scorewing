@@ -56,7 +56,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (!paths.length) throw new Error("Usage: check-linkage.mjs [--desktop] BINARY...");
     for (const path of paths) {
       const [command, args] = {
-        darwin: ["otool", ["-L", path]],
+        darwin: ["otool", ["-arch", "all", "-L", path]],
         linux: ["readelf", ["-d", path]],
         win32: [join(process.env.ProgramFiles ?? "C:/Program Files", "LLVM/bin/llvm-readobj.exe"), ["--coff-imports", path]],
       }[process.platform] ?? [];

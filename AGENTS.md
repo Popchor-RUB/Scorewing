@@ -1,2 +1,3 @@
 - Before starting initialize a git repository. After after making changes ask the user to commit. Propose a commit message.
-- When performing UI/frontend-related tasks, always use the HeroUI MCP and skill. Use HeroUI components whenever possible.
+- For frontend-design updates, first update the design in the docs/design folder using the Figcraft MCP. Show the result to the user and ask for approval before starting implementation.
+- Prefer shadcn components instead of writing custom components.

@@ -42,7 +42,7 @@ pub async fn show_update_prompt(
         WebviewUrl::App("index.html?update-prompt".into()),
     )
     .title("Scorewing update available")
-    .inner_size(620.0, 340.0)
+    .inner_size(620.0, 248.0)
     .resizable(false)
     .maximizable(false)
     .minimizable(false)

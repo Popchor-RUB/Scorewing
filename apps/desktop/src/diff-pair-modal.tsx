@@ -1,28 +1,33 @@
 import { useEffect, useRef } from "react";
-import { Button, Description, Label, Modal } from "@heroui/react";
+import { Button } from "./components/ui/button.tsx";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./components/ui/dialog.tsx";
 import type { Inspection } from "./model.ts";
 
 export function DiffFileSelectors({ older, newer, disabled, onChoose, onSwap }: {
   older?: Inspection; newer: Inspection; disabled: boolean;
   onChoose: (version: "old" | "new") => void; onSwap: () => void;
 }) {
-  return <div className="flex flex-col gap-4">
-    <div data-version="old" className="min-w-0 space-y-2">
-      <Label>Older version</Label>
-      <Button variant="secondary" className="h-auto w-full justify-start whitespace-normal py-3 text-left wrap-anywhere" data-action="open-older"
-        aria-label={older ? "Replace older version" : "Choose older version"} isDisabled={disabled} onPress={() => onChoose("old")}>
-        {older?.name ?? "Choose older version"}
-      </Button>
-      {older && <Description className="wrap-anywhere">{older.path}</Description>}
-    </div>
-    <Button isIconOnly variant="secondary" className="self-center" aria-label="Swap old and new files" data-action="swap-diff"
-      isDisabled={disabled || !older} onPress={onSwap}><span aria-hidden="true">⇅</span></Button>
-    <div data-version="new" className="min-w-0 space-y-2">
-      <Label>Newer version</Label>
-      <Button variant="secondary" className="h-auto w-full justify-start whitespace-normal py-3 text-left wrap-anywhere" data-action="open-newer"
-        aria-label="Replace newer version" isDisabled={disabled} onPress={() => onChoose("new")}>{newer.name}</Button>
-      <Description className="wrap-anywhere">{newer.path}</Description>
-    </div>
+  function file(version: "old" | "new", inspection?: Inspection) {
+    const label = version === "old" ? "Older version" : "Newer version";
+    const action = version === "old" ? "older" : "newer";
+    const command = `${inspection ? "Replace" : "Choose"} ${action} version`;
+    return <section data-version={version} className="diff-file" aria-label={label}>
+      <h3 className="diff-file-label">{label}</h3>
+      <div className="diff-file-card">
+        <div className="diff-file-summary">
+          <svg className="diff-file-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M14 2H5v20h14V7z" /><path d="M14 2v5h5M8 12h8M8 16h8" /></svg>
+          <div><p className="diff-file-name">{inspection?.name ?? "No file selected"}</p>
+            <p className="diff-file-path">{inspection?.path ?? "Choose the earlier score to compare."}</p></div>
+        </div>
+        <Button variant="outline" data-action={`open-${action}`} aria-label={command} disabled={disabled} onClick={() => onChoose(version)}>{command}</Button>
+      </div>
+    </section>;
+  }
+  return <div className="diff-files">
+    {file("old", older)}
+    <Button size="icon" variant="outline" className="diff-swap" aria-label="Swap old and new files" data-action="swap-diff"
+      disabled={disabled || !older} onClick={onSwap}><span aria-hidden="true">⇄</span></Button>
+    {file("new", newer)}
   </div>;
 }
 
@@ -38,15 +43,15 @@ export function DiffPairModal({ pair, busy, closing, error, status, onChoose, on
       if (previous.current instanceof HTMLElement && previous.current.isConnected) previous.current.focus();
     });
   }, []);
-  return <Modal.Backdrop isOpen isDismissable={!busy} isKeyboardDismissDisabled={busy} onOpenChange={(open) => { if (!open && !busy) onCancel(); }}>
-    <Modal.Container size="lg"><Modal.Dialog>
-      <Modal.Header><Modal.Heading>Compare score versions</Modal.Heading><Description>Confirm which score is old and which is new.</Description></Modal.Header>
-      <Modal.Body>
+  return <Dialog open onOpenChange={(open) => { if (!open && !busy) onCancel(); }}>
+    <DialogContent className="diff-pair-dialog" finalFocus={false}>
+      <header className="dialog-header"><DialogTitle>Compare score versions</DialogTitle><DialogDescription>Confirm which score is old and which is new. Changes will be marked in the exported newer version.</DialogDescription></header>
+      <div className="dialog-body">
         <DiffFileSelectors older={pair[0]} newer={pair[1]} disabled={busy || closing} onChoose={onChoose} onSwap={onSwap} />
         {error && <p role="alert" className="mt-4 text-danger">{error}</p>}
-        {!error && status && <Description role="status" className="mt-4 whitespace-pre-line">{status}</Description>}
-      </Modal.Body>
-      <Modal.Footer><Button variant="secondary" data-action="cancel-diff" isDisabled={busy} onPress={onCancel}>Cancel</Button><Button data-action="compare-diff" isDisabled={busy || closing} onPress={onCompare}>{busy ? "Exporting…" : "Export diff"}</Button></Modal.Footer>
-    </Modal.Dialog></Modal.Container>
-  </Modal.Backdrop>;
+        {!error && status && <p role="status" className="mt-4 whitespace-pre-line">{status}</p>}
+      </div>
+      <footer className="dialog-footer"><Button variant="outline" data-action="cancel-diff" disabled={busy} onClick={onCancel}>Cancel</Button><Button data-action="compare-diff" disabled={busy || closing} onClick={onCompare}>{busy ? "Exporting…" : "Export diff"}</Button></footer>
+    </DialogContent>
+  </Dialog>;
 }

@@ -69,3 +69,15 @@ test("practice exports require a range and range choices stay per document", () 
   assert.deepEqual(state.section_keys, ["measure-3"]);
   assert.deepEqual(newPractice(parts).section_keys, []);
 });
+
+test("practice selects every supplied section by default", () => {
+  const sections = [
+    { key: "measure-1", name: "Intro", start_measure: 1, end_measure: 2 },
+    { key: "measure-3", name: "A", start_measure: 3, end_measure: 5 },
+  ];
+  const state = newPractice(parts, {}, sections);
+  assert.equal(state.include_whole_song, true);
+  assert.deepEqual(state.section_keys, ["measure-1", "measure-3"]);
+  state.section_keys.length = 0;
+  assert.deepEqual(newPractice(parts, {}, sections).section_keys, ["measure-1", "measure-3"]);
+});

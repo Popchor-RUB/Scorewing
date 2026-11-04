@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Description, Modal, ProgressBar } from "@heroui/react";
+import { Button } from "./components/ui/button.tsx";
+import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog.tsx";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 
@@ -163,11 +164,11 @@ export function UpdateControl({ checkRequest, canInstall, onInstall, onPromptCha
   }, [open, status, error]);
 
   if (!isTauri()) return null;
-  return <Modal.Backdrop isOpen={open && (status !== "available" || !!error)} isDismissable={status !== "installing"} isKeyboardDismissDisabled={status === "installing"}
+  return <Dialog open={open && (status !== "available" || !!error)}
       onOpenChange={(value) => { if (status !== "installing") setOpen(value); }}>
-      <Modal.Container size="md" scroll="inside"><Modal.Dialog>
-        <Modal.Header><Modal.Heading>Scorewing updates</Modal.Heading></Modal.Header>
-        <Modal.Body className="space-y-3">
+      <DialogContent>
+        <header className="dialog-header"><DialogTitle>Scorewing updates</DialogTitle></header>
+        <div className="dialog-body space-y-3">
           <p role="status">{status === "checking" ? "Checking GitHub for updates…"
             : status === "downloading" ? `Downloading Scorewing ${found?.version}…`
             : status === "installing" ? "Installing the update and restarting Scorewing…"
@@ -176,23 +177,21 @@ export function UpdateControl({ checkRequest, canInstall, onInstall, onPromptCha
             : !supported ? "In-app updates on Linux require the AppImage version. Download DEB/RPM updates from GitHub Releases."
             : !error ? "Scorewing is up to date." : "Update check failed."}</p>
           {found?.body && <p className="max-h-48 overflow-auto whitespace-pre-wrap text-sm">{found.body}</p>}
-          {status === "downloading" && <ProgressBar aria-label="Update download" value={progress ?? 0} isIndeterminate={progress === undefined}>
-            <ProgressBar.Track><ProgressBar.Fill /></ProgressBar.Track>
-          </ProgressBar>}
-          {(status === "available" || status === "ready") && <Description>{canInstall ? "Installation will restart Scorewing."
-            : "Close any open score or score selection and wait for current work to finish before installing. Closing a score discards its editing choices."}</Description>}
+          {status === "downloading" && <progress className="update-download-progress" role="progressbar" aria-label="Update download" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} max={100} value={progress} />}
+          {(status === "available" || status === "ready") && <p className="muted">{canInstall ? "Installation will restart Scorewing."
+            : "Close any open score or score selection and wait for current work to finish before installing. Closing a score discards its editing choices."}</p>}
           {error && <p role="alert" className="text-danger wrap-anywhere">{error}</p>}
-        </Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" data-action="update-later" isDisabled={status === "installing"} onPress={() => setOpen(false)}>{status === "downloading" ? "Hide" : "Cancel"}</Button>
+        </div>
+        <footer className="dialog-footer">
+          <Button variant="outline" data-action="update-later" disabled={status === "installing"} onClick={() => setOpen(false)}>{status === "downloading" ? "Hide" : "Cancel"}</Button>
           {status === "available" && <>
-            <Button variant="secondary" data-action="skip-update" onPress={skipVersion}>Skip this version</Button>
-            <Button data-action="download-update" isDisabled={!canInstall} onPress={() => void download()}>Download &amp; Install</Button>
+            <Button variant="outline" data-action="skip-update" onClick={skipVersion}>Skip this version</Button>
+            <Button data-action="download-update" disabled={!canInstall} onClick={() => void download()}>Download &amp; Install</Button>
           </>}
-          {status === "ready" && <Button data-action="install-update" isDisabled={!canInstall} onPress={() => void install()}>Install and restart</Button>}
-          {!supported && <Button data-action="update-downloads" onPress={() => void openDownloads()}>Open GitHub Releases</Button>}
-          {status === "idle" && supported && error && <Button data-action="retry-update-check" onPress={() => void checkForUpdates(true)}>Try again</Button>}
-        </Modal.Footer>
-      </Modal.Dialog></Modal.Container>
-    </Modal.Backdrop>;
+          {status === "ready" && <Button data-action="install-update" disabled={!canInstall} onClick={() => void install()}>Install and restart</Button>}
+          {!supported && <Button data-action="update-downloads" onClick={() => void openDownloads()}>Open GitHub Releases</Button>}
+          {status === "idle" && supported && error && <Button data-action="retry-update-check" onClick={() => void checkForUpdates(true)}>Try again</Button>}
+        </footer>
+      </DialogContent>
+    </Dialog>;
 }

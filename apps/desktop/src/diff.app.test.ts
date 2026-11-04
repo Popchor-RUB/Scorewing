@@ -289,6 +289,14 @@ for (const entry of ["pair", "inline"] as const) {
       }
       await app.click(`[data-action="${entry === "pair" ? "compare-diff" : "export"}"]`);
       assert.ok(finish);
+      if (entry === "pair") {
+        assert.ok(app.find<HTMLButtonElement>('[data-action="cancel-diff"]').disabled);
+        await act(async () => {
+          app.document.activeElement!.dispatchEvent(new app.browser.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        });
+        assert.ok(app.find('[data-action="compare-diff"]'), "an active diff export cannot dismiss its confirmation");
+        assert.deepEqual(released, []);
+      }
       await app.close();
       assert.deepEqual(released, []);
       await act(async () => { finish!({ path: "/diff.xml", warnings: [] }); });
@@ -345,7 +353,7 @@ test("MuseScore arranging modes prepare MusicXML and dispatch by selected operat
     assert.equal((exports[0].operation as { kind: string }).kind, "split");
     await app.click('[data-action="back-to-modes"]');
     await app.click('[data-mode="merge"]');
-    assert.ok(app.find(".arrangement-card"));
+    assert.ok(app.find('[aria-label="Merge configuration"]'));
     await app.click('[data-action="back-to-modes"]');
     await app.click('[data-mode="diff"]');
     assert.ok(app.find(".diff-card"));

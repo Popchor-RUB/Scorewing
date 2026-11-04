@@ -6,6 +6,8 @@ Open `index.html` for the 16-screen gallery, or `scorewing-desktop.figcraft` for
 
 The approved [MuseScore import design](../musescore-import/README.md) adds frames 17–19 to the editable document. Its [separate gallery](../musescore-import/index.html) covers the implemented Split/Merge visibility defaults and export mark warnings.
 
+The approved and implemented [export destination design](../export-destinations/README.md) adds page 05, frames 20–23, for tool-specific filenames, direct practice section folders, and overwrite/clear confirmation. Its [gallery](../export-destinations/index.html) shows all four states.
+
 ## Agreed brief
 
 - Cross-platform desktop utility with balanced density and a quiet, neutral visual tone.

@@ -364,17 +364,23 @@ pub fn check_output(input: &Path, output: &Path, force: bool) -> Result<()> {
             "Output extension must be .mxml, .musicxml, .xml, or .mxl",
         ));
     }
+    check_source_replacement(input, output)?;
+    if output.symlink_metadata().is_ok() && !force {
+        return Err(ScoreError(format!(
+            "Output {output:?} already exists; use --force to replace it"
+        )));
+    }
+    Ok(())
+}
+
+/// Protect an input independently of the exported file format.
+pub fn check_source_replacement(input: &Path, output: &Path) -> Result<()> {
     if resolved(input)? == resolved(output)?
         || same_file::is_same_file(input, output).unwrap_or(false)
     {
         return Err(ScoreError::new(
             "Input replacement is refused; choose a different output path",
         ));
-    }
-    if output.symlink_metadata().is_ok() && !force {
-        return Err(ScoreError(format!(
-            "Output {output:?} already exists; use --force to replace it"
-        )));
     }
     Ok(())
 }

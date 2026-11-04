@@ -249,6 +249,7 @@ printf '%s' "$n" >> "$4"
                     )
                 },
                 workers,
+                |plan| plan.prepare(crate::OutputChoice::Create),
             );
             finished.store(true, Ordering::Release);
             assert_eq!(running.get(), 0, "finished exports have no active jobs");
@@ -358,7 +359,7 @@ fn two_workers_overlap_bound_concurrency_and_publish_in_completion_order() {
             started(root, 3);
             release(root, 3);
             // Publication acknowledges completion before the first render may finish.
-            wait_for(&root.join("score - Practice Tracks/00 - Whole song/03 - Same.mp3"));
+            wait_for(&root.join("00 - Whole song/03 - Same.mp3"));
             release(root, 1);
         });
         fixture.run(2, &cancelled, |p| progress.borrow_mut().push(p))
@@ -430,7 +431,7 @@ fn one_worker_waits_for_each_track() {
             assert!(!root.join("started-0002").exists());
             release(root, 1);
             started(root, 2);
-            wait_for(&root.join("score - Practice Tracks/00 - Whole song/01 - Same.mp3"));
+            wait_for(&root.join("00 - Whole song/01 - Same.mp3"));
             release(root, 2);
         });
         fixture.run(1, &cancelled, |_| {})
@@ -478,7 +479,7 @@ fn render_failure_preserves_a_track_published_before_failure() {
             started(root, 2);
             release(root, 1);
             started(root, 3);
-            wait_for(&root.join("score - Practice Tracks/00 - Whole song/01 - Same.mp3"));
+            wait_for(&root.join("00 - Whole song/01 - Same.mp3"));
             release(root, 2);
         });
         fixture.run(2, &cancelled, |_| {})
@@ -491,7 +492,12 @@ fn render_failure_preserves_a_track_published_before_failure() {
     assert!(!report.cancelled);
     assert_eq!(report.completed.len(), 1);
     assert!(Path::new(&report.completed[0].path).is_file());
-    assert_eq!(fs::read_dir(&report.directory).unwrap().count(), 1);
+    assert_eq!(
+        fs::read_dir(Path::new(&report.directory).join("00 - Whole song"))
+            .unwrap()
+            .count(),
+        1
+    );
     fixture.assert_clean();
 }
 
@@ -514,7 +520,12 @@ fn cancellation_keeps_published_track_and_stops_active_sibling() {
     assert!(report.cancelled);
     assert_eq!(report.completed.len(), 1);
     assert!(Path::new(&report.completed[0].path).is_file());
-    assert_eq!(fs::read_dir(&report.directory).unwrap().count(), 1);
+    assert_eq!(
+        fs::read_dir(Path::new(&report.directory).join("00 - Whole song"))
+            .unwrap()
+            .count(),
+        1
+    );
     fixture.assert_clean();
 }
 
@@ -532,7 +543,9 @@ fn user_cancellation_interrupts_blocked_renderers_without_a_completed_result() {
     });
     assert!(report.cancelled);
     assert!(report.completed.is_empty());
-    assert_eq!(fs::read_dir(&report.directory).unwrap().count(), 0);
+    assert!(!Path::new(&report.directory)
+        .join("00 - Whole song")
+        .exists());
     assert!(!fixture.dir.path().join("started-0003").exists());
     fixture.assert_clean();
 }
@@ -541,10 +554,7 @@ fn user_cancellation_interrupts_blocked_renderers_without_a_completed_result() {
 fn publication_conflict_preserves_existing_file_and_stops_sibling() {
     let fixture = Fixture::new(2, 0);
     let cancelled = AtomicBool::new(false);
-    let conflict = fixture
-        .dir
-        .path()
-        .join("score - Practice Tracks/00 - Whole song/01 - Same.mp3");
+    let conflict = fixture.dir.path().join("00 - Whole song/01 - Same.mp3");
     let report = thread::scope(|scope| {
         scope.spawn(|| {
             started(fixture.dir.path(), 1);

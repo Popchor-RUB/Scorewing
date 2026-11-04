@@ -2,11 +2,11 @@
 use crate::preferences::MetronomePreference;
 use crate::renderer::{self, CONVERSION_TIMEOUT};
 use crate::{
-    CompletedTrack, ExportReport, PracticeOptions, PracticePart, Progress, RendererConfig, Result,
-    ScoreArchive, SoundCatalog,
+    CompletedTrack, ExportReport, OutputPlan, PracticeOptions, PracticePart, PracticeSection,
+    PreparedOutput, Progress, RendererConfig, Result, ScoreArchive, SoundCatalog,
 };
 use std::ffi::OsString;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
@@ -31,6 +31,7 @@ pub fn export_tracks(
     recovery_dir: &Path,
     cancelled: &AtomicBool,
     progress: impl Fn(Progress),
+    prepare_output: impl FnOnce(OutputPlan) -> Result<PreparedOutput>,
 ) -> Result<ExportReport> {
     export_with_preference(
         bytes,
@@ -52,6 +53,7 @@ pub fn export_tracks(
                     options.section_keys.len() + usize::from(options.include_whole_song),
                 ),
         ),
+        prepare_output,
     )
 }
 
@@ -67,6 +69,7 @@ fn export_with_preference(
     progress: impl Fn(Progress),
     preference: impl FnOnce() -> Result<MetronomePreference>,
     worker_count: usize,
+    prepare_output: impl FnOnce(OutputPlan) -> Result<PreparedOutput>,
 ) -> Result<ExportReport> {
     let original = ScoreArchive::read_bytes(bytes, context)?;
     let original_parts = original.parts()?;
@@ -84,7 +87,42 @@ fn export_with_preference(
     if !output_parent.is_dir() {
         return Err("Select an existing output folder.".into());
     }
-    let directory = create_results_folder(output_parent, context)?;
+    let parts = options
+        .parts
+        .iter()
+        .filter(|settings| settings.create_track)
+        .map(|settings| {
+            original_parts
+                .iter()
+                .find(|part| part.key == settings.key)
+                .ok_or_else(|| "Practice part disappeared after validation".to_owned())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let ranges = options
+        .include_whole_song
+        .then_some(None)
+        .into_iter()
+        .chain(sections.iter().map(Some));
+    let paths = ranges
+        .flat_map(|section| {
+            let folder = range_folder(section, &all_sections);
+            parts
+                .iter()
+                .enumerate()
+                .map(move |(index, part)| PathBuf::from(&folder).join(track_filename(index, part)))
+        })
+        .collect();
+    let output = prepare_output(OutputPlan::new(
+        output_parent,
+        paths,
+        vec![
+            PathBuf::from(context),
+            executable.clone(),
+            soundfont.clone(),
+        ],
+    )?)?;
+    check_cancelled(cancelled)?;
+    let directory = output.directory();
     let mut report = ExportReport {
         directory: directory.to_string_lossy().into_owned(),
         completed: vec![],
@@ -140,17 +178,6 @@ fn export_with_preference(
         if !sections.is_empty() && normalized.rehearsal_sections()? != all_sections {
             return Err("Normalization changed rehearsal section boundaries or labels".into());
         }
-        let parts = options
-            .parts
-            .iter()
-            .filter(|settings| settings.create_track)
-            .map(|settings| {
-                original_parts
-                    .iter()
-                    .find(|part| part.key == settings.key)
-                    .ok_or_else(|| "Practice part disappeared after validation".to_owned())
-            })
-            .collect::<Result<Vec<_>>>()?;
         let mut ranges = vec![];
         if options.include_whole_song {
             ranges.push((None, normalized.clone()));
@@ -223,31 +250,16 @@ fn export_with_preference(
         }
         let mut jobs = vec![];
         for (section, score) in &ranges {
-            let (folder, key_prefix, name_prefix) = match section {
-                Some(section) => (
-                    format!(
-                        "{:02} - {}",
-                        all_sections
-                            .iter()
-                            .position(|s| s.key == section.key)
-                            .unwrap()
-                            + 1,
-                        safe_filename(&section.name)
-                    ),
-                    format!("{}/", section.key),
-                    format!("{} — ", section.name),
-                ),
-                None => ("00 - Whole song".into(), String::new(), String::new()),
+            let folder = range_folder(*section, &all_sections);
+            let (key_prefix, name_prefix) = match section {
+                Some(section) => (format!("{}/", section.key), format!("{} — ", section.name)),
+                None => (String::new(), String::new()),
             };
             for (index, part) in parts.iter().enumerate() {
                 jobs.push(RenderJob {
                     score,
                     part,
-                    path: directory.join(&folder).join(format!(
-                        "{:02} - {}.mp3",
-                        index + 1,
-                        safe_filename(&part.name)
-                    )),
+                    path: directory.join(&folder).join(track_filename(index, part)),
                     key: format!("{key_prefix}{}", part.key),
                     name: format!("{name_prefix}{}", part.name),
                 });
@@ -372,9 +384,7 @@ fn export_with_preference(
                         let published = result.and_then(|mp3_path| {
                             check_cancelled(cancelled)?;
                             let job = &jobs[index];
-                            fs::create_dir_all(job.path.parent().unwrap())
-                                .map_err(|e| format!("Cannot create section output folder: {e}"))?;
-                            publish(&mp3_path, &job.path)?;
+                            output.publish(&mp3_path, &job.path)?;
                             report.completed.push(CompletedTrack {
                                 key: job.key.clone(),
                                 name: job.name.clone(),
@@ -492,25 +502,19 @@ fn read_bounded_score(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn create_results_folder(parent: &Path, context: &str) -> Result<PathBuf> {
-    let stem = Path::new(context)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Score");
-    let base = format!("{} - Practice Tracks", safe_filename(stem));
-    for suffix in 0..10_000 {
-        let path = parent.join(if suffix == 0 {
-            base.clone()
-        } else {
-            format!("{base} ({})", suffix + 1)
-        });
-        match fs::create_dir(&path) {
-            Ok(()) => return Ok(path),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(format!("Cannot create practice track folder: {error}")),
-        }
+fn range_folder(section: Option<&PracticeSection>, all: &[PracticeSection]) -> String {
+    match section {
+        Some(section) => format!(
+            "{:02} - {}",
+            all.iter().position(|s| s.key == section.key).unwrap() + 1,
+            safe_filename(&section.name)
+        ),
+        None => "00 - Whole song".into(),
     }
-    Err("Too many existing practice track folders; select another output folder.".into())
+}
+
+fn track_filename(index: usize, part: &PracticePart) -> String {
+    format!("{:02} - {}.mp3", index + 1, safe_filename(&part.name))
 }
 
 fn safe_filename(name: &str) -> String {
@@ -541,30 +545,6 @@ fn safe_filename(name: &str) -> String {
         clean.insert(0, '_');
     }
     clean
-}
-
-fn publish(source: &Path, destination: &Path) -> Result<()> {
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(source)
-        .and_then(|f| f.sync_all())
-        .map_err(|e| format!("Cannot sync completed MP3: {e}"))?;
-    // tempfile uses a native no-replace rename where available, including removable drives.
-    let temporary = tempfile::TempPath::try_from_path(source)
-        .map_err(|e| format!("Cannot prepare completed MP3 publication: {e}"))?;
-    match temporary.persist_noclobber(destination) {
-        Ok(()) => Ok(()),
-        Err(error) => {
-            let message = format!(
-                "Cannot publish {} without overwriting a file: {}",
-                destination.display(),
-                error.error
-            );
-            let _ = error.path.keep();
-            Err(message)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -667,6 +647,7 @@ dd if=/dev/zero bs=200 count=1 >> "$4" 2>/dev/null
             },
             || MetronomePreference::begin_test(&dir.path().join("recovery"), &preferences, true),
             1,
+            |plan| plan.prepare(crate::OutputChoice::Create),
         )
         .unwrap();
         assert_eq!(bytes, snapshot);
@@ -681,7 +662,11 @@ dd if=/dev/zero bs=200 count=1 >> "$4" 2>/dev/null
     #[test]
     #[cfg(unix)]
     fn fake_renderer_exports_duplicate_names_and_restores_preferences() {
-        let (report, _, _, _dir) = export_fixture(false, false);
+        let (report, _, _, dir) = export_fixture(false, false);
+        assert_eq!(
+            Path::new(&report.directory),
+            dir.path().canonicalize().unwrap()
+        );
         assert!(report.error.is_none(), "{:?}", report.error);
         assert_eq!(report.completed.len(), 2);
         assert_ne!(report.completed[0].path, report.completed[1].path);
@@ -706,35 +691,21 @@ dd if=/dev/zero bs=200 count=1 >> "$4" 2>/dev/null
             assert!(Path::new(&report.completed[0].path).is_file());
             assert!(report.error.is_some());
             assert_eq!(report.cancelled, cancel);
-            assert_eq!(fs::read_dir(&report.directory).unwrap().count(), 1);
+            assert_eq!(
+                fs::read_dir(Path::new(&report.directory).join("00 - Whole song"))
+                    .unwrap()
+                    .count(),
+                1
+            );
         }
     }
 
     #[test]
-    fn filenames_are_portable_and_duplicate_results_are_preserved() {
+    fn filenames_are_portable() {
         assert_eq!(safe_filename(" .. "), "Instrument");
         assert_eq!(safe_filename("CON"), "_CON");
         assert_eq!(safe_filename("NUL.wav"), "_NUL.wav");
         assert_eq!(safe_filename("../Soprano: 1?"), "_Soprano_ 1_");
-        let dir = tempfile::tempdir().unwrap();
-        let one = create_results_folder(dir.path(), "Score.mscz").unwrap();
-        let two = create_results_folder(dir.path(), "Score.mscz").unwrap();
-        assert_ne!(one, two);
-    }
-    #[test]
-    fn publication_never_overwrites_and_keeps_original_on_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source");
-        let destination = dir.path().join("destination");
-        fs::write(&source, b"audio").unwrap();
-        fs::write(&destination, b"existing").unwrap();
-        assert!(publish(&source, &destination).is_err());
-        assert_eq!(fs::read(&destination).unwrap(), b"existing");
-        assert_eq!(fs::read(&source).unwrap(), b"audio");
-        fs::remove_file(&destination).unwrap();
-        publish(&source, &destination).unwrap();
-        assert_eq!(fs::read(destination).unwrap(), b"audio");
-        assert!(!source.exists());
     }
 }
 

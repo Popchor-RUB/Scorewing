@@ -121,6 +121,7 @@ impl Native {
             &self.root.path().join("recovery"),
             &AtomicBool::new(false),
             |_| {},
+            |plan| plan.prepare(practice_tracks::OutputChoice::Overwrite),
         )
         .expect("Native export failed to start");
         assert!(!report.cancelled);

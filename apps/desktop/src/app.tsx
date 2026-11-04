@@ -13,9 +13,11 @@ import {
   practiceOptions, orderScorePair,
   type Arrangement, type Inspection, type PracticeConfig,
   type PracticeEnvironment, type PracticeOptions, type PracticeProgress, type PracticeResult,
+  type PracticeConflict, type PracticeOutputChoice,
 } from "./model.ts";
 import { PracticeView } from "./practice-view.tsx";
 import { PracticeExportModal } from "./practice-export-modal.tsx";
+import { PracticeConflictModal } from "./practice-conflict-modal.tsx";
 import { RecentSoundsProvider } from "./sound-picker.tsx";
 import { readPracticeDefaults, savePracticeDefaults } from "./practice-defaults.ts";
 import { readRecentScores, rememberScore } from "./recent-scores.ts";
@@ -56,6 +58,7 @@ export function mountApp(container: HTMLElement): () => void {
   let message = "";
   let messageError = false;
   let completedExport: PracticeResult | null = null;
+  let outputConflict: PracticeConflict | null = null;
   let pendingPair: [Inspection, Inspection] | null = null;
   const releasedPairIds = new Set<string>();
   let pairError = "";
@@ -437,7 +440,7 @@ export function mountApp(container: HTMLElement): () => void {
       }
     } catch (error) { notify(String(error), true); }
     finally {
-      exporting = false; cancelling = false; session.progress = undefined;
+      exporting = false; cancelling = false; outputConflict = null; session.progress = undefined;
       if (disposed) releaseAfterDispose();
       render();
     }
@@ -454,6 +457,13 @@ export function mountApp(container: HTMLElement): () => void {
     } catch (error) {
       if (exporting && current === session) { cancelling = false; notify(`Could not cancel rendering: ${String(error)}`, true); }
     }
+  }
+
+  async function resolveOutputConflict(choice: PracticeOutputChoice) {
+    const conflict = outputConflict;
+    if (!conflict || disposed) return;
+    await invoke("resolve_practice_export", { id: conflict.id, token: conflict.token, choice });
+    if (outputConflict === conflict) { outputConflict = null; render(); }
   }
 
   function update(change: (session: ScoreSession) => void) {
@@ -550,7 +560,8 @@ export function mountApp(container: HTMLElement): () => void {
         <div className={`status ${messageError ? "text-danger" : "muted"}`} role={messageError ? "alert" : "status"} aria-live="polite">{message}</div>
         <span className="status-context muted">{session ? "Source files are preserved" : "MusicXML · .mxl · MuseScore .mscz / .mscx"}</span>
       </footer>
-      {(completedExport || (exporting && session?.arrangement.kind === "practice")) && <PracticeExportModal result={completedExport}
+      {outputConflict && <PracticeConflictModal key={outputConflict.token} conflict={outputConflict} onResolve={resolveOutputConflict} />}
+      {!outputConflict && (completedExport || (exporting && session?.arrangement.kind === "practice")) && <PracticeExportModal result={completedExport}
         progress={session?.progress} total={session?.practice
           ? session.practice.parts.filter((part) => part.create_track).length * (Number(session.practice.include_whole_song) + session.practice.section_keys.length) : 0}
         cancelling={cancelling} onCancel={() => void cancelExport()} onClose={() => { completedExport = null; render(); }} />}
@@ -568,6 +579,12 @@ export function mountApp(container: HTMLElement): () => void {
   }
   register(listen<PracticeProgress>("practice-progress", (event) => {
     if (!disposed && exporting && current?.practice && current.document.id === event.payload.id) { current.progress = event.payload; render(); }
+  }));
+  register(listen<PracticeConflict>("practice-export-conflict", (event) => {
+    if (!disposed && exporting && current?.practice && current.document.id === event.payload.id) {
+      outputConflict = event.payload;
+      render();
+    }
   }));
   register(listen<string>("menu-action", (event) => {
     if (disposed) return;
@@ -590,6 +607,9 @@ export function mountApp(container: HTMLElement): () => void {
     window.removeEventListener("dragover", preventNavigation);
     window.removeEventListener("drop", preventNavigation);
     unlisteners.forEach((unlisten) => unlisten());
+    if (exporting && current?.practice && !current.progress) {
+      void invoke("cancel_practice_export", { id: current.document.id }).catch(() => {});
+    }
     // Active exports own their session until completion; never release it underneath the renderer.
     if (!exporting && !fileBusy) releaseAfterDispose();
     root.unmount();

@@ -1,6 +1,6 @@
 use practice_tracks::{
-    ExportReport, PracticeOptions, PracticePart, PracticeSection, RendererConfig,
-    RendererEnvironment,
+    ExportReport, OutputChoice, OutputPlan, PracticeOptions, PracticePart, PracticeSection,
+    RendererConfig, RendererEnvironment,
 };
 use scorewing_core::{
     check_output, diff_score, merge_score_with_stems, read_score_bytes, split_plan,
@@ -14,8 +14,8 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc, Arc, Mutex,
     },
 };
 use tauri::{Emitter, Manager, State};
@@ -52,6 +52,7 @@ enum DocumentFormat {
 struct PracticeJob {
     id: String,
     cancelled: Arc<AtomicBool>,
+    confirmation: Option<(String, mpsc::Sender<OutputChoice>)>,
 }
 
 type SharedPracticeJob = Arc<Mutex<Option<PracticeJob>>>;
@@ -640,6 +641,16 @@ struct ExportResult {
     warnings: Vec<String>,
 }
 
+fn export_filename(input: &Path, operation: &Operation) -> String {
+    let (tool, extension) = match operation {
+        Operation::Split { .. } => ("split", "musicxml"),
+        Operation::Merge { .. } => ("merge", "musicxml"),
+        Operation::Diff { .. } => ("diff", "mxl"),
+    };
+    let stem = input.file_stem().unwrap_or_default().to_string_lossy();
+    format!("{stem}-{tool}.{extension}")
+}
+
 #[tauri::command]
 async fn export_document(
     app: tauri::AppHandle,
@@ -664,7 +675,8 @@ async fn export_document(
     };
     tauri::async_runtime::spawn_blocking(move || {
         let mut sources = vec![input.clone(), PathBuf::from(&context)];
-        let suffix = if older.is_some() { "diff" } else { "arranged" };
+        let filename = export_filename(&input, &operation);
+        let diff = older.is_some();
         let transformed = if let Some(older) = older {
             warnings.extend(older.conversion_warnings);
             sources.extend([older.path, PathBuf::from(&older.context)]);
@@ -682,15 +694,8 @@ async fn export_document(
                 warnings.push(warning);
             }
         }
-        let stem = Path::new(&context)
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy();
-        let dialog = app.dialog().file().set_file_name(format!(
-            "{stem}-{suffix}.{}",
-            if suffix == "diff" { "mxl" } else { "musicxml" }
-        ));
-        let dialog = if suffix == "diff" {
+        let dialog = app.dialog().file().set_file_name(filename);
+        let dialog = if diff {
             dialog
                 .add_filter("Compressed MusicXML", &["mxl"])
                 .add_filter("MusicXML", &["musicxml", "xml", "mxml"])
@@ -795,6 +800,7 @@ fn begin_practice_job(
     *state = Some(PracticeJob {
         id,
         cancelled: cancelled.clone(),
+        confirmation: None,
     });
     Ok((cancelled, PracticeJobGuard(jobs.clone())))
 }
@@ -825,6 +831,115 @@ struct PracticeProgressEvent {
     progress: practice_tracks::Progress,
 }
 
+#[derive(Clone, Serialize)]
+struct PracticeConflictEvent {
+    id: String,
+    token: String,
+    directory: String,
+    conflicts: usize,
+    total: usize,
+    clear_error: Option<String>,
+}
+
+fn practice_sources(state: &Documents) -> Vec<PathBuf> {
+    state
+        .sessions
+        .values()
+        .flat_map(|session| [session.path.clone(), PathBuf::from(&session.context)])
+        .collect()
+}
+
+fn confirm_practice_output(
+    app: &tauri::AppHandle,
+    id: &str,
+    plan: &OutputPlan,
+    sources: &[PathBuf],
+    jobs: &SharedPracticeJob,
+    cancelled: &AtomicBool,
+) -> Result<OutputChoice, String> {
+    if plan.conflicts() == 0 {
+        return Ok(OutputChoice::Create);
+    }
+    static NEXT_CONFIRMATION: AtomicU64 = AtomicU64::new(1);
+    let token = NEXT_CONFIRMATION
+        .fetch_add(1, Ordering::Relaxed)
+        .to_string();
+    let (sender, receiver) = mpsc::channel();
+    {
+        let mut state = jobs
+            .lock()
+            .map_err(|_| "The practice export state is unavailable.")?;
+        let job = state
+            .as_mut()
+            .filter(|job| job.id == id)
+            .ok_or("The practice export is no longer running.")?;
+        job.confirmation = Some((token.clone(), sender));
+    }
+    app.emit(
+        "practice-export-conflict",
+        PracticeConflictEvent {
+            id: id.into(),
+            token,
+            directory: plan.directory().to_string_lossy().into_owned(),
+            conflicts: plan.conflicts(),
+            total: plan.total(),
+            clear_error: plan.protect_sources(OutputChoice::Clear, sources).err(),
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    loop {
+        if cancelled.load(Ordering::Relaxed) {
+            return Ok(OutputChoice::Cancel);
+        }
+        match receiver.recv_timeout(std::time::Duration::from_millis(50)) {
+            Ok(choice) => return Ok(choice),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(_) => return Err("The export confirmation was disconnected. Export again.".into()),
+        }
+    }
+}
+
+fn resolve_practice_confirmation(
+    id: &str,
+    token: &str,
+    choice: OutputChoice,
+    jobs: &SharedPracticeJob,
+) -> Result<(), String> {
+    if choice == OutputChoice::Create {
+        return Err("Choose overwrite, clear, or cancel.".into());
+    }
+    let mut state = jobs
+        .lock()
+        .map_err(|_| "The practice export state is unavailable.")?;
+    let job = state
+        .as_mut()
+        .filter(|job| job.id == id)
+        .ok_or("No practice export is running for this score.")?;
+    if !job
+        .confirmation
+        .as_ref()
+        .is_some_and(|(pending, _)| pending == token)
+    {
+        return Err("This export confirmation is no longer current.".into());
+    }
+    job.confirmation
+        .take()
+        .unwrap()
+        .1
+        .send(choice)
+        .map_err(|_| "This export confirmation has ended.".into())
+}
+
+#[tauri::command]
+fn resolve_practice_export(
+    id: String,
+    token: String,
+    choice: OutputChoice,
+    jobs: State<'_, SharedPracticeJob>,
+) -> Result<(), String> {
+    resolve_practice_confirmation(&id, &token, choice, &jobs)
+}
+
 #[tauri::command]
 async fn export_practice_tracks(
     app: tauri::AppHandle,
@@ -835,6 +950,9 @@ async fn export_practice_tracks(
     jobs: State<'_, SharedPracticeJob>,
 ) -> Result<Option<ExportReport>, String> {
     let (context, bytes) = practice_snapshot(&id, &documents)?;
+    let sources = practice_sources(&*lock_documents(&documents)?);
+    let documents = documents.inner().clone();
+    let jobs = jobs.inner().clone();
     let recovery_dir = app
         .path()
         .app_local_data_dir()
@@ -846,7 +964,7 @@ async fn export_practice_tracks(
         let Some(folder) = app
             .dialog()
             .file()
-            .set_title("Choose where to create the practice tracks folder")
+            .set_title("Choose an output folder for practice tracks")
             .blocking_pick_folder()
         else {
             return Ok(None);
@@ -855,7 +973,7 @@ async fn export_practice_tracks(
         if cancelled.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        practice_tracks::export_tracks(
+        let result = practice_tracks::export_tracks(
             &bytes,
             &context,
             &options,
@@ -872,8 +990,30 @@ async fn export_practice_tracks(
                     },
                 );
             },
-        )
-        .map(Some)
+            |plan| {
+                let choice =
+                    confirm_practice_output(&app, &id, &plan, &sources, &jobs, &cancelled)?;
+                if choice == OutputChoice::Cancel || cancelled.load(Ordering::Relaxed) {
+                    cancelled.store(true, Ordering::Relaxed);
+                    return Err("Export cancelled.".into());
+                }
+                // Hold the document lock through deletion so newly opened sources stay protected.
+                let state = lock_documents(&documents)?;
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err("Export cancelled.".into());
+                }
+                let mut protected = sources.clone();
+                protected.extend(practice_sources(&state));
+                plan.protect_sources(choice, &protected)?;
+                plan.prepare(choice)
+            },
+        );
+        match result {
+            Err(error) if error == "Export cancelled." && cancelled.load(Ordering::Relaxed) => {
+                Ok(None)
+            }
+            result => result.map(Some),
+        }
     })
     .await
     .map_err(|error| error.to_string())?
@@ -950,6 +1090,7 @@ pub fn run() {
             practice_environment,
             pick_practice_path,
             export_practice_tracks,
+            resolve_practice_export,
             cancel_practice_export,
             open_practice_export_folder,
             updater_supported,
@@ -965,6 +1106,53 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_names_use_original_stems_and_tool_names() {
+        let split: Operation = serde_json::from_value(serde_json::json!({
+            "kind": "split", "part_ids": [], "mode": "chords", "fallbacks": [], "insert_fallback_slurs": false
+        })).unwrap();
+        let merge: Operation = serde_json::from_value(serde_json::json!({
+            "kind": "merge", "groups": [], "stems": []
+        }))
+        .unwrap();
+        let diff = Operation::Diff {
+            older_id: "older".into(),
+        };
+        for (operation, suffix) in [
+            (split, "split.musicxml"),
+            (merge, "merge.musicxml"),
+            (diff, "diff.mxl"),
+        ] {
+            assert_eq!(
+                export_filename(Path::new("/scores/My score.v2.MSCZ"), &operation),
+                format!("My score.v2-{suffix}")
+            );
+        }
+    }
+
+    #[test]
+    fn practice_confirmation_rejects_stale_wrong_score_and_duplicate_replies() {
+        let jobs = SharedPracticeJob::default();
+        let (_, _guard) = begin_practice_job("score".into(), &jobs).unwrap();
+        let (sender, receiver) = mpsc::channel();
+        jobs.lock().unwrap().as_mut().unwrap().confirmation = Some(("current".into(), sender));
+        assert!(
+            resolve_practice_confirmation("other", "current", OutputChoice::Clear, &jobs).is_err()
+        );
+        assert!(
+            resolve_practice_confirmation("score", "stale", OutputChoice::Clear, &jobs).is_err()
+        );
+        assert!(
+            resolve_practice_confirmation("score", "current", OutputChoice::Create, &jobs).is_err()
+        );
+        assert!(receiver.try_recv().is_err());
+        resolve_practice_confirmation("score", "current", OutputChoice::Overwrite, &jobs).unwrap();
+        assert_eq!(receiver.recv().unwrap(), OutputChoice::Overwrite);
+        assert!(
+            resolve_practice_confirmation("score", "current", OutputChoice::Clear, &jobs).is_err()
+        );
+    }
 
     #[test]
     fn diff_export_uses_snapshots_and_protects_both_inputs_after_release() {

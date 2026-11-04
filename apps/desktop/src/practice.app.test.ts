@@ -6,6 +6,79 @@ import type { PracticeConfig, PracticeEnvironment, PracticeOptions, PracticeResu
 import { mountTestApp } from "./test-support.ts";
 import { PRACTICE_DEFAULTS_KEY } from "./practice-defaults.ts";
 
+test("practice conflicts require a choice, preserve cancellation, and disable unsafe clearing", async () => {
+  let finish: (result: PracticeResult | null) => void;
+  let failReply = false;
+  const replies: Record<string, unknown>[] = [];
+  const app = await mountTestApp(async (command, args) => {
+    if (command === "open_files") return ["/scores/practice.mscz"];
+    if (command === "release_document") return;
+    if (command === "inspect_file") return {
+      id: "practice", name: "practice.mscz", path: "/scores/practice.mscz", format: "musescore", parts: [], error: null,
+      practice_parts: [{ key: "one", name: "Piano", visible: true, original_instruments: [], existing_preset: { bank: 0, program: 0 } }],
+    };
+    if (command === "practice_environment") return {
+      executable: "/bin/mscore", soundfont: "/sounds/MS Basic.sf3", version: "4.7.5", error: null,
+      presets: [{ bank: 0, program: 0, name: "Piano" }],
+    };
+    if (command === "export_practice_tracks") return new Promise<PracticeResult | null>((resolve) => { finish = resolve; });
+    if (command === "resolve_practice_export") {
+      if (failReply) { failReply = false; throw new Error("Reply failed"); }
+      replies.push(args);
+      if (args.choice === "cancel") finish(null);
+      return;
+    }
+    if (command === "cancel_practice_export") { finish(null); return; }
+    throw new Error(`Unexpected command ${command}`);
+  });
+  const conflict = { id: "practice", token: "first", directory: "/output/rehearsal", conflicts: 6, total: 8, clear_error: null as string | null };
+  try {
+    await app.menu("open-score");
+    await app.click('[data-mode="practice"]');
+    await app.click('[data-action="practice-export"]');
+    await app.event("practice-export-conflict", { ...conflict, id: "other-score" });
+    assert.match(app.find('[role="dialog"]').textContent!, /Exporting practice tracks/);
+    await app.event("practice-export-conflict", conflict);
+    assert.match(app.find('[role="dialog"]').textContent!, /6 of the 8.*\/output\/rehearsal/s);
+    assert.equal(app.document.activeElement, app.find('[data-action="practice-conflict-cancel"]'));
+    assert.equal(app.find('[data-action="practice-overwrite-choice"]').getAttribute("aria-checked"), "true");
+    assert.equal(app.find('[data-action="practice-conflict-confirm"]').textContent, "Overwrite & export");
+    assert.equal(replies.length, 0);
+    failReply = true;
+    await app.click('[data-action="practice-conflict-confirm"]');
+    assert.match(app.find('[role="dialog"] [role="alert"]').textContent!, /Reply failed/);
+    await app.click('[data-action="practice-conflict-confirm"]');
+    assert.deepEqual(replies.at(-1), { id: "practice", token: "first", choice: "overwrite" });
+    await act(async () => finish(null)); await app.settle();
+
+    await app.click('[data-action="practice-export"]');
+    await app.event("practice-export-conflict", { ...conflict, token: "second" });
+    await app.click('[data-action="practice-clear-choice"]');
+    assert.equal(app.find('[data-action="practice-conflict-confirm"]').textContent, "Clear folder & export");
+    assert.equal(app.find('[data-action="practice-conflict-confirm"]').getAttribute("data-variant"), "destructive");
+    assert.match(app.find('[role="dialog"]').textContent!, /including unrelated files and subfolders/);
+    await app.click('[data-action="practice-conflict-confirm"]');
+    assert.deepEqual(replies.at(-1), { id: "practice", token: "second", choice: "clear" });
+    await act(async () => finish(null)); await app.settle();
+
+    await app.click('[data-action="practice-export"]');
+    await app.event("practice-export-conflict", { ...conflict, token: "third", clear_error: "Cannot clear a source score folder." });
+    assert.equal(app.find('[data-action="practice-clear-choice"]').getAttribute("aria-disabled"), "true");
+    await act(async () => { app.document.activeElement?.dispatchEvent(new app.browser.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+    await app.settle();
+    assert.deepEqual(replies.at(-1), { id: "practice", token: "third", choice: "cancel" });
+    assert.equal(app.document.querySelector('[role="dialog"]'), null);
+
+    assert.equal(app.document.activeElement, app.find('[data-action="practice-export"]'), "cancel restores focus to the export action");
+
+    await app.click('[data-action="practice-export"]');
+    await app.event("practice-export-conflict", { ...conflict, token: "fourth" });
+    await app.click('[data-action="practice-conflict-cancel"]');
+    assert.deepEqual(replies.at(-1), { id: "practice", token: "fourth", choice: "cancel" });
+    assert.match(app.find(".status").textContent!, /Export cancelled/);
+  } finally { await app.close(); }
+});
+
 test("practice ranges support section-only exports, preserve choices, and count every mix", async () => {
   const requests: PracticeOptions[] = [];
   let finish: ((result: PracticeResult | null) => void) | undefined;
@@ -293,7 +366,7 @@ test("successful practice exports open a dismissible completion modal with a ret
     throw new Error(`Unexpected command ${command}`);
   });
   const result = (directory: string): PracticeResult => ({
-    directory, completed: [{ key: "one", name: "Violin", path: `${directory}/Violin.mp3` }], error: null, cancelled: false,
+    directory, completed: [{ key: "one", name: "Violin", path: `${directory}/00 - Whole song/01 - Violin.mp3` }], error: null, cancelled: false,
   });
   let now = 0;
   let tick: (() => void) | undefined;
@@ -347,6 +420,8 @@ test("successful practice exports open a dismissible completion modal with a ret
     assert.match(dialog.textContent!, /Practice tracks created/);
     assert.match(dialog.textContent!, /1 completed track saved in/);
     assert.equal(app.find(".practice-export-path").textContent, directory);
+    assert.equal(app.find('[aria-label="Exported section folders"]').textContent, "00 - Whole song/");
+    assert.match(dialog.textContent!, /Section folders are saved directly here/);
     assert.ok(app.document.activeElement?.closest('[role="dialog"]'), "focus moves into the modal");
     assert.equal(opened.length, 0, "the file browser opens only on request");
     await app.click('[data-action="practice-open-folder"]');

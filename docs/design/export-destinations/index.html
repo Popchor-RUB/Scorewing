@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Export destinations — design review</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, system-ui, sans-serif; }
+    body { max-width: 1100px; margin: 32px auto; padding: 0 20px; line-height: 1.5; }
+    h1 { font-size: 26px; } h2 { margin-top: 40px; font-size: 19px; }
+    img { display: block; width: 100%; height: auto; border: 1px solid #8892a055; border-radius: 7px; }
+    p { max-width: 82ch; } a { color: inherit; }
+  </style>
+</head>
+<body>
+  <h1>Export names and practice destinations</h1>
+  <p>Approved design · implemented. Created in Figcraft using the existing ScoreWing design. <a href="README.md">Behavior and verification</a></p>
+  <h2>Default filenames</h2>
+  <p>Source filename plus <code>-split</code>, <code>-merge</code>, or <code>-diff</code>. Diff uses the newer score. Existing output formats remain available.</p>
+  <img src="screens/filenames.png" alt="Examples of tool-specific default export filenames" width="1100" height="760">
+  <h2>Section folders directly in the chosen destination</h2>
+  <p>Whole-song and section folders are created immediately inside the selected output folder.</p>
+  <img src="screens/direct-output.png" alt="Completion modal showing section folders directly inside the chosen folder" width="1100" height="760">
+  <h2>Existing files: overwrite matching tracks</h2>
+  <p>The modal appears only when export files would be replaced. Overwrite preserves all other contents; Cancel changes nothing.</p>
+  <img src="screens/overwrite.png" alt="Conflict modal with overwrite matching files selected and an Overwrite and export button" width="1100" height="760">
+  <h2>Existing files: clear the selected folder</h2>
+  <p>Selecting clear changes the final action to a red Clear folder &amp; export button. The warning explicitly includes unrelated files and subfolders.</p>
+  <img src="screens/clear-folder.png" alt="Conflict modal with clear folder selected and a destructive Clear folder and export button" width="1100" height="760">
+</body>
+</html>

@@ -53,6 +53,10 @@ export function PracticeExportModal({ result, progress, total, cancelling, onCan
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState("");
   const doneButton = useRef<HTMLButtonElement>(null);
+  const folders = [...new Set((result?.completed ?? [])
+    .map((track) => track.path.replaceAll("\\", "/").split("/").at(-2))
+    .filter((folder): folder is string => !!folder))]
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   useEffect(() => { if (result) doneButton.current?.focus(); }, [result]);
 
   async function openFolder() {
@@ -67,13 +71,18 @@ export function PracticeExportModal({ result, progress, total, cancelling, onCan
     if (!open && !result) { details.cancel(); return; }
     if (!open) onClose();
   }}>
-    <DialogContent className="practice-export-dialog">
+    <DialogContent className="practice-export-dialog" finalFocus={() => document.querySelector<HTMLButtonElement>('[data-action="practice-export"]')}>
       {result ? <>
         <div className="dialog-header"><DialogTitle>{result.cancelled ? "Rendering cancelled" : result.error ? "Rendering stopped" : "Practice tracks created"}</DialogTitle>
           <DialogClose render={<Button variant="ghost" size="icon" />} aria-label="Close practice track completion">×</DialogClose></div>
         <DialogDescription>{result.completed.length} completed {result.completed.length === 1 ? "track" : "tracks"} saved in:</DialogDescription>
         <div className="dialog-body">
           <p className="practice-export-path select-text wrap-anywhere">{result.directory}</p>
+          {!result.cancelled && !result.error && <>
+            <ul className="practice-result-folders" aria-label="Exported section folders">{folders.map((folder) => <li key={folder}>{folder}/</li>)}</ul>
+            <p className="muted">Section folders are saved directly here. Each contains its MP3 tracks.</p>
+            <p className="muted">192 kbps MP3</p>
+          </>}
           {result.error && <p role="alert" className="text-danger">{result.error}</p>}
           {(result.cancelled || result.error) && <ul className="practice-result-files">{result.completed.map((track) => <li key={track.key}>{track.name}<p className="muted wrap-anywhere">{track.path}</p></li>)}</ul>}
           {error && <p className="text-danger" role="alert">{error}</p>}

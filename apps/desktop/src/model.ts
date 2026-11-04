@@ -114,6 +114,15 @@ export interface PracticeResult {
   cancelled: boolean;
 }
 export interface PracticeProgress { id: string; stage: string; completed: number; running: number; total: number }
+export type PracticeOutputChoice = "overwrite" | "clear" | "cancel";
+export interface PracticeConflict {
+  id: string;
+  token: string;
+  directory: string;
+  conflicts: number;
+  total: number;
+  clear_error: string | null;
+}
 
 export function newPractice(parts: PracticePart[], defaults: PracticeDefaults = {}, sections: PracticeSection[] = []): PracticeOptions {
   return {

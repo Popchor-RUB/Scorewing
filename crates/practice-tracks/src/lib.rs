@@ -2,6 +2,7 @@
 pub mod archive;
 pub mod catalog;
 mod conversion;
+mod output;
 mod preferences;
 pub mod renderer;
 pub mod service;
@@ -12,6 +13,7 @@ use std::path::PathBuf;
 pub use archive::ScoreArchive;
 pub use catalog::SoundCatalog;
 pub use conversion::{convert_musicxml, convert_musicxml_with_warnings, Conversion};
+pub use output::{OutputChoice, OutputPlan, PreparedOutput};
 pub use renderer::environment;
 pub use service::export_tracks;
 

@@ -113,7 +113,7 @@ jobs:
           fi
           bash tools/build-libxml2.sh "$RUNNER_TEMP/libxml2" "${cmake_args[@]}"
           if [[ "$RUNNER_OS" == macOS ]]; then
-            lipo -verify_arch x86_64 arm64 "$RUNNER_TEMP/libxml2/lib/libxml2.a"
+            lipo "$RUNNER_TEMP/libxml2/lib/libxml2.a" -verify_arch x86_64 arm64
           fi
           echo "PKG_CONFIG_PATH=$RUNNER_TEMP/libxml2/lib/pkgconfig" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
@@ -207,8 +207,8 @@ jobs:
       - name: Verify universal macOS architectures
         if: runner.os == 'macOS'
         run: |
-          lipo -verify_arch x86_64 arm64 target/release/scorewing
-          lipo -verify_arch x86_64 arm64 "$DESKTOP_RELEASE_DIR/scorewing-desktop"
+          lipo target/release/scorewing -verify_arch x86_64 arm64
+          lipo "$DESKTOP_RELEASE_DIR/scorewing-desktop" -verify_arch x86_64 arm64
       - name: Smoke test CLI and linkage
         shell: bash
         run: |

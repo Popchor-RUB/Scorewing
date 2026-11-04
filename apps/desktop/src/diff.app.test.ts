@@ -348,7 +348,7 @@ test("MuseScore arranging modes prepare MusicXML and dispatch by selected operat
     await act(async () => { finishPreparation!({ ...native, parts: [{ id: "P1", name: "Violin", instrument_names: [], voice_count: 1, split_plans: { chords: [], voices: [] } }] }); });
     await app.settle();
     holdPreparation = false;
-    await app.click('[data-part="P1"]');
+    assert.equal(app.find('[data-part="P1"]').getAttribute("aria-checked"), "true", "visible MuseScore sources start selected");
     await app.click('[data-action="export"]');
     assert.equal((exports[0].operation as { kind: string }).kind, "split");
     await app.click('[data-action="back-to-modes"]');

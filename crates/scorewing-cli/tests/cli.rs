@@ -134,10 +134,21 @@ fn split_merge_compressed_roundtrip_and_output_protection() {
     let score = scorewing_core::read_score(&merged).unwrap();
     assert_eq!(
         score.parts.iter().map(|p| p.name()).collect::<Vec<_>>(),
-        ["Soprano", "Soprano 1 / Soprano 2 / Alto"]
+        [
+            "Soprano",
+            "Soprano 1",
+            "Soprano 1 / Soprano 2 / Alto",
+            "Soprano 2",
+            "Alto"
+        ]
     );
     assert_eq!(
-        score.parts[1].measures[0]
+        score
+            .parts
+            .iter()
+            .find(|part| part.id().contains("_merge"))
+            .unwrap()
+            .measures[0]
             .events
             .iter()
             .map(|event| event.voice.as_str())
@@ -218,9 +229,22 @@ fn merge_groups_resolve_mixed_names_and_positions_in_voice_order() {
     let score = scorewing_core::read_score(&output).unwrap();
     assert_eq!(
         score.parts.iter().map(|p| p.name()).collect::<Vec<_>>(),
-        ["Alto / Soprano", "Tenor / Bass"]
+        [
+            "Soprano",
+            "Alto / Soprano",
+            "Alto",
+            "Tenor",
+            "Tenor / Bass",
+            "Bass"
+        ]
     );
-    let events = &score.parts[0].measures[0].events;
+    let events = &score
+        .parts
+        .iter()
+        .find(|part| part.id().contains("_merge"))
+        .unwrap()
+        .measures[0]
+        .events;
     assert_eq!(events.len(), 2);
     for (event, (voice, pitch, stem)) in events.iter().zip([("1", "E", "up"), ("2", "C", "down")]) {
         assert_eq!(event.voice, voice);

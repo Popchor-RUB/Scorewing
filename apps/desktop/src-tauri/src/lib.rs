@@ -36,6 +36,7 @@ struct Session {
     context: String,
     bytes: Option<Arc<Vec<u8>>>,
     musicxml: Option<Arc<Vec<u8>>>,
+    conversion_warnings: Vec<String>,
     modified_ms: Option<u64>,
 }
 
@@ -71,6 +72,9 @@ struct PartSummary {
     name: String,
     instrument_names: Vec<String>,
     voice_count: usize,
+    visible: bool,
+    staff_count: usize,
+    supported: bool,
     split_plans: SplitPlans,
 }
 
@@ -88,6 +92,9 @@ struct LaneSummary {
 }
 
 fn split_preview(part: &Part, mode: &str) -> Result<Vec<LaneSummary>, String> {
+    if !part.supported() {
+        return Ok(Vec::new());
+    }
     Ok(split_plan(part, mode)
         .map_err(|error| error.to_string())?
         .into_iter()
@@ -122,6 +129,9 @@ fn summarize_part(part: &Part) -> Result<PartSummary, String> {
             })
             .collect(),
         voice_count: voices.len(),
+        visible: part.visible(),
+        staff_count: part.staff_count(),
+        supported: part.supported(),
         split_plans: SplitPlans {
             chords: split_preview(part, "chords")?,
             voices: split_preview(part, "voices")?,
@@ -140,6 +150,7 @@ struct Inspection {
     practice_sections: Vec<PracticeSection>,
     error: Option<String>,
     modified_ms: Option<u64>,
+    warnings: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -233,6 +244,7 @@ fn register_input(path: PathBuf, documents: &SharedDocuments) -> Result<(String,
             context,
             bytes: None,
             musicxml: None,
+            conversion_warnings: Vec::new(),
             modified_ms: None,
         },
     );
@@ -264,6 +276,7 @@ fn inspect_registered(
         practice_sections: Vec::new(),
         error: None,
         modified_ms: None,
+        warnings: Vec::new(),
     };
     let parsed = (|| -> Result<_, String> {
         let file = File::open(&path)
@@ -324,7 +337,7 @@ fn prepare_registered(
     executable: Option<PathBuf>,
     documents: &SharedDocuments,
 ) -> Result<Inspection, String> {
-    let (context, bytes, cached, modified_ms) = {
+    let (context, bytes, cached, modified_ms, mut warnings) = {
         let state = lock_documents(documents)?;
         let session = state
             .sessions
@@ -338,17 +351,22 @@ fn prepare_registered(
                 .ok_or("This score could not be parsed.")?,
             session.musicxml.clone(),
             session.modified_ms,
+            session.conversion_warnings.clone(),
         )
     };
     let format = document_format(Path::new(&context)).ok_or("Unsupported score format")?;
     let musicxml = if format == DocumentFormat::Musescore {
         match cached {
             Some(cached) => cached,
-            None => Arc::new(practice_tracks::convert_musicxml(
-                &bytes,
-                &context,
-                executable.as_deref(),
-            )?),
+            None => {
+                let converted = practice_tracks::convert_musicxml_with_warnings(
+                    &bytes,
+                    &context,
+                    executable.as_deref(),
+                )?;
+                warnings = converted.warnings;
+                Arc::new(converted.musicxml)
+            }
         }
     } else {
         bytes.clone()
@@ -360,11 +378,15 @@ fn prepare_registered(
         .iter()
         .map(summarize_part)
         .collect::<Result<Vec<_>, String>>()?;
-    lock_documents(documents)?
-        .sessions
-        .get_mut(&id)
-        .ok_or("The score was closed while converting it.")?
-        .musicxml = Some(musicxml);
+    {
+        let mut state = lock_documents(documents)?;
+        let session = state
+            .sessions
+            .get_mut(&id)
+            .ok_or("The score was closed while converting it.")?;
+        session.musicxml = Some(musicxml);
+        session.conversion_warnings = warnings.clone();
+    }
     let practice_archive = if format == DocumentFormat::Musescore {
         Some(practice_tracks::ScoreArchive::read_bytes(&bytes, &context)?)
     } else {
@@ -381,6 +403,7 @@ fn prepare_registered(
         format,
         parts,
         modified_ms,
+        warnings,
         practice_parts: practice_archive
             .as_ref()
             .map(|archive| archive.parts())
@@ -579,6 +602,7 @@ fn diff_snapshot(state: &Documents, operation: &Operation) -> Result<Option<Sess
         context: session.context.clone(),
         bytes: Some(bytes),
         musicxml: None,
+        conversion_warnings: session.conversion_warnings.clone(),
         modified_ms: session.modified_ms,
     }))
 }
@@ -624,7 +648,7 @@ async fn export_document(
     documents: State<'_, SharedDocuments>,
 ) -> Result<Option<ExportResult>, String> {
     let documents = documents.inner().clone();
-    let (input, context, bytes, older) = {
+    let (input, context, bytes, older, mut warnings) = {
         let state = lock_documents(&documents)?;
         let session = state
             .sessions
@@ -635,12 +659,14 @@ async fn export_document(
             session.context.clone(),
             musicxml_snapshot(session)?,
             diff_snapshot(&state, &operation)?,
+            session.conversion_warnings.clone(),
         )
     };
     tauri::async_runtime::spawn_blocking(move || {
         let mut sources = vec![input.clone(), PathBuf::from(&context)];
         let suffix = if older.is_some() { "diff" } else { "arranged" };
         let transformed = if let Some(older) = older {
+            warnings.extend(older.conversion_warnings);
             sources.extend([older.path, PathBuf::from(&older.context)]);
             prepare_diff_export(
                 &bytes,
@@ -651,6 +677,11 @@ async fn export_document(
         } else {
             prepare_export(&bytes, &context, operation)?
         };
+        for warning in transformed.warnings {
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+        }
         let stem = Path::new(&context)
             .file_stem()
             .unwrap_or_default()
@@ -703,7 +734,7 @@ async fn export_document(
             .map_err(|error| error.to_string())?;
         Ok(Some(ExportResult {
             path: output.to_string_lossy().into_owned(),
-            warnings: transformed.warnings,
+            warnings,
         }))
     })
     .await
@@ -1013,6 +1044,7 @@ mod tests {
                 context: "older.musicxml".into(),
                 bytes: None,
                 musicxml: None,
+                conversion_warnings: Vec::new(),
                 modified_ms: None,
             },
         );
@@ -1027,13 +1059,18 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn musescore_preparation_caches_visible_musicxml_and_preserves_original_snapshot() {
+    fn musescore_preparation_caches_all_parts_and_preserves_original_snapshot() {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("original.mscx");
         let original = br#"<museScore version="4.70"><Score><Part id="1"><Staff id="1"/><trackName>Visible</trackName><Instrument id="voice"/></Part><Part id="2"><Staff id="2"/><show>0</show><trackName>Hidden</trackName><Instrument id="voice"/></Part><Staff id="1"/><Staff id="2"/></Score></museScore>"#;
         std::fs::write(&path, original).unwrap();
-        std::fs::write(directory.path().join("converted.musicxml"), FALLBACK_SCORE).unwrap();
+        let converted = String::from_utf8(FALLBACK_SCORE.to_vec())
+            .unwrap()
+            .replace("<part-name>Choir</part-name>", "<part-name>ScorewingSource000001</part-name>")
+            .replace("</part-list>", "<score-part id=\"P2\"><part-name>ScorewingSource000002</part-name></score-part></part-list>")
+            .replace("</score-partwise>", "<part id=\"P2\"><measure number=\"1\"><attributes><divisions>1</divisions></attributes><note><rest/><duration>1</duration><voice>1</voice><type>quarter</type></note></measure></part></score-partwise>");
+        std::fs::write(directory.path().join("converted.musicxml"), converted).unwrap();
         let executable = directory.path().join("fake-converter");
         std::fs::write(&executable, "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'MuseScore Studio 4.7.0'; exit; fi\ncp \"$3\" \"$(dirname \"$0\")/captured.mscz\"\nprintf '%s' \"$2\" > \"$(dirname \"$0\")/output-path\"\ncp \"$(dirname \"$0\")/converted.musicxml\" \"$2\"\n").unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1048,13 +1085,19 @@ mod tests {
         assert_eq!(prepared.name, "original.mscx");
         assert_eq!(prepared.modified_ms, inspection.modified_ms);
         assert_eq!(prepared.practice_parts.len(), 2);
-        assert_eq!(prepared.parts.len(), 1);
+        assert_eq!(prepared.parts.len(), 2);
+        assert!(prepared.parts[0].visible);
+        assert!(!prepared.parts[1].visible);
+        assert!(prepared
+            .parts
+            .iter()
+            .all(|part| part.supported && part.staff_count == 1));
         let captured = practice_tracks::ScoreArchive::read_bytes(
             &std::fs::read(directory.path().join("captured.mscz")).unwrap(),
             "capture.mscz",
         )
         .unwrap();
-        assert_eq!(captured.parts().unwrap().len(), 1);
+        assert_eq!(captured.parts().unwrap().len(), 2);
         assert!(!Path::new(
             &std::fs::read_to_string(directory.path().join("output-path")).unwrap()
         )
@@ -1090,6 +1133,60 @@ mod tests {
         .is_ok());
         assert!(prepare_diff_export(&bytes, "new.mscx", FALLBACK_SCORE, "old.xml").is_ok());
         assert!(protect_sources(&state, &path).is_err());
+    }
+
+    #[test]
+    fn cached_conversion_warnings_survive_repreparation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("input.mscx");
+        std::fs::write(&path, br#"<museScore version="4.70"><Score><Part><Staff/><Instrument id="voice"/></Part><Staff id="1"/></Score></museScore>"#).unwrap();
+        let documents = SharedDocuments::default();
+        let inspection = inspect(path, &documents).unwrap();
+        let warning = "Measure 2, beat 1: rehearsal mark C could not be preserved";
+        {
+            let mut state = lock_documents(&documents).unwrap();
+            let session = state.sessions.get_mut(&inspection.id).unwrap();
+            session.musicxml = Some(Arc::new(FALLBACK_SCORE.to_vec()));
+            session.conversion_warnings = vec![warning.into()];
+        }
+        let prepared = prepare_registered(
+            inspection.id,
+            Some(directory.path().join("missing-converter")),
+            &documents,
+        )
+        .unwrap();
+        assert_eq!(prepared.warnings, [warning]);
+    }
+
+    #[test]
+    fn inspection_exposes_multistaff_eligibility_without_rejecting_other_parts() {
+        let xml = String::from_utf8(FALLBACK_SCORE.to_vec())
+            .unwrap()
+            .replace("</part-list>", "<score-part id=\"P2\"><part-name>Piano</part-name></score-part></part-list>")
+            .replace("</score-partwise>", "<part id=\"P2\"><measure number=\"1\"><attributes><divisions>1</divisions><staves>2</staves></attributes></measure></part></score-partwise>");
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("score.musicxml");
+        std::fs::write(&path, &xml).unwrap();
+        let inspection = inspect(path, &SharedDocuments::default()).unwrap();
+        assert!(inspection.error.is_none());
+        assert_eq!(inspection.parts.len(), 2);
+        assert!(inspection.parts[0].supported);
+        let piano = &inspection.parts[1];
+        assert_eq!(piano.name, "Piano");
+        assert_eq!(piano.staff_count, 2);
+        assert!(!piano.supported);
+        assert!(piano.split_plans.chords.is_empty());
+        assert!(piano.split_plans.voices.is_empty());
+        assert!(prepare_export(
+            xml.as_bytes(),
+            "score.musicxml",
+            Operation::Merge {
+                groups: vec![vec!["P1".into(), "P2".into()]],
+                stems: vec![vec!["up".into(), "down".into()]],
+            },
+        )
+        .unwrap_err()
+        .contains("multi-staff"));
     }
 
     #[test]
@@ -1218,7 +1315,13 @@ mod tests {
         )
         .unwrap();
         let score = scorewing_core::parse_score(result.root).unwrap();
-        let events = &score.parts[0].measures[0].events;
+        assert_eq!(score.parts.len(), 3);
+        let merged = score
+            .parts
+            .iter()
+            .find(|part| part.id() != "P1" && part.id() != "P2")
+            .unwrap();
+        let events = &merged.measures[0].events;
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].notes.len(), 2);
         assert!(events

@@ -760,6 +760,16 @@ fn apply_marks(root: &mut Element, marks: &BTreeSet<Path>) {
 
 /// Return the newer score with musical changes colored red. Inputs are never modified.
 pub fn diff_score(older: &Score, newer: &Score) -> Result<DiffResult> {
+    if older
+        .parts
+        .iter()
+        .chain(&newer.parts)
+        .any(|part| !part.supported())
+    {
+        return Err(crate::ScoreError::new(
+            "Diff does not support multi-staff instruments",
+        ));
+    }
     let matches = part_matches(&older.parts, &newer.parts)?;
     let old: Vec<_> = older.parts.iter().map(music).collect::<Result<_>>()?;
     let new: Vec<_> = newer.parts.iter().map(music).collect::<Result<_>>()?;

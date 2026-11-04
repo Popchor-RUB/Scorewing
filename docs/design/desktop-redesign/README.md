@@ -4,6 +4,8 @@ Status: implemented in the desktop frontend using application-owned shadcn/Base 
 
 Open `index.html` for the 16-screen gallery, or `scorewing-desktop.figcraft` for editable layers. The `screens/` folder contains PNG exports.
 
+The approved [MuseScore import design](../musescore-import/README.md) adds frames 17–19 to the editable document. Its [separate gallery](../musescore-import/index.html) covers the implemented Split/Merge visibility defaults and export mark warnings.
+
 ## Agreed brief
 
 - Cross-platform desktop utility with balanced density and a quiet, neutral visual tone.

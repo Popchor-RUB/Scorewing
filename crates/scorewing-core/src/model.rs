@@ -102,11 +102,211 @@ impl Part {
     pub fn name(&self) -> String {
         child_text(&self.definition, "part-name").unwrap_or_else(|| self.id().to_owned())
     }
+    pub fn staff_count(&self) -> usize {
+        staff_count(&self.source)
+    }
+    pub fn supported(&self) -> bool {
+        self.staff_count() == 1
+    }
+    pub fn visible(&self) -> bool {
+        if [&self.source, &self.definition].iter().any(|node| {
+            node.attributes
+                .get("print-object")
+                .is_some_and(|value| value == "no")
+        }) {
+            return false;
+        }
+        let mut default = true;
+        let mut visible = HashMap::new();
+        if let Some(measure) = children(&self.source, "measure").next() {
+            for attributes in children(measure, "attributes") {
+                for staff in children(attributes, "staff-details") {
+                    let shown = staff
+                        .attributes
+                        .get("print-object")
+                        .is_none_or(|value| value != "no");
+                    if let Some(number) = staff
+                        .attributes
+                        .get("number")
+                        .and_then(|number| number.parse::<usize>().ok())
+                    {
+                        if number > 0 && number <= self.staff_count() {
+                            visible.insert(number, shown);
+                        }
+                    } else {
+                        default = shown;
+                        visible.clear();
+                    }
+                }
+            }
+        }
+        visible.values().any(|shown| *shown) || default && visible.len() < self.staff_count()
+    }
+}
+
+fn staff_count(source: &Element) -> usize {
+    let mut count = 1;
+    visit(source, &mut |node| {
+        let number = if matches!(node.name.as_str(), "staves" | "staff") {
+            Some(text(node))
+        } else if matches!(
+            node.name.as_str(),
+            "clef" | "key" | "time" | "staff-details" | "transpose" | "measure-style"
+        ) {
+            node.attributes.get("number").cloned()
+        } else {
+            None
+        };
+        if let Some(number) = number {
+            count = count.max(
+                number
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|number| *number > 0)
+                    .unwrap_or(2),
+            );
+        }
+    });
+    count
 }
 #[derive(Debug, Clone)]
 pub struct Score {
     pub root: Element,
     pub parts: Vec<Part>,
+}
+
+pub(crate) fn scorewide_mark(element: &Element) -> bool {
+    element.name == "sound" && element.attributes.contains_key("tempo")
+        || element.name == "direction"
+            && (element
+                .attributes
+                .get("id")
+                .is_some_and(|id| id.starts_with("scorewing-tempo-"))
+                || children(element, "sound").any(|sound| sound.attributes.contains_key("tempo"))
+                || children(element, "direction-type").any(|kind| {
+                    elements(kind)
+                        .any(|mark| matches!(mark.name.as_str(), "metronome" | "rehearsal"))
+                }))
+}
+
+// Read only timing and global marks: unsupported multi-staff notes remain opaque.
+pub(crate) fn scorewide_marks(score: &Score) -> Result<Vec<Vec<TimedElement>>> {
+    let mut result: Vec<Vec<TimedElement>> = Vec::new();
+    for part in &score.parts {
+        let mut divisions = frac(1);
+        for (index, measure) in children(&part.source, "measure").enumerate() {
+            result.resize_with(result.len().max(index + 1), Vec::new);
+            let mut cursor = frac(0);
+            for node in elements(measure) {
+                if node.name == "attributes" {
+                    if let Some(value) = child_text(node, "divisions") {
+                        divisions = quantity(&value, &part.name(), true)?;
+                    }
+                } else if scorewide_mark(node) {
+                    let mut element = node.clone();
+                    remove_children(&mut element, "voice");
+                    remove_children(&mut element, "staff");
+                    strip_position(&mut element);
+                    let extra = TimedElement {
+                        position: cursor.clone(),
+                        element,
+                        divisions: divisions.clone(),
+                    };
+                    let identity = mark_identity(&extra)?;
+                    if !result[index]
+                        .iter()
+                        .any(|other| mark_identity(other).is_ok_and(|other| other == identity))
+                    {
+                        result[index].push(extra);
+                    }
+                } else if matches!(node.name.as_str(), "backup" | "forward" | "note")
+                    && child(node, "chord").is_none()
+                    && child(node, "grace").is_none()
+                {
+                    if let Some(value) = child_text(node, "duration") {
+                        let duration = quantity(&value, &part.name(), false)? / &divisions;
+                        if node.name == "backup" {
+                            cursor -= duration;
+                        } else {
+                            cursor += duration;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for marks in &mut result {
+        let mut tempos = BTreeSet::new();
+        for extra in marks.iter_mut() {
+            let (position, _) = mark_identity(extra)?;
+            let mut deduplicate = |sound: &mut Element| -> Result<()> {
+                if let Some(tempo) = sound.attributes.get("tempo") {
+                    if !tempos.insert((position.clone(), parse_fraction(tempo)?)) {
+                        sound.attributes.remove("tempo");
+                    }
+                }
+                Ok(())
+            };
+            if extra.element.name == "sound" {
+                deduplicate(&mut extra.element)?;
+            } else {
+                for sound in children_mut(&mut extra.element, "sound") {
+                    deduplicate(sound)?;
+                }
+                extra.element.children.retain(|node| {
+                    !node.as_element().is_some_and(|node| {
+                        node.name == "sound"
+                            && node.attributes.is_empty()
+                            && node.children.is_empty()
+                    })
+                });
+            }
+        }
+        marks.retain(|extra| {
+            extra.element.name != "sound"
+                || !extra.element.attributes.is_empty()
+                || !extra.element.children.is_empty()
+        });
+    }
+    Ok(result)
+}
+
+fn mark_identity(extra: &TimedElement) -> Result<(Fraction, Element)> {
+    let mut element = extra.element.clone();
+    // IDs and source placement do not distinguish identical score-wide events.
+    visit_mut(&mut element, &mut |node| {
+        node.attributes.remove("id");
+    });
+    let offset = child_text(&element, "offset")
+        .map(|value| parse_fraction(&value))
+        .transpose()?
+        .unwrap_or_else(|| frac(0));
+    remove_children(&mut element, "offset");
+    Ok((&extra.position + offset / &extra.divisions, element))
+}
+
+pub(crate) fn with_scorewide_marks(
+    extras: &[TimedElement],
+    marks: &[TimedElement],
+) -> Vec<TimedElement> {
+    extras
+        .iter()
+        .filter(|extra| !scorewide_mark(&extra.element))
+        .cloned()
+        .chain(marks.iter().cloned())
+        .collect()
+}
+
+pub(crate) fn make_visible(definition: &mut Element, source: &mut Element) {
+    definition.attributes.remove("print-object");
+    source.attributes.remove("print-object");
+    visit_mut(source, &mut |node| {
+        if node.name == "staff-details" {
+            node.attributes.remove("print-object");
+            node.attributes.remove("print-spacing");
+        }
+    });
 }
 
 pub fn compare_voices(a: &str, b: &str) -> Ordering {
@@ -195,18 +395,13 @@ pub fn parse_score(root: Element) -> Result<Score> {
     for (source, definition) in sources.into_iter().zip(definitions) {
         let name = child_text(&definition, "part-name")
             .unwrap_or_else(|| source.attributes.get("id").cloned().unwrap_or_default());
-        let mut multi = false;
-        visit(&source, &mut |node| {
-            multi |= matches!(node.name.as_str(), "staves" | "staff") && text(node).trim() != "1";
-            multi |= matches!(
-                node.name.as_str(),
-                "clef" | "key" | "time" | "staff-details" | "transpose" | "measure-style"
-            ) && node.attributes.get("number").is_some_and(|n| n != "1");
-        });
-        if multi {
-            return Err(ScoreError(format!(
-                "Part {name:?}: multi-staff instruments are outside the supported scope"
-            )));
+        if staff_count(&source) > 1 {
+            parts.push(Part {
+                source,
+                definition,
+                measures: Vec::new(),
+            });
+            continue;
         }
         let mut divisions = frac(1);
         let mut state = BTreeMap::new();
@@ -863,15 +1058,11 @@ mod tests {
         assert!(error.contains("backup crosses"));
     }
     #[test]
-    fn rejects_orphan_chords_numbered_clefs_and_zero_divisions() {
+    fn rejects_orphan_chords_and_zero_divisions() {
         for (body, message) in [
             (
                 "<note><chord/><pitch><step>C</step><octave>4</octave></pitch><duration>1</duration></note>",
                 "chord tones",
-            ),
-            (
-                "<attributes><clef number=\"2\"><sign>F</sign><line>4</line></clef></attributes><note><rest/><duration>1</duration></note>",
-                "multi-staff",
             ),
             (
                 "<attributes><divisions>0</divisions></attributes><note><rest/><duration>1</duration></note>",
@@ -937,7 +1128,7 @@ mod tests {
         assert!(child(child(&right.notes[0], "notations").unwrap(), "slur").is_none());
     }
     #[test]
-    fn rejects_timewise_and_multistaff() {
+    fn rejects_timewise_and_retains_opaque_multistaff() {
         assert!(parse_score(Element::new("score-timewise"))
             .unwrap_err()
             .to_string()
@@ -947,9 +1138,9 @@ mod tests {
         let measure = child_mut(part, "measure").unwrap();
         let attributes = child_mut(measure, "attributes").unwrap();
         append(attributes, text_element("staves", "2"));
-        assert!(parse_score(s.root)
-            .unwrap_err()
-            .to_string()
-            .contains("multi-staff"));
+        let parsed = parse_score(s.root).unwrap();
+        assert_eq!(parsed.parts[0].staff_count(), 2);
+        assert!(!parsed.parts[0].supported());
+        assert!(parsed.parts[0].measures.is_empty());
     }
 }

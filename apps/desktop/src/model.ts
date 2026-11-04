@@ -14,6 +14,13 @@ export interface Part {
   instrument_names: string[];
   voice_count: number;
   split_plans: Record<"chords" | "voices", SplitLane[]>;
+  visible?: boolean;
+  staff_count?: number;
+  supported?: boolean;
+}
+
+export function isTransformable(part: Part): boolean {
+  return part.supported !== false && (part.staff_count ?? 1) === 1;
 }
 
 export interface Inspection {
@@ -26,6 +33,7 @@ export interface Inspection {
   format?: "musicxml" | "musescore";
   practice_parts?: PracticePart[];
   practice_sections?: PracticeSection[];
+  warnings?: string[];
 }
 
 /** Infer direction using source metadata, before conversion changes any timestamps. */
@@ -158,6 +166,7 @@ export interface Arrangement {
   kind: "split" | "merge" | "practice" | "diff";
   mode: "chords" | "voices";
   selected: Set<string>;
+  selections: Partial<Record<"split" | "merge", Set<string>>>;
   groups: string[][];
   stems: Map<string, StemDirection>;
   fallbacks: Record<"chords" | "voices", Map<string, string | null>>;
@@ -169,11 +178,26 @@ export function newArrangement(): Arrangement {
     kind: "split",
     mode: "chords",
     selected: new Set(),
+    selections: {},
     groups: [],
     stems: new Map(),
     fallbacks: { chords: new Map(), voices: new Map() },
     insertFallbackSlurs: true,
   };
+}
+
+export function chooseArrangementTool(arrangement: Arrangement, kind: Arrangement["kind"], parts: Part[], useVisibilityDefaults: boolean): void {
+  const previous = arrangement.kind;
+  if (previous === "split" || previous === "merge") {
+    if (arrangement.selections[previous]) arrangement.selections[previous] = arrangement.selected;
+  }
+  arrangement.kind = kind;
+  if (kind === "split" || kind === "merge") {
+    arrangement.selected = arrangement.selections[kind] ?? new Set(parts
+      .filter((part) => useVisibilityDefaults && part.visible !== false && isTransformable(part))
+      .map((part) => part.id));
+    arrangement.selections[kind] = arrangement.selected;
+  }
 }
 
 export function stemDirection(
@@ -214,6 +238,8 @@ export function addGroup(
   const ids = parts
     .filter((p) => arrangement.selected.has(p.id))
     .map((p) => p.id);
+  if (parts.some((part) => arrangement.selected.has(part.id) && !isTransformable(part)))
+    return "Multi-staff or unsupported instruments cannot be merged.";
   if (ids.length < 2)
     return "Select at least two instruments to create a merge group.";
   if (ids.some((id) => assigned.has(id)))
@@ -238,12 +264,15 @@ export function operation(arrangement: Arrangement, parts: Part[], olderId?: str
     return { kind: "diff", older_id: olderId };
   }
   const known = new Set(parts.map((part) => part.id));
+  const unsupported = new Set(parts.filter((part) => !isTransformable(part)).map((part) => part.id));
   if (arrangement.kind === "split") {
     const part_ids = parts
       .filter((p) => arrangement.selected.has(p.id))
       .map((p) => p.id);
     if (!part_ids.length)
       throw new Error("Select at least one instrument to split.");
+    if (part_ids.some((id) => unsupported.has(id)))
+      throw new Error("Multi-staff or unsupported instruments cannot be split.");
     const fallbacks = parts
       .filter((part) => arrangement.selected.has(part.id))
       .flatMap((part) =>
@@ -265,6 +294,8 @@ export function operation(arrangement: Arrangement, parts: Part[], olderId?: str
     if (group.length < 2)
       throw new Error("Each merge group needs at least two instruments.");
     for (const id of group) {
+      if (unsupported.has(id))
+        throw new Error("Multi-staff or unsupported instruments cannot be merged.");
       if (!known.has(id) || used.has(id))
         throw new Error(
           "Merge groups must contain distinct instruments from this score.",

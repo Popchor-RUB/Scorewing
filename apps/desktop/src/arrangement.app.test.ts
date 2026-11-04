@@ -102,3 +102,115 @@ test("Merge stems stay attached to source IDs while implicit defaults follow who
     assert.notEqual(app.find('[data-part="P1"]').getAttribute("aria-disabled"), "true", "removal makes sources available again");
   } finally { await app.close(); }
 });
+
+function museScore(path: string): Inspection {
+  return {
+    ...score(), id: path, path, name: path.split("/").pop()!, format: "musescore",
+    parts: score().parts.map((part, index) => ({
+      ...part, visible: index !== 1, staff_count: index === 3 ? 2 : 1, supported: index !== 3,
+    })),
+    practice_parts: [],
+  };
+}
+
+test("MuseScore lists all sources, defaults by visibility, remembers each tool, and resets for a new score", async () => {
+  let path = "/scores/first.mscz";
+  const app = await mountTestApp((command, args) => {
+    if (command === "open_files") return [path];
+    if (command === "inspect_file") return { ...museScore(String(args.path)), parts: [] };
+    if (command === "prepare_musicxml") return museScore(String(args.id));
+    if (command === "practice_environment") return { executable: null, soundfont: null, version: null, presets: [], error: null };
+    if (command === "release_document") return;
+    throw new Error(`Unexpected command ${command}`);
+  });
+  const checked = () => Array.from(app.document.querySelectorAll('[data-part][aria-checked="true"]'), (part) => part.getAttribute("data-part"));
+  const switchTool = async (tool: "split" | "merge") => {
+    await app.click('[data-action="back-to-modes"]');
+    await app.click(`[data-mode="${tool}"]`);
+  };
+  try {
+    await app.menu("open-score");
+    await app.click('[data-mode="split"]');
+    assert.equal(app.document.querySelectorAll("[data-part]").length, 4);
+    assert.deepEqual(checked(), ["P1", "P3"]);
+    assert.match(app.find('[data-part="P2"]').parentElement!.textContent!, /Hidden in source/);
+    const disabled = app.find('[data-part="P4"]');
+    assert.equal(disabled.getAttribute("aria-disabled"), "true");
+    assert.equal(disabled.getAttribute("aria-checked"), "false");
+    assert.match(app.find(`#${disabled.getAttribute("aria-describedby")}`).textContent!, /2 source staves.*unsupported.*Retained in export/);
+    await app.click('[data-part="P4"]');
+    assert.deepEqual(checked(), ["P1", "P3"]);
+    await app.click('[data-action="select-all"]');
+    assert.deepEqual(checked(), ["P1", "P2", "P3"]);
+    await app.click('[data-action="select-all"]');
+    assert.deepEqual(checked(), []);
+    assert.equal(app.find<HTMLButtonElement>('[data-action="export"]').disabled, true);
+    await switchTool("merge");
+    assert.deepEqual(checked(), ["P1", "P3"], "Merge gets its own initial defaults");
+    assert.equal(app.find<HTMLButtonElement>('[data-action="export"]').disabled, true, "a merge needs a group");
+    await app.click('[data-action="add-group"]');
+    assert.deepEqual(checked(), []);
+    assert.equal(app.find('[data-part="P1"]').getAttribute("aria-disabled"), "true");
+    await app.click('[data-action="select-all"]');
+    assert.deepEqual(checked(), ["P2"], "select all excludes grouped and unsupported sources");
+    await switchTool("split");
+    assert.deepEqual(checked(), [], "Split keeps an explicit clear");
+    await switchTool("merge");
+    assert.deepEqual(checked(), ["P2"]);
+    assert.equal(app.document.querySelectorAll(".merge-group").length, 1);
+    await app.click('[data-action="remove-group"]');
+    assert.deepEqual(checked(), ["P2"], "group removal preserves unrelated choices");
+    assert.notEqual(app.find('[data-part="P1"]').getAttribute("aria-disabled"), "true");
+    await app.click('[data-action="select-all"]');
+    assert.deepEqual(checked(), ["P1", "P2", "P3"]);
+    await app.click('[data-action="select-all"]');
+    assert.deepEqual(checked(), []);
+    path = "/scores/second.mscx";
+    await app.menu("open-score");
+    await app.click('[data-mode="split"]');
+    assert.deepEqual(checked(), ["P1", "P3"], "new score resets defaults even when part IDs match");
+  } finally { await app.close(); }
+});
+
+test("conversion warnings remain accessible through preparation, successful export, cancellation, and errors", async () => {
+  const sourceWarning = 'Tempo text "Allegro" at measure 4, beat 1 needs review.';
+  const preparedWarning = 'Rehearsal mark "B" at measure 12, beat 1 could not be preserved.';
+  const exportWarning = "Playback tempo at measure 18, beat 2 could not be verified.";
+  let result: "export" | "cancel" | "fail" = "export";
+  const app = await mountTestApp((command, args) => {
+    if (command === "open_files") return ["/scores/warnings.mscz"];
+    if (command === "inspect_file") return { ...museScore(String(args.path)), parts: [], warnings: [sourceWarning] };
+    if (command === "prepare_musicxml") return { ...museScore(String(args.id)), warnings: [preparedWarning] };
+    if (command === "practice_environment") return { executable: null, soundfont: null, version: null, presets: [], error: null };
+    if (command === "release_document") return;
+    if (command === "export_document") {
+      if (result === "fail") throw new Error("Cannot write score");
+      return result === "cancel" ? null : { path: "/scores/result.mxl", warnings: [preparedWarning, exportWarning] };
+    }
+    throw new Error(`Unexpected command ${command}`);
+  });
+  try {
+    await app.menu("open-score");
+    await app.click('[data-mode="split"]');
+    assert.deepEqual(Array.from(app.document.querySelectorAll(".conversion-warnings li"), (item) => item.textContent), [sourceWarning, preparedWarning]);
+    assert.equal(app.find(".conversion-warnings").getAttribute("aria-live"), "polite");
+    assert.equal(app.find(".conversion-warnings").getAttribute("tabindex"), "0", "scrolling warnings are keyboard accessible");
+    await app.click('[data-action="export"]');
+    assert.match(app.find(".status").textContent!, /Exported.*result.mxl.*Review warnings/s);
+    assert.doesNotMatch(app.find(".status").textContent!, /affected passages are marked red/);
+    const warnings = () => Array.from(app.document.querySelectorAll(".conversion-warnings li"), (item) => item.textContent);
+    assert.deepEqual(warnings(), [sourceWarning, preparedWarning, exportWarning]);
+    await app.choose("#split-mode", "Explicit voices");
+    result = "cancel";
+    await app.click('[data-action="export"]');
+    assert.match(app.find(".status").textContent!, /cancelled/);
+    assert.deepEqual(warnings(), [sourceWarning, preparedWarning, exportWarning]);
+    result = "fail";
+    await app.click('[data-action="export"]');
+    assert.match(app.find('[role="alert"]').textContent!, /Cannot write score/);
+    assert.deepEqual(warnings(), [sourceWarning, preparedWarning, exportWarning]);
+    await app.click('[data-action="back-to-modes"]');
+    await app.click('[data-mode="merge"]');
+    assert.deepEqual(warnings(), [sourceWarning, preparedWarning, exportWarning]);
+  } finally { await app.close(); }
+});

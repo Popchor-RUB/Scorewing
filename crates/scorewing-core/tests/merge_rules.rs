@@ -21,7 +21,10 @@ fn merge(parts: &[(&str, Vec<String>)], stems: &[&str]) -> Score {
     )
     .unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    parse_score(output).unwrap()
+    let mut result = parse_score(output).unwrap();
+    result.parts.retain(|part| part.id().contains("_merge"));
+    assert_eq!(result.parts.len(), 1);
+    result
 }
 
 fn direction(content: &str) -> String {

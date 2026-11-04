@@ -2,8 +2,9 @@
 
 pub(crate) use crate::model::compare_voices as voice_cmp;
 use crate::model::{
-    build_score, insert_note_child, render_measure, rest_event, set_child, slice_event,
-    strip_position, Event, Fraction, Measure, Part, Score, TimedElement,
+    build_score, insert_note_child, make_visible, render_measure, rest_event, scorewide_marks,
+    set_child, slice_event, strip_position, with_scorewide_marks, Event, Fraction, Measure, Part,
+    Score, TimedElement,
 };
 pub(crate) use crate::xml::{append, child_text, elements, visit_mut as walk_mut};
 use crate::{check_errors, Result, ScoreError};
@@ -257,6 +258,12 @@ fn required_measures(part: &Part, slot: &SplitLane) -> Vec<bool> {
 }
 
 fn allocation_plan(part: &Part, mode: &str) -> Result<Vec<AllocatedLane>> {
+    if !part.supported() {
+        return Err(ScoreError::new(format!(
+            "Part {:?}: multi-staff instruments are outside the supported scope",
+            part.name()
+        )));
+    }
     let slots = split_lanes(part, mode)?;
     let mut lanes: Vec<_> = slots
         .iter()
@@ -1314,17 +1321,26 @@ pub fn split_score_with_options(
         }
         let mut seen = HashSet::new();
         for id in selected {
-            if !score.parts.iter().any(|part| part.id() == id) {
-                return Err(ScoreError::new(format!("Unknown part ID {id:?}")));
+            let part = score
+                .parts
+                .iter()
+                .find(|part| part.id() == id)
+                .ok_or_else(|| ScoreError::new(format!("Unknown part ID {id:?}")))?;
+            if !part.supported() {
+                return Err(ScoreError::new(format!(
+                    "Part {:?}: multi-staff instruments are outside the supported scope",
+                    part.name()
+                )));
             }
             if !seen.insert(id) {
                 return Err(ScoreError::new(format!("Repeated part ID {id:?}")));
             }
         }
     }
+    let global_marks = scorewide_marks(score)?;
     let mut plans = HashMap::new();
     for part in &score.parts {
-        if selected.is_none_or(|ids| ids.iter().any(|id| id == part.id())) {
+        if part.supported() && selected.is_none_or(|ids| ids.iter().any(|id| id == part.id())) {
             plans.insert(part.id(), allocation_plan(part, mode)?);
         }
     }
@@ -1376,7 +1392,7 @@ pub fn split_score_with_options(
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
     for part in &score.parts {
-        if selected.is_some_and(|ids| !ids.iter().any(|id| id == part.id())) {
+        if !part.supported() || selected.is_some_and(|ids| !ids.iter().any(|id| id == part.id())) {
             continue;
         }
         let slots = &plans[part.id()];
@@ -1524,11 +1540,13 @@ pub fn split_score_with_options(
                     }
                     event.voice = "1".into();
                 }
+                let extras = with_scorewide_marks(&extras, &global_marks[measure_index]);
                 match render_measure(measure, &events, Some(&extras), None, None) {
                     Ok(rendered) => append(&mut derived, rendered),
                     Err(error) => errors.push(error),
                 }
             }
+            make_visible(&mut definition, &mut derived);
             copy_ids(&mut definition, &mut derived, &new_id, &mut used);
             copies.push((definition, derived));
         }

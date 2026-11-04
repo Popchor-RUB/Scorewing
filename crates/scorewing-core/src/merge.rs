@@ -1,8 +1,9 @@
 //! Merge selected single-staff parts into ordered, stem-directed voices.
 
 use crate::model::{
-    build_score, insert_note_child, render_measure, set_child, set_written_duration, Event,
-    Fraction, Measure, Part, Score, TimedElement,
+    build_score, insert_note_child, make_visible, render_measure, scorewide_marks, set_child,
+    set_written_duration, with_scorewide_marks, Event, Fraction, Measure, Part, Score,
+    TimedElement,
 };
 use crate::split::{
     append, child_text, descendants, elements, elements_mut, numeric, remove_children, voice_cmp,
@@ -127,6 +128,12 @@ fn select_groups(score: &Score, groups: &[Vec<String>]) -> Result<Vec<Vec<usize>
                 .iter()
                 .position(|part| part.id() == id)
                 .ok_or_else(|| ScoreError::new(format!("Unknown part ID {id:?}")))?;
+            if !score.parts[index].supported() {
+                return Err(ScoreError::new(format!(
+                    "Part {:?}: multi-staff instruments are outside the supported scope",
+                    score.parts[index].name()
+                )));
+            }
             if indices.contains(&index) {
                 return Err(ScoreError::new(format!(
                     "Repeated stave {id:?} in merge group"
@@ -984,20 +991,12 @@ fn compact_after_rests(
     events.sort_by(|a, b| voice_cmp(&a.voice, &b.voice).then(a.start.cmp(&b.start)));
 }
 
-fn collect_retained_ids(element: &Element, replaced: &HashSet<&str>, used: &mut HashSet<String>) {
-    if ["part", "score-part"].contains(&element.name.as_str())
-        && element
-            .attributes
-            .get("id")
-            .is_some_and(|id| replaced.contains(id.as_str()))
-    {
-        return;
-    }
+fn collect_retained_ids(element: &Element, used: &mut HashSet<String>) {
     if let Some(id) = element.attributes.get("id") {
         used.insert(id.clone());
     }
     for child in elements(element) {
-        collect_retained_ids(child, replaced, used);
+        collect_retained_ids(child, used);
     }
 }
 
@@ -1033,13 +1032,13 @@ pub fn merge_score_with_stems(
         ));
     }
     let groups = select_groups(score, groups)?;
-    let replaced: HashSet<_> = groups
-        .iter()
-        .flatten()
-        .map(|i| score.parts[*i].id())
-        .collect();
     let mut used_ids = HashSet::new();
-    collect_retained_ids(&score.root, &replaced, &mut used_ids);
+    collect_retained_ids(&score.root, &mut used_ids);
+    for part in &score.parts {
+        collect_retained_ids(&part.definition, &mut used_ids);
+        collect_retained_ids(&part.source, &mut used_ids);
+    }
+    let global_marks = scorewide_marks(score)?;
     let mut replacements = HashMap::new();
     let mut errors = Vec::new();
     for (indices, stems) in groups.into_iter().zip(stems) {
@@ -1112,7 +1111,11 @@ pub fn merge_score_with_stems(
                 None
             }
         };
-        for index in 0..parts.iter().map(|part| part.measures.len()).max().unwrap() {
+        for (index, marks) in global_marks
+            .iter()
+            .enumerate()
+            .take(parts.iter().map(|part| part.measures.len()).max().unwrap())
+        {
             let measures: Vec<_> = parts.iter().filter_map(|p| p.measures.get(index)).collect();
             let mut failed = measures.len() != parts.len();
             if let Err(error) = compatible(&measures) {
@@ -1159,16 +1162,21 @@ pub fn merge_score_with_stems(
                 }
             };
             let extras = extras(&measures, stems, clef, index == 0, relationships);
+            let extras = with_scorewide_marks(&extras, marks);
             match render_measure(measures[0], &events, Some(&extras), None, None) {
                 Ok(rendered) => append(&mut output, rendered),
                 Err(error) => errors.push(error),
             }
         }
+        make_visible(&mut definition, &mut output);
         unique_ids(&mut output, &mut definition, &mut used_ids);
-        for part in parts {
-            replacements.insert(part.id().to_owned(), Vec::new());
-        }
-        replacements.insert(anchor.id().to_owned(), vec![(definition, output)]);
+        replacements.insert(
+            anchor.id().to_owned(),
+            vec![
+                (anchor.definition.clone(), anchor.source.clone()),
+                (definition, output),
+            ],
+        );
     }
     check_errors(errors)?;
     Ok(build_score(score, &replacements))

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   addGroup,
+  chooseArrangementTool,
   fallbackVoice,
   movePart,
   newArrangement,
@@ -128,4 +129,40 @@ test("export catches invalid or overlapping merge groups", () => {
   assert.throws(() => operation(state, parts), /distinct/);
   state.groups = [["P1", "missing"]];
   assert.throws(() => operation(state, parts), /distinct/);
+});
+
+test("MuseScore visibility initializes each tool once and remembers an explicit clear", () => {
+  const sources = parts.map((part, index) => ({ ...part, visible: index !== 1, staff_count: index === 3 ? 2 : 1 }));
+  const state = newArrangement();
+  chooseArrangementTool(state, "split", sources, true);
+  assert.deepEqual([...state.selected], ["P1", "P3"]);
+  state.selected = new Set();
+  chooseArrangementTool(state, "merge", sources, true);
+  assert.deepEqual([...state.selected], ["P1", "P3"]);
+  state.selected.add("P2");
+  chooseArrangementTool(state, "practice", sources, true);
+  chooseArrangementTool(state, "split", sources, true);
+  assert.deepEqual([...state.selected], []);
+  chooseArrangementTool(state, "merge", sources, true);
+  assert.deepEqual([...state.selected], ["P1", "P3", "P2"]);
+  const next = newArrangement();
+  chooseArrangementTool(next, "split", sources, true);
+  assert.deepEqual([...next.selected], ["P1", "P3"]);
+  const musicxml = newArrangement();
+  chooseArrangementTool(musicxml, "split", sources, false);
+  assert.deepEqual([...musicxml.selected], [], "plain MusicXML retains its existing defaults");
+});
+
+test("unsupported sources cannot enter split requests or merge groups", () => {
+  for (const unsupported of [{ staff_count: 2 }, { supported: false }]) {
+    const sources = [{ ...parts[0], ...unsupported }, parts[1]];
+    const state = newArrangement();
+    state.selected.add("P1").add("P2");
+    assert.throws(() => operation(state, sources), /unsupported/);
+    state.kind = "merge";
+    assert.match(addGroup(state, sources)!, /unsupported/);
+    assert.equal(state.groups.length, 0);
+    state.groups = [["P1", "P2"]];
+    assert.throws(() => operation(state, sources), /unsupported/);
+  }
 });

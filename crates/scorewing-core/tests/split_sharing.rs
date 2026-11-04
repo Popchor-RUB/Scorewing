@@ -268,7 +268,7 @@ fn incompatible_or_ambiguous_lanes_are_not_shared() {
 }
 
 #[test]
-fn different_original_staffs_remain_rejected_at_input() {
+fn different_original_staffs_are_retained_but_rejected_for_transformation() {
     let original = simple(down("F", "2") + &backup(1) + &down("A", "3"));
     let mut root = original.root.clone();
     let part = root.get_mut_child("part").unwrap();
@@ -286,10 +286,14 @@ fn different_original_staffs_remain_rejected_at_input() {
         .find(|node| node.name == "note" && text(node, "voice") == "3")
         .unwrap();
     append(note, element("<staff>2</staff>"));
-    assert!(parse_score(root)
-        .unwrap_err()
-        .to_string()
-        .contains("multi-staff"));
+    let parsed = parse_score(root).unwrap();
+    assert!(!parsed.parts[0].supported());
+    assert!(
+        scorewing_core::split::split_plan(&parsed.parts[0], "voices")
+            .unwrap_err()
+            .to_string()
+            .contains("multi-staff")
+    );
 }
 
 #[test]

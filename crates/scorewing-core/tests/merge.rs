@@ -6,10 +6,17 @@ use scorewing_core::{
 };
 use std::collections::HashSet;
 
+fn generated_score(output: xmltree::Element) -> Score {
+    let mut result = parse_score(output).unwrap();
+    result.parts.retain(|part| part.id().contains("_merge"));
+    assert!(!result.parts.is_empty());
+    result
+}
+
 fn merged(parts: &[(&str, Vec<String>)]) -> Score {
     let output = merge_score(&score(parts), &groups(&[&["P1", "P2"]])).unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    parse_score(output).unwrap()
+    generated_score(output)
 }
 
 #[test]
@@ -26,7 +33,7 @@ fn independent_source_voices_are_preserved_across_groups_and_measures() {
     ]);
     let output = merge_score(&input, &groups(&[&["P1", "P2"], &["P3", "P4"]])).unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    let result = parse_score(output).unwrap();
+    let result = generated_score(output);
     for measure in &result.parts[0].measures {
         assert_eq!(measure.length, frac(3));
         assert_eq!(
@@ -70,7 +77,7 @@ fn ordered_groups_anchor_at_first_score_position_and_keep_unselected_parts() {
     ]);
     let output = merge_score(&input, &groups(&[&["P2", "P1"], &["P3", "P4"]])).unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    let result = parse_score(output).unwrap();
+    let result = generated_score(output);
     assert_eq!(names(&result), ["Alto / Soprano", "Tenor / Bass"]);
     assert_eq!(
         event_notes(&result.parts[0].measures[0].events),
@@ -86,9 +93,12 @@ fn ordered_groups_anchor_at_first_score_position_and_keep_unselected_parts() {
     ]);
     let output = merge_score(&input, &groups(&[&["P3", "P1"]])).unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    let result = parse_score(output).unwrap();
-    assert_eq!(names(&result), ["B / A", "Keep"]);
-    assert_eq!(result.parts[1].source, input.parts[1].source);
+    let result = generated_score(output);
+    assert_eq!(names(&result), ["B / A"]);
+    let retained = scorewing_core::xml::children(&result.root, "part")
+        .find(|part| part.attributes["id"] == "P2")
+        .unwrap();
+    assert_eq!(retained, &input.parts[1].source);
 }
 
 #[test]
@@ -122,7 +132,7 @@ fn explicit_stems_pack_matching_rhythms_into_chords_and_deduplicate_unisons() {
         let root =
             merge_score_with_stems(&input, &groups, &[vec![stem.into(), stem.into()]]).unwrap();
         scorewing_core::validate_score(&root).unwrap();
-        let output = parse_score(root).unwrap();
+        let output = generated_score(root);
         let events = &output.parts[0].measures[0].events;
         assert_eq!(events.len(), 3);
         assert!(events
@@ -149,10 +159,9 @@ fn explicit_stems_pack_matching_rhythms_into_chords_and_deduplicate_unisons() {
             .iter()
             .all(|e| e.notes[0].get_child("chord").is_none()));
     }
-    let opposite = parse_score(
+    let opposite = generated_score(
         merge_score_with_stems(&input, &groups, &[vec!["down".into(), "up".into()]]).unwrap(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         opposite.parts[0].measures[0]
             .events
@@ -216,7 +225,7 @@ fn same_stems_preserve_distinct_rhythms_ties_pitches_and_grace_repetitions() {
         )
         .unwrap();
         scorewing_core::validate_score(&output).unwrap();
-        let result = parse_score(output).unwrap();
+        let result = generated_score(output);
         let events = &result.parts[0].measures[0].events;
         if index == 0 {
             assert_eq!(
@@ -265,7 +274,7 @@ fn same_stems_preserve_distinct_rhythms_ties_pitches_and_grace_repetitions() {
     )
     .unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    let output = parse_score(output).unwrap();
+    let output = generated_score(output);
     let graces: Vec<_> = output.parts[0].measures[0]
         .events
         .iter()
@@ -360,7 +369,7 @@ fn three_sources_stems_and_common_rests() {
     ]);
     let output = merge_score(&input, &groups(&[&["P1", "P2", "P3"]])).unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    let result = parse_score(output).unwrap();
+    let result = generated_score(output);
     let events = &result.parts[0].measures[0].events;
     assert_eq!(events.len(), 3);
     assert!(events[0].notes[0].get_child("rest").is_some());
@@ -392,7 +401,7 @@ fn common_rests_after_divergence_only_appear_in_voice_one() {
     for group in [vec!["P1", "P2"], vec!["P3", "P2", "P1"]] {
         let output = merge_score(&input, &groups(&[&group])).unwrap();
         scorewing_core::validate_score(&output).unwrap();
-        let result = parse_score(output).unwrap();
+        let result = generated_score(output);
         let measure = &result.parts[0].measures[0];
         let rests: Vec<_> = measure
             .events
@@ -436,7 +445,7 @@ fn subset_rest_duplicates_collapse_but_different_durations_remain() {
     ]);
     let output = merge_score(&input, &groups(&[&["P1", "P2", "P3"]])).unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    let result = parse_score(output).unwrap();
+    let result = generated_score(output);
     let rests: Vec<_> = result.parts[0].measures[0]
         .events
         .iter()
@@ -554,7 +563,10 @@ fn differing_graces_preserve_sustained_note_values_and_unique_identifiers() {
         .xml()
         .replace("<note>", "<note id=\"held\">");
     let at_two = backup(2) + &n("D").grace().xml() + &forward(2);
-    let result = merged(&[("S", vec![held.clone() + &at_two]), ("A", vec![held])]);
+    let result = merged(&[
+        ("S", vec![held.clone() + &at_two]),
+        ("A", vec![held.replace("id=\"held\"", "id=\"alto-held\"")]),
+    ]);
     let ordinary: Vec<_> = result.parts[0].measures[0]
         .events
         .iter()
@@ -614,7 +626,7 @@ fn lyric_lines_follow_stems_and_identical_sung_content_is_deduplicated() {
     )
     .unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    let result = parse_score(output).unwrap();
+    let result = generated_score(output);
     let lyrics: Vec<_> = result.parts[0].measures[0]
         .events
         .iter()
@@ -775,7 +787,7 @@ fn exact_changing_divisions_and_hidden_signatures_zero_transpose() {
     input = parse_score(input.root).unwrap();
     let output = merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    let result = parse_score(output).unwrap();
+    let result = generated_score(output);
     assert_eq!(
         result.parts[0].measures[0]
             .events
@@ -813,12 +825,7 @@ fn exact_changing_divisions_and_hidden_signatures_zero_transpose() {
     let input = parse_score(input.root).unwrap();
     let output = merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap();
     scorewing_core::validate_score(&output).unwrap();
-    assert_eq!(
-        parse_score(output).unwrap().parts[0].measures[0]
-            .events
-            .len(),
-        2
-    );
+    assert_eq!(generated_score(output).parts[0].measures[0].events.len(), 2);
 }
 
 #[test]
@@ -930,7 +937,7 @@ fn names_instruments_players_lyrics_play_and_overrides_survive() {
         );
         let output = merge_score(&input, &groups(&[&["P1", "P2"]])).unwrap();
         scorewing_core::validate_score(&output).unwrap();
-        let result = parse_score(output).unwrap();
+        let result = generated_score(output);
         let part = &result.parts[0];
         assert!(part.definition.get_child("part-name-display").is_none());
         assert_eq!(
@@ -938,14 +945,14 @@ fn names_instruments_players_lyrics_play_and_overrides_survive() {
                 .filter(|p| p.name == "player")
                 .map(|p| p.attributes["id"].as_str())
                 .collect::<Vec<_>>(),
-            ["Player1", "Player2"]
+            ["Player1_merge1", "Player2_merge1"]
         );
         assert_eq!(
             elements(&part.definition)
                 .filter(|p| p.name == "midi-instrument")
                 .map(|p| p.attributes["id"].as_str())
                 .collect::<Vec<_>>(),
-            ["I1", "I2"]
+            ["I1_merge1", "I2_merge1"]
         );
         let events = &part.measures[0].events;
         assert_eq!(
@@ -956,7 +963,12 @@ fn names_instruments_players_lyrics_play_and_overrides_survive() {
                     e.notes[0].get_child("instrument").unwrap().attributes["id"].as_str()
                 ))
                 .collect::<Vec<_>>(),
-            vec![("1", "I1"), ("1", "I1"), ("2", "I2"), ("2", "AltOverride")]
+            vec![
+                ("1", "I1_merge1"),
+                ("1", "I1_merge1"),
+                ("2", "I2_merge1"),
+                ("2", "AltOverride_merge1")
+            ]
         );
         assert!(events[0].notes[0].get_child("play").is_some());
         assert_eq!(text(&events[2].notes[0], "lyric/text"), "word");

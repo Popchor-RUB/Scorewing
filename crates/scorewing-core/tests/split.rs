@@ -272,10 +272,13 @@ fn rehearsal_marks_and_navigation_survive_every_split_lane() {
                     .filter(|e| e.name == "direction")
                     .cloned()
                     .collect();
-                let expected: Vec<_> = directions
+                let mut expected: Vec<_> = directions
                     .iter()
+                    .skip(1)
                     .map(|xml| element(&xml.replace("<voice>2</voice>", "<voice>1</voice>")))
                     .collect();
+                // Score-wide rehearsal marks no longer belong to a source voice.
+                expected.push(element(&directions[0].replace("<voice>2</voice>", "")));
                 assert_eq!(copied, expected, "{mode}, configured={configured}");
                 let barlines: Vec<_> = elements(&measure.source)
                     .filter(|e| e.name == "barline")

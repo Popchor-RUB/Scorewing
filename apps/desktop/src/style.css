@@ -217,6 +217,10 @@ label { cursor: pointer; }
 .status-bar { display: flex; gap: 16px; align-items: start; border-top: 1px solid var(--border); padding: 5px 16px; min-height: 28px; font-size: 11px; }
 .status { flex: 1; min-width: 0; white-space: pre-line; overflow-wrap: anywhere; max-height: min(130px, 25dvh); overflow: auto; }
 .status-context { flex-shrink: 0; }
+.source-visibility { display: block; font-size: 11px; }
+.conversion-warnings { flex-shrink: 0; max-height: min(150px, 22dvh); overflow: auto; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.conversion-warnings h3 { font-size: 12px; margin-bottom: 4px; }
+.conversion-warnings ul { list-style: disc; padding-left: 20px; margin-top: 6px; }
 .dialog-overlay { position: fixed; inset: 0; z-index: 50; background: #0006; }
 .dialog-content { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 50; display: flex; flex-direction: column; gap: 20px; width: min(560px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); overflow: auto; padding: 24px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; color: var(--foreground); box-shadow: 0 16px 60px #0004; }
 .dialog-content [data-slot="dialog-title"], .dialog-content h2 { font-size: 18px; font-weight: 600; }

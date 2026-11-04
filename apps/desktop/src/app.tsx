@@ -9,7 +9,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type { Update } from "@tauri-apps/plugin-updater";
 import {
-  addGroup, newArrangement, newPractice, operation,
+  addGroup, chooseArrangementTool, newArrangement, newPractice, operation,
   practiceOptions, orderScorePair,
   type Arrangement, type Inspection, type PracticeConfig,
   type PracticeEnvironment, type PracticeOptions, type PracticeProgress, type PracticeResult,
@@ -31,6 +31,7 @@ interface ScoreSession {
   practice?: PracticeOptions;
   progress?: PracticeProgress;
   result?: PracticeResult;
+  warnings?: string[];
 }
 
 const modes = [
@@ -137,7 +138,7 @@ export function mountApp(container: HTMLElement): () => void {
     if (score.format !== "musescore") return score;
     const prepared = await invoke<Inspection>("prepare_musicxml", { id: score.id, executable: config.executable ?? undefined });
     if (prepared.error) throw new Error(prepared.error);
-    return prepared;
+    return { ...prepared, warnings: [...new Set([...(score.warnings ?? []), ...(prepared.warnings ?? [])])] };
   }
 
   async function inspectPair(paths: string[]) {
@@ -338,6 +339,7 @@ export function mountApp(container: HTMLElement): () => void {
     session.practice = score.format === "musescore" ? newPractice(score.practice_parts ?? [], practiceDefaults, score.practice_sections ?? []) : undefined;
     session.result = undefined;
     session.progress = undefined;
+    session.warnings = undefined;
     completedExport = null;
   }
 
@@ -363,8 +365,7 @@ export function mountApp(container: HTMLElement): () => void {
     try {
       if (kind !== "practice" && kind !== "diff") session.document = await prepare(session.document);
       if (disposed) return;
-      if (session.arrangement.kind !== kind) session.arrangement.selected.clear();
-      session.arrangement.kind = kind;
+      chooseArrangementTool(session.arrangement, kind, session.document.parts, session.document.format === "musescore");
       session.stage = "configuration";
       focusTarget = "configuration";
       message = ""; messageError = false;
@@ -429,10 +430,10 @@ export function mountApp(container: HTMLElement): () => void {
         const result = await invoke<{ path: string; warnings: string[] } | null>("export_document", {
           id: session.document.id, operation: request,
         });
-        if (!disposed && current === session) notify(result ? [
-          `Exported ${result.path}`,
-          ...(result.warnings.length ? ["Review warnings — affected passages are marked red:", ...result.warnings] : []),
-        ].join("\n") : "Export cancelled.");
+        if (!disposed && current === session) {
+          if (result) session.warnings = [...new Set([...(session.document.warnings ?? []), ...result.warnings])];
+          notify(result ? `Exported ${result.path}${session.warnings?.length ? "\nReview warnings below." : ""}` : "Export cancelled.");
+        }
       }
     } catch (error) { notify(String(error), true); }
     finally {
@@ -476,7 +477,8 @@ export function mountApp(container: HTMLElement): () => void {
     }
     const configured = session?.stage === "configuration";
     const tool = modes.find(({ kind }) => kind === session?.arrangement.kind);
-    const count = museScore ? (score!.practice_parts?.length ?? 0) : (score?.parts.length ?? 0);
+    const count = museScore && (!configured || session.arrangement.kind === "practice") ? (score!.practice_parts?.length ?? score!.parts.length) : (score?.parts.length ?? 0);
+    const warnings = [...new Set([...(score?.warnings ?? []), ...(session?.warnings ?? [])])];
     root.render(<RecentSoundsProvider><div className="app-shell">
       <header className="app-header">
         {configured ? <div className="tool-heading">
@@ -511,7 +513,7 @@ export function mountApp(container: HTMLElement): () => void {
                 <span id={`mode-${kind}-description`} className="mode-description">{kind === "practice" && !session.practice ? "Requires a MuseScore .mscz or .mscx score." : description}</span>
               </Button>)}
             </div>
-            {session.practice && <p className="muted">Split, merge, and diff convert visible MuseScore instruments and staves to MusicXML.</p>}
+            {session.practice && <p className="muted">Split and merge convert all MuseScore instruments to MusicXML, including hidden sources.</p>}
           </section> : session.arrangement.kind === "practice" && session.practice ? <PracticeView parts={score!.practice_parts ?? []} sections={score!.practice_sections ?? []} options={session.practice} config={config} environment={environment} checking={checking}
             busy={busy()} rendering={exporting} result={session.result}
             defaults={practiceDefaults} onSetDefault={(mode, sound) => update(({ practice }) => {
@@ -539,6 +541,11 @@ export function mountApp(container: HTMLElement): () => void {
               onCreateGroup={() => update(({ arrangement }) => { const error = addGroup(arrangement, score!.parts); message = error ?? "Merge group created. Reorder its instruments if needed."; messageError = !!error; })} />}
         </div>}
       </section></main>
+      {configured && (session.arrangement.kind === "split" || session.arrangement.kind === "merge") && warnings.length > 0 && <section className="conversion-warnings" role="status" aria-live="polite" aria-atomic="true" aria-labelledby="conversion-warnings-heading" tabIndex={0}>
+        <h3 id="conversion-warnings-heading">Review warnings</h3>
+        <p>Review these details in the exported score.</p>
+        <ul>{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+      </section>}
       <footer className="status-bar">
         <div className={`status ${messageError ? "text-danger" : "muted"}`} role={messageError ? "alert" : "status"} aria-live="polite">{message}</div>
         <span className="status-context muted">{session ? "Source files are preserved" : "MusicXML · .mxl · MuseScore .mscz / .mscx"}</span>

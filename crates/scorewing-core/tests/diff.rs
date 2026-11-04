@@ -25,6 +25,19 @@ fn score(body: &str) -> Score {
     ))
 }
 
+#[test]
+fn unsupported_parts_are_not_silently_ignored_by_diff() {
+    let single = score(&note("C", 1, "1", ""));
+    let multi = measures("<measure number=\"1\"><attributes><divisions>1</divisions><staves>2</staves></attributes></measure>");
+    for (older, newer) in [(&single, &multi), (&multi, &single), (&multi, &multi)] {
+        assert!(diff_score(older, newer)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("multi-staff"));
+    }
+}
+
 fn compare(old: &Score, new: &Score) -> DiffResult {
     let result = diff_score(old, new).unwrap();
     validate_score(&result.root).unwrap();

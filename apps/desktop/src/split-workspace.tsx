@@ -1,7 +1,7 @@
 import { Button } from "./components/ui/button.tsx";
 import { Checkbox } from "./components/ui/checkbox.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select.tsx";
-import { fallbackVoice, setFallbackVoice, type Arrangement, type Part } from "./model.ts";
+import { fallbackVoice, isTransformable, setFallbackVoice, type Arrangement, type Part } from "./model.ts";
 
 export interface SplitWorkspaceProps {
   parts: Part[];
@@ -13,29 +13,35 @@ export interface SplitWorkspaceProps {
 }
 
 export function SplitWorkspace({ parts, state, busy, exporting, onChange, onExport }: SplitWorkspaceProps) {
-  const selected = parts.filter((part) => state.selected.has(part.id));
+  const available = parts.filter(isTransformable);
+  const selected = available.filter((part) => state.selected.has(part.id));
   const generated = selected.reduce((total, part) => total + part.split_plans[state.mode].length, 0);
-  const allSelected = parts.length > 0 && selected.length === parts.length;
+  const allSelected = available.length > 0 && selected.length === available.length;
   return <div className="arrangement-workspace">
     <div className="workspace-layout split-workspace">
       <section className="pane source-pane" aria-label="Source staves">
         <div className="pane-header"><h2>Source staves</h2>
-          <Button variant="ghost" size="sm" data-action="select-all" disabled={busy || !parts.length}
-            onClick={() => onChange((next) => { next.selected = allSelected ? new Set() : new Set(parts.map((part) => part.id)); })}>
+          <Button variant="ghost" size="sm" data-action="select-all" disabled={busy || !available.length}
+            onClick={() => onChange((next) => { next.selected = allSelected ? new Set() : new Set(available.map((part) => part.id)); })}>
             {allSelected ? "Clear selection" : "Select all"}
           </Button>
         </div>
         <div className="pane-body instruments" role="group" aria-label="Instruments">
           {parts.map((part) => {
             const lanes = part.split_plans[state.mode].length;
+            const supported = isTransformable(part);
             return <div className="source-row" key={part.id}>
-              <Checkbox id={`split-source-${part.id}`} data-part={part.id} checked={state.selected.has(part.id)} disabled={busy}
+              <Checkbox id={`split-source-${part.id}`} data-part={part.id} checked={supported && state.selected.has(part.id)} disabled={busy || !supported}
+                aria-describedby={!supported ? `split-reason-${part.id}` : undefined}
                 onCheckedChange={(checked) => onChange((next) => { if (checked) next.selected.add(part.id); else next.selected.delete(part.id); })} />
               <label className="source-copy" htmlFor={`split-source-${part.id}`}><span className="part-name">{part.name || part.id}</span>
-                <span className="muted source-count">{lanes} new {lanes === 1 ? "staff" : "staves"}</span>
+                {part.visible === false && <span className="muted source-visibility">Hidden in source</span>}
+                {supported ? <span className="muted source-count">{lanes} new {lanes === 1 ? "staff" : "staves"}</span>
+                  : <span className="muted source-count" id={`split-reason-${part.id}`}>{(part.staff_count ?? 1) > 1 ? `${part.staff_count} source staves · Multi-staff transformation is unsupported.` : "Transformation is unsupported."} Retained in export.</span>}
               </label>
             </div>;
           })}
+          <p className="pane-note muted">All original instruments stay in the export with their source visibility. Generated staves are visible, including those from hidden sources.</p>
         </div>
       </section>
       <section className="pane configuration-pane" aria-label="Fallback configuration">
@@ -95,7 +101,7 @@ export function SplitWorkspace({ parts, state, busy, exporting, onChange, onExpo
       </section>
     </div>
     <footer className="workspace-footer"><span className="muted">{selected.length} source {selected.length === 1 ? "staff" : "staves"} selected · {generated} new {generated === 1 ? "staff" : "staves"}</span>
-      <Button data-action="export" disabled={busy} onClick={onExport}>{exporting ? "Exporting…" : "Export score"}</Button>
+      <Button data-action="export" disabled={busy || !selected.length} onClick={onExport}>{exporting ? "Exporting…" : "Export score"}</Button>
     </footer>
   </div>;
 }

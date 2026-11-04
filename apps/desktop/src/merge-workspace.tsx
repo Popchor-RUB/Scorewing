@@ -1,12 +1,12 @@
 import { Button } from "./components/ui/button.tsx";
 import { Checkbox } from "./components/ui/checkbox.tsx";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select.tsx";
-import { movePart, stemDirection } from "./model.ts";
+import { isTransformable, movePart, stemDirection } from "./model.ts";
 import type { SplitWorkspaceProps } from "./split-workspace.tsx";
 
 export function MergeWorkspace({ parts, state, busy, exporting, onChange, onExport, onCreateGroup }: SplitWorkspaceProps & { onCreateGroup: () => void }) {
   const assigned = new Set(state.groups.flat());
-  const available = parts.filter((part) => !assigned.has(part.id));
+  const available = parts.filter((part) => isTransformable(part) && !assigned.has(part.id));
   const selected = available.filter((part) => state.selected.has(part.id));
   const allSelected = available.length > 0 && selected.length === available.length;
   const name = (id: string) => parts.find((part) => part.id === id)?.name || id;
@@ -21,15 +21,19 @@ export function MergeWorkspace({ parts, state, busy, exporting, onChange, onExpo
         </div>
         <div className="pane-body instruments" role="group" aria-label="Instruments">
           {parts.map((part) => <div className="source-row" key={part.id}>
-            <Checkbox id={`merge-source-${part.id}`} data-part={part.id} checked={state.selected.has(part.id)} disabled={busy || assigned.has(part.id)}
+            <Checkbox id={`merge-source-${part.id}`} data-part={part.id} checked={isTransformable(part) && !assigned.has(part.id) && state.selected.has(part.id)} disabled={busy || assigned.has(part.id) || !isTransformable(part)}
+              aria-describedby={!isTransformable(part) ? `merge-reason-${part.id}` : undefined}
               onCheckedChange={(checked) => onChange((next) => { if (checked) next.selected.add(part.id); else next.selected.delete(part.id); })} />
             <label className="source-copy" htmlFor={`merge-source-${part.id}`}><span className="part-name">{part.name || part.id}</span>
-              <span className="muted source-count">{assigned.has(part.id) ? "Grouped" : `${part.voice_count} ${part.voice_count === 1 ? "voice" : "voices"}`}</span>
+              {part.visible === false && <span className="muted source-visibility">Hidden in source</span>}
+              {isTransformable(part) ? <span className="muted source-count">{assigned.has(part.id) ? "Grouped" : `${part.voice_count} ${part.voice_count === 1 ? "voice" : "voices"}`}</span>
+                : <span className="muted source-count" id={`merge-reason-${part.id}`}>{(part.staff_count ?? 1) > 1 ? `${part.staff_count} source staves · Multi-staff transformation is unsupported.` : "Transformation is unsupported."} Retained in export.</span>}
             </label>
           </div>)}
           <div className="merge-create"><p className="muted">{selected.length ? `${selected.length} instruments selected` : "No instruments selected"}</p>
             <Button data-action="add-group" variant="outline" disabled={busy || selected.length < 2} onClick={onCreateGroup}>Create merge group</Button>
           </div>
+          <p className="pane-note muted">All original instruments stay in the export with their source visibility. Merged instruments are visible, including results from hidden sources.</p>
         </div>
       </section>
       <section className="pane configuration-pane" aria-label="Merge configuration">
@@ -76,7 +80,7 @@ export function MergeWorkspace({ parts, state, busy, exporting, onChange, onExpo
       </section>
     </div>
     <footer className="workspace-footer"><span className="muted">{state.groups.length} merge {state.groups.length === 1 ? "group" : "groups"} · {assigned.size} source instruments</span>
-      <Button data-action="export" disabled={busy} onClick={onExport}>{exporting ? "Exporting…" : "Export score"}</Button>
+      <Button data-action="export" disabled={busy || !state.groups.length} onClick={onExport}>{exporting ? "Exporting…" : "Export score"}</Button>
     </footer>
   </div>;
 }

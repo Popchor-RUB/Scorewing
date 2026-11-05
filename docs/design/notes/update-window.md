@@ -2,15 +2,15 @@
 
 Status: design approved and implemented on November 4, 2026. The native update window uses the revised compact height.
 
-Open [the review gallery](index.html). Edit [the Figcraft document](scorewing-update-window.figcraft). The three PNGs in `screens/` were exported from Figcraft at 2×.
+Open [the unified gallery](../index.html). Edit page **06 · Update window** in [the single Figcraft source](../scorewing.figcraft). Frames 24–26 are exported to `../screens/` at 2× and listed in [the screen inventory](../README.md).
 
 ## Captured states
 
 | Frame | Export | State |
 | --- | --- | --- |
-| 01 | `screens/available-light.png` | Update available, light appearance |
-| 02 | `screens/available-dark.png` | Update available, dark appearance |
-| 03 | `screens/installation-disabled.png` | Open score, pending selection, or work prevents installation |
+| 24 | [`24-update-available-light.png`](../screens/24-update-available-light.png) | Update available, light appearance |
+| 25 | [`25-update-available-dark.png`](../screens/25-update-available-dark.png) | Update available, dark appearance |
+| 26 | [`26-update-installation-disabled.png`](../screens/26-update-installation-disabled.png) | Open score, pending selection, or work prevents installation |
 
 Each frame uses a 620 × 248 logical-pixel content area, reduced from the previous 620 × 340 non-resizable Tauri update window. The operating system supplies its title bar, titled “Scorewing update available”; window decorations are excluded because they vary by platform.
 

@@ -2,7 +2,7 @@
 
 Status: approved and implemented in the desktop application.
 
-Editable source: [ScoreWing desktop Figcraft document](../desktop-redesign/scorewing-desktop.figcraft), page **05 · Export destinations**, frames 20–23. Screens were created and exported using the Figcraft MCP. Open [the gallery](index.html) to review.
+Editable source: [ScoreWing desktop Figcraft document](../scorewing.figcraft), page **05 · Export destinations**, frames 20–23. Screens were created and exported using the Figcraft MCP. Open [the unified gallery](../index.html) to review.
 
 ## Export filenames
 

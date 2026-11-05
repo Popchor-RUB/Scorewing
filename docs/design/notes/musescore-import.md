@@ -2,7 +2,7 @@
 
 Status: requirements and Figcraft design approved on November 4, 2026; implemented in the desktop frontend, conversion pipeline, and shared arranging engine.
 
-Open [the review gallery](index.html). Editable Figcraft frames 17–19 are on the Desktop workspaces page in [the existing design document](../desktop-redesign/scorewing-desktop.figcraft). PNG exports are in `screens/`. The original 16-screen gallery remains unchanged.
+Open [the unified gallery](../index.html). Editable frames 17–19 are on the Desktop workspaces page in [the single Figcraft source](../scorewing.figcraft). Their PNG exports and layer IDs are listed in [the screen inventory](../README.md).
 
 ## Agreed behavior
 

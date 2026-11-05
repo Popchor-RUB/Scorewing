@@ -1,4 +1,6 @@
-- Before starting initialize a git repository. After after making changes ask the user to commit. Propose a commit message.
-- For frontend-design updates, first update the design in the docs/design folder using the Figcraft MCP. Show the result to the user and ask for approval before starting implementation.
+- Before starting, initialize a git repository if one does not already exist. After making changes, ask the user to commit and propose a commit message.
+- `docs/design/scorewing.figcraft` is the single source of truth for the UI design. For every user-requested design change, update this existing file first using the Figcraft MCP; keep all screens, dialogs, states, and variants in it instead of creating separate design files.
+- Export every affected frame from the saved Figcraft document to `docs/design/screens/`, including new screens and light/dark or compact variants. Keep one current PNG per frame, remove obsolete exports, and update `docs/design/index.html` and the screen inventory in `docs/design/README.md` in the same change. Galleries, PNGs, and notes are derived references and must agree with the Figcraft source.
+- Show the updated design to the user and ask for approval before implementing frontend changes. Keep the Figcraft source and exports synchronized with any revisions made during implementation; obtain approval for further design changes before implementing them.
 - Prefer shadcn components instead of writing custom components.
 - Always use podman if you want to check something in the browser or compile the application

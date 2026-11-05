@@ -1,14 +1,16 @@
 # Desktop redesign implementation plan
 
+> Historical handoff for the original desktop redesign, now implemented. The current visual source is [scorewing.figcraft](../scorewing.figcraft); browse all screens in [the unified gallery](../index.html). The instructions below record the original migration, not pending work.
+
 ## Start here
 
 Implement the committed Figcraft design in a new session. This checkpoint contains **design artifacts only**; do not assume the application or its dependencies have already changed.
 
 Read these files first:
 
-1. `README.md` beside this plan: the agreed brief and behavioral invariants.
-2. `index.html`: the 16-screen gallery; use `screens/split.png` and `screens/merge.png` for the final reviewed layouts.
-3. `scorewing-desktop.figcraft`: editable design, four pages. Page 1 contains the main workspaces; page 2 dark/compact variants; page 3 dialogs/results; page 4 foundations.
+1. [Desktop design notes](desktop.md): the agreed brief and behavioral invariants.
+2. [Unified gallery](../index.html): frames 01–16 capture the original redesign; see the later feature frames for current MuseScore and export behavior.
+3. [Single Figcraft source](../scorewing.figcraft): six pages. Pages 1–4 contain workspaces, dark/compact variants, dialogs/results, and foundations; pages 5–6 contain export destinations and the update window.
 4. Repository `AGENTS.md` and relevant skills. The user explicitly selected **shadcn/ui + Base UI**, authorizing its adoption in place of HeroUI. Do not ask the library question again.
 
 Preserve Tauri and all existing Rust/export behavior. Native title bars in the mockups are illustrative; keep platform-native window chrome and menus. Score data in the designs is illustrative, never application constants.

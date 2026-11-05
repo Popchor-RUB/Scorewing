@@ -1,6 +1,8 @@
 //! Full-score MusicXML preparation shared by arranging and comparison.
 use crate::{archive::plain_text, renderer, Result, ScoreArchive};
-use scorewing_core::xml::{child_text, children, children_mut, set_child, visit_mut};
+use scorewing_core::xml::{
+    child_text, children, children_mut, remove_children, set_child, visit_mut,
+};
 use scorewing_core::{Element, XMLNode};
 use std::{ffi::OsString, fs::File, io::Read, path::Path, sync::atomic::AtomicBool};
 
@@ -68,7 +70,9 @@ struct Source {
 }
 
 fn shown(node: &Element) -> bool {
-    !matches!(child_text(node, "show").as_deref(), Some("0" | "false"))
+    ["show", "isStaffVisible"]
+        .iter()
+        .all(|name| !matches!(child_text(node, name).as_deref(), Some("0" | "false")))
 }
 
 fn export_score(archive: &ScoreArchive) -> Result<(ScoreArchive, Vec<Source>)> {
@@ -127,14 +131,18 @@ fn export_score(archive: &ScoreArchive) -> Result<(ScoreArchive, Vec<Source>)> {
         set_child(part, "trackName", &source.marker);
         set_child(part, "show", "1");
         if let Some(instrument) = part.get_mut_child("Instrument") {
+            // Rich-text children such as <br/> would alter the exported identity marker.
+            remove_children(instrument, "longName");
             set_child(instrument, "longName", &source.marker);
         }
         for staff in children_mut(part, "Staff") {
             set_child(staff, "show", "1");
+            set_child(staff, "isStaffVisible", "1");
         }
     }
     for staff in children_mut(export.master_mut(), "Staff") {
         set_child(staff, "show", "1");
+        set_child(staff, "isStaffVisible", "1");
     }
     visit_mut(export.master_mut(), &mut |node| {
         if matches!(node.name.as_str(), "Tempo" | "RehearsalMark") {
@@ -264,9 +272,9 @@ mod tests {
     use std::{fs, os::unix::fs::PermissionsExt};
 
     const SOURCE: &[u8] = br#"<museScore version="4.70"><Score><Division>480</Division>
-      <Part id="1"><Staff id="1"/><trackName>Visible</trackName><Instrument id="flute"><longName>Visible</longName><Channel><program value="73"/></Channel></Instrument></Part>
-      <Part id="2"><Staff id="2"/><show>0</show><trackName>Hidden</trackName><Instrument id="violin"><longName>Hidden</longName><Channel><program value="40"/></Channel></Instrument></Part>
-      <Part id="3"><Staff id="3"/><Staff id="4"><show>0</show></Staff><trackName>Piano</trackName><Instrument id="piano"><longName>Piano</longName><Channel><program value="0"/></Channel></Instrument></Part>
+      <Part id="1"><Staff id="1"/><trackName>Visible</trackName><Instrument id="flute"><longName>Visible<br/></longName><Channel><program value="73"/></Channel></Instrument></Part>
+      <Part id="2"><Staff id="2"><isStaffVisible>0</isStaffVisible></Staff><show>0</show><trackName>Hidden</trackName><Instrument id="violin"><longName>Hidden</longName><Channel><program value="40"/></Channel></Instrument></Part>
+      <Part id="3"><Staff id="3"/><Staff id="4"><isStaffVisible>0</isStaffVisible></Staff><trackName>Piano</trackName><Instrument id="piano"><longName>Piano</longName><Channel><program value="0"/></Channel></Instrument></Part>
       <Staff id="1"><Measure><voice><TimeSig><sigN>4</sigN><sigD>4</sigD></TimeSig><Chord><durationType>whole</durationType><Note><pitch>60</pitch><tpc>14</tpc></Note><Note><pitch>64</pitch><tpc>18</tpc></Note></Chord></voice></Measure></Staff>
       <Staff id="2"><show>0</show><Measure><voice><TimeSig><sigN>4</sigN><sigD>4</sigD></TimeSig><Chord><durationType>quarter</durationType><Note><pitch>67</pitch><tpc>15</tpc></Note><Note><pitch>71</pitch><tpc>19</tpc></Note></Chord><Tempo><tempo>2</tempo><text>Allegro &lt;sym&gt;metNoteQuarterUp&lt;/sym&gt; = 120</text></Tempo><RehearsalMark><text>A</text></RehearsalMark><Rest><durationType>half</durationType><dots>1</dots></Rest></voice></Measure></Staff>
       <Staff id="3"><Measure><voice><Rest><durationType>measure</durationType><duration>4/4</duration></Rest></voice></Measure></Staff>
@@ -284,6 +292,38 @@ mod tests {
         fs::write(&executable, "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'MuseScore Studio 4.7.0'; exit; fi\nprintf '%s' \"$3\" > \"$(dirname \"$0\")/input-path\"\ncp \"$3\" \"$(dirname \"$0\")/prepared.mscz\"\nif [ -f \"$(dirname \"$0\")/fail\" ]; then echo 'conversion failed' >&2; exit 1; fi\ncp \"$(dirname \"$0\")/result.xml\" \"$2\"\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
         executable
+    }
+
+    #[test]
+    fn prepares_formatted_names_and_native_staff_visibility() {
+        let archive = ScoreArchive::read_bytes(SOURCE, "source").unwrap();
+        let (export, sources) = export_score(&archive).unwrap();
+        assert_eq!(sources[1].staves, [false]);
+        assert_eq!(sources[2].staves, [true, false]);
+        for (part, source) in children(export.master(), "Part").zip(&sources) {
+            let name = part
+                .get_child("Instrument")
+                .unwrap()
+                .get_child("longName")
+                .unwrap();
+            assert!(name.children.iter().all(|node| node.as_element().is_none()));
+            assert_eq!(name.get_text().as_deref(), Some(source.marker.as_str()));
+            for staff in children(part, "Staff") {
+                assert_eq!(child_text(staff, "isStaffVisible").as_deref(), Some("1"));
+            }
+        }
+        assert_eq!(
+            child_text(
+                children(archive.master(), "Part")
+                    .nth(1)
+                    .unwrap()
+                    .get_child("Staff")
+                    .unwrap(),
+                "isStaffVisible"
+            )
+            .as_deref(),
+            Some("0")
+        );
     }
 
     #[test]

@@ -83,7 +83,7 @@ test("skip persists across launches, manual checks override it, and newer releas
   } finally { await app.close(); }
 });
 
-test("the native prompt locks score operations and failures offer a usable fallback", async () => {
+test("the native prompt leaves score operations usable and failures offer a usable fallback", async () => {
   let answer: ((choice: string) => void) | undefined;
   let fail = false;
   const app = await mountTestApp(native((command) => {
@@ -94,9 +94,15 @@ test("the native prompt locks score operations and failures offer a usable fallb
     return new Promise<string>((resolve) => { answer = resolve; });
   }));
   try {
-    assert.equal(app.fileMenu.openEnabled, false);
+    assert.equal(app.fileMenu.openEnabled, true);
+    assert.equal(app.find<HTMLButtonElement>('[data-action="open"]').disabled, false);
     await app.event("tauri://drag-drop", { paths: [inspection.path], position: { x: 0, y: 0 } });
-    assert.equal(app.document.querySelector('[data-action="close"]'), null);
+    assert.equal(app.fileMenu.closeEnabled, true);
+    await app.click('[data-mode="split"]');
+    assert.ok(app.find('[data-action="back-to-modes"]'));
+    await app.menu("close-score");
+    await app.click('[data-action="open"]');
+    assert.equal(app.fileMenu.closeEnabled, true);
     await act(async () => { answer!("cancel"); });
     assert.equal(app.fileMenu.openEnabled, true);
     fail = true;
@@ -104,6 +110,28 @@ test("the native prompt locks score operations and failures offer a usable fallb
     assert.match(app.find('[role="dialog"] [role="alert"]').textContent!, /Window unavailable/);
     assert.equal(app.fileMenu.openEnabled, true);
     assert.ok(app.find('[data-action="skip-update"]'));
+  } finally { await app.close(); }
+});
+
+test("opening a score while the native prompt is open prevents installation", async () => {
+  let answer: ((choice: string) => void) | undefined;
+  let installs = 0;
+  let restarts = 0;
+  const app = await mountTestApp(native((command) => {
+    if (command === "plugin:updater|check") return metadata;
+    if (command === "plugin:updater|download") return 11;
+    if (command === "plugin:updater|install") { installs++; return; }
+    if (command === "plugin:process|restart") { restarts++; return; }
+    throw new Error(`Unexpected command ${command}`);
+  }, () => new Promise<string>((resolve) => { answer = resolve; })));
+  try {
+    await app.menu("open-score");
+    await act(async () => { answer!("install"); });
+    assert.equal(installs, 0);
+    assert.equal(restarts, 0);
+    assert.equal(app.fileMenu.closeEnabled, true);
+    assert.ok(app.find<HTMLButtonElement>('[data-action="install-update"]').disabled);
+    assert.match(app.find('[role="dialog"]').textContent!, /Close.*score/);
   } finally { await app.close(); }
 });
 

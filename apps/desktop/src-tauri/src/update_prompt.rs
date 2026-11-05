@@ -72,10 +72,7 @@ pub async fn show_update_prompt(
             }
         }
     });
-    let shown = window
-        .set_enabled(false)
-        .and_then(|_| prompt.show())
-        .and_then(|_| prompt.set_focus());
+    let shown = prompt.show().and_then(|_| prompt.set_focus());
     let result = match shown {
         Ok(()) => receiver
             .recv()
@@ -86,9 +83,6 @@ pub async fn show_update_prompt(
     prompt.unlisten(listener);
     // Closing the title bar may have already destroyed the window.
     let _ = prompt.destroy();
-    window
-        .set_enabled(true)
-        .map_err(|error| error.to_string())?;
     let _ = window.set_focus();
     result
 }

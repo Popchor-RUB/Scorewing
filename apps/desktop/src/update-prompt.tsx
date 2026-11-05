@@ -23,7 +23,7 @@ function UpdatePrompt() {
     catch (error) { setAnswering(false); setError(`Could not close the update dialog: ${String(error)}`); }
   }
 
-  return <section className="update-prompt" role="dialog" aria-modal="true" aria-labelledby="update-prompt-heading"
+  return <section className="update-prompt" role="dialog" aria-labelledby="update-prompt-heading"
     onKeyDown={(event) => { if (event.key === "Escape") void answer("cancel"); }}>
     <div className="update-prompt-content">
       <img src={appIcon} width="80" height="80" alt="Scorewing" />

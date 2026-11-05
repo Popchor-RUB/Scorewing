@@ -51,7 +51,6 @@ export function mountApp(container: HTMLElement): () => void {
   let exporting = false;
   let installing = false;
   let updateInstalled = false;
-  let updatePromptOpen = false;
   let cancelling = false;
   let dropping = false;
   let disposed = false;
@@ -71,12 +70,7 @@ export function mountApp(container: HTMLElement): () => void {
   let fileMenuState = "";
   let environmentRequest = 0;
   const unlisteners: UnlistenFn[] = [];
-  const busy = () => fileBusy || exporting || installing || updatePromptOpen;
-
-  function setUpdatePromptOpen(open: boolean) {
-    updatePromptOpen = open;
-    render();
-  }
+  const busy = () => fileBusy || exporting || installing;
 
   async function installUpdate(update: Update) {
     if (disposed || busy() || current || pendingPair || checking)
@@ -500,7 +494,7 @@ export function mountApp(container: HTMLElement): () => void {
         {session ? <Button variant="outline" data-action="open" disabled={!openEnabled} onClick={() => void openScore()}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M3 6h6l2 3h10v12H3Z M3 6V3h6l2 3h10v3" /></svg> Open score</Button>
           : <span className="shortcut muted">{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl"} + O</span>}
       </header>
-      <UpdateControl checkRequest={updateCheckRequest} canInstall={!session && !pendingPair && !busy() && !checking} onInstall={installUpdate} onPromptChange={setUpdatePromptOpen} />
+      <UpdateControl checkRequest={updateCheckRequest} canInstall={!session && !pendingPair && !busy() && !checking} onInstall={installUpdate} />
       {session && <div className="score-heading">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true" className="file-icon"><path d="M14 2H5v20h14V7z M14 2v5h5 M8 12h8 M8 16h8" /></svg><strong title={score!.path}>{score!.name}</strong>
         <span className="muted">{count} {count === 1 ? "instrument" : "instruments"}</span>

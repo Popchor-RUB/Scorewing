@@ -8,11 +8,10 @@ const SKIPPED_VERSION_KEY = "scorewing.skipped-update-version";
 
 type Status = "idle" | "checking" | "available" | "downloading" | "ready" | "installing";
 
-export function UpdateControl({ checkRequest, canInstall, onInstall, onPromptChange }: {
+export function UpdateControl({ checkRequest, canInstall, onInstall }: {
   checkRequest: number;
   canInstall: boolean;
   onInstall: (update: Update) => Promise<void>;
-  onPromptChange: (open: boolean) => void;
 }) {
   const [status, setStatus] = useState<Status>("idle");
   const [open, setOpen] = useState(false);
@@ -145,7 +144,6 @@ export function UpdateControl({ checkRequest, canInstall, onInstall, onPromptCha
     const found = update.current;
     if (!found) return;
     prompting.current = true;
-    onPromptChange(true);
     void (async () => {
       let choice: "cancel" | "skip" | "install" | undefined;
       try {
@@ -154,7 +152,6 @@ export function UpdateControl({ checkRequest, canInstall, onInstall, onPromptCha
         if (active.current) setError(`Could not open the update dialog: ${String(error)}`);
       } finally {
         prompting.current = false;
-        onPromptChange(false);
       }
       if (!active.current) return;
       if (choice === "cancel") setOpen(false);

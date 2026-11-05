@@ -22,6 +22,7 @@ test("native prompt shows the icon, versions, changelog, three choices and Escap
     },
   });
   try {
+    assert.notEqual(app.find('[role="dialog"]').getAttribute("aria-modal"), "true");
     assert.match(app.find('[role="dialog"]').textContent!, /0.2.0.*0.1.0/s);
     assert.ok(app.find('img[alt="Scorewing"]').getAttribute("src"));
     assert.deepEqual(Array.from(app.document.querySelectorAll("button")).map((button) => button.textContent), ["Cancel", "Skip this version", "Download & Install"]);

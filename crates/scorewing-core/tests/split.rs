@@ -212,7 +212,7 @@ fn directions_follow_their_explicit_voice_and_are_renumbered() {
 }
 
 #[test]
-fn rehearsal_marks_and_navigation_survive_every_split_lane() {
+fn rehearsal_marks_stay_on_first_staff_and_navigation_survives_every_split_lane() {
     let mut directions = vec![
         "<direction><direction-type><rehearsal>A</rehearsal></direction-type><offset>-1</offset><voice>2</voice></direction>".to_owned(),
         "<direction><direction-type><segno/></direction-type><voice>2</voice></direction>".to_owned(),
@@ -265,20 +265,28 @@ fn rehearsal_marks_and_navigation_survive_every_split_lane() {
             .unwrap();
             scorewing_core::validate_score(&result.root).unwrap();
             let result = parse_score(result.root).unwrap();
-            assert_eq!(result.parts[0].source, original.parts[0].source);
+            let rehearsal = result.parts[0].measures[0]
+                .extras
+                .iter()
+                .find(|extra| {
+                    extra
+                        .element
+                        .get_child("direction-type")
+                        .is_some_and(|kind| kind.get_child("rehearsal").is_some())
+                })
+                .unwrap();
+            assert_eq!(text(&rehearsal.element, "offset"), "0");
             for part in &result.parts[1..] {
                 let measure = &part.measures[0];
                 let copied: Vec<_> = elements(&measure.source)
                     .filter(|e| e.name == "direction")
                     .cloned()
                     .collect();
-                let mut expected: Vec<_> = directions
+                let expected: Vec<_> = directions
                     .iter()
                     .skip(1)
                     .map(|xml| element(&xml.replace("<voice>2</voice>", "<voice>1</voice>")))
                     .collect();
-                // Score-wide rehearsal marks no longer belong to a source voice.
-                expected.push(element(&directions[0].replace("<voice>2</voice>", "")));
                 assert_eq!(copied, expected, "{mode}, configured={configured}");
                 let barlines: Vec<_> = elements(&measure.source)
                     .filter(|e| e.name == "barline")

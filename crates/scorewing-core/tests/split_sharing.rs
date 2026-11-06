@@ -82,7 +82,14 @@ fn empire_state_of_mind_reuses_the_second_alto_lane() {
         validate_score(&root).unwrap();
         let result = parse_score(root).unwrap();
         assert_eq!(result.parts.len(), 4);
-        assert_eq!(result.parts[0].source, original.parts[0].source);
+        let notes = |part: &scorewing_core::Part| {
+            descendants(&part.source)
+                .into_iter()
+                .filter(|node| node.name == "note")
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(notes(&result.parts[0]), notes(&original.parts[0]));
         assert_eq!(result.parts[0].definition, original.parts[0].definition);
         for (measure, step, start, duration) in [(4, "G", 3, 1), (5, "F", 0, 4)] {
             let notes: Vec<_> = result.parts[3].measures[measure]

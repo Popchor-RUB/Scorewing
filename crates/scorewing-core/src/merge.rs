@@ -1,9 +1,8 @@
 //! Merge selected single-staff parts into ordered, stem-directed voices.
 
 use crate::model::{
-    build_score, insert_note_child, make_visible, render_measure, scorewide_marks, set_child,
-    set_written_duration, with_scorewide_marks, Event, Fraction, Measure, Part, Score,
-    TimedElement,
+    build_arranged_score, insert_note_child, make_visible, render_measure, set_child,
+    set_written_duration, Event, Fraction, Measure, Part, Score, TimedElement,
 };
 use crate::split::{
     append, child_text, descendants, elements, elements_mut, numeric, remove_children, voice_cmp,
@@ -1038,7 +1037,6 @@ pub fn merge_score_with_stems(
         collect_retained_ids(&part.definition, &mut used_ids);
         collect_retained_ids(&part.source, &mut used_ids);
     }
-    let global_marks = scorewide_marks(score)?;
     let mut replacements = HashMap::new();
     let mut errors = Vec::new();
     for (indices, stems) in groups.into_iter().zip(stems) {
@@ -1111,11 +1109,7 @@ pub fn merge_score_with_stems(
                 None
             }
         };
-        for (index, marks) in global_marks
-            .iter()
-            .enumerate()
-            .take(parts.iter().map(|part| part.measures.len()).max().unwrap())
-        {
+        for index in 0..parts.iter().map(|part| part.measures.len()).max().unwrap() {
             let measures: Vec<_> = parts.iter().filter_map(|p| p.measures.get(index)).collect();
             let mut failed = measures.len() != parts.len();
             if let Err(error) = compatible(&measures) {
@@ -1162,7 +1156,6 @@ pub fn merge_score_with_stems(
                 }
             };
             let extras = extras(&measures, stems, clef, index == 0, relationships);
-            let extras = with_scorewide_marks(&extras, marks);
             match render_measure(measures[0], &events, Some(&extras), None, None) {
                 Ok(rendered) => append(&mut output, rendered),
                 Err(error) => errors.push(error),
@@ -1179,5 +1172,5 @@ pub fn merge_score_with_stems(
         );
     }
     check_errors(errors)?;
-    Ok(build_score(score, &replacements))
+    build_arranged_score(score, &replacements)
 }

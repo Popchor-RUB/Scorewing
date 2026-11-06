@@ -520,24 +520,31 @@ mod tests {
                     .iter()
                     .find(|p| p.id() == original.id())
                     .unwrap();
-                assert_eq!(retained.source, original.source);
+                let notes = |part: &scorewing_core::Part| {
+                    let mut notes = Vec::new();
+                    scorewing_core::xml::visit(&part.source, &mut |node| {
+                        if node.name == "note" {
+                            notes.push(node.clone());
+                        }
+                    });
+                    notes
+                };
+                assert_eq!(notes(retained), notes(original));
                 assert_eq!(retained.visible(), original.visible());
             }
-            for new in arranged
-                .parts
-                .iter()
-                .filter(|p| !score.parts.iter().any(|old| old.id() == p.id()))
-            {
-                assert!(new.visible());
+            for (index, part) in arranged.parts.iter().enumerate() {
+                if !score.parts.iter().any(|old| old.id() == part.id()) {
+                    assert!(part.visible());
+                }
                 let mut tempos = 0;
                 let mut rehearsals = 0;
-                scorewing_core::xml::visit(&new.source, &mut |n| {
+                scorewing_core::xml::visit(&part.source, &mut |n| {
                     tempos += usize::from(n.name == "sound" && n.attributes.contains_key("tempo"));
                     rehearsals +=
                         usize::from(n.name == "rehearsal" && n.get_text().as_deref() == Some("A"));
                 });
-                assert_eq!(tempos, 1);
-                assert_eq!(rehearsals, 1);
+                assert_eq!(tempos, usize::from(index == 0));
+                assert_eq!(rehearsals, usize::from(index == 0));
             }
         }
     }

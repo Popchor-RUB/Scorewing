@@ -2,9 +2,8 @@
 
 pub(crate) use crate::model::compare_voices as voice_cmp;
 use crate::model::{
-    build_score, insert_note_child, make_visible, render_measure, rest_event, scorewide_marks,
-    set_child, slice_event, strip_position, with_scorewide_marks, Event, Fraction, Measure, Part,
-    Score, TimedElement,
+    build_arranged_score, insert_note_child, make_visible, render_measure, rest_event, set_child,
+    slice_event, strip_position, Event, Fraction, Measure, Part, Score, TimedElement,
 };
 pub(crate) use crate::xml::{append, child_text, elements, visit_mut as walk_mut};
 use crate::{check_errors, Result, ScoreError};
@@ -1337,7 +1336,6 @@ pub fn split_score_with_options(
             }
         }
     }
-    let global_marks = scorewide_marks(score)?;
     let mut plans = HashMap::new();
     for part in &score.parts {
         if part.supported() && selected.is_none_or(|ids| ids.iter().any(|id| id == part.id())) {
@@ -1540,7 +1538,6 @@ pub fn split_score_with_options(
                     }
                     event.voice = "1".into();
                 }
-                let extras = with_scorewide_marks(&extras, &global_marks[measure_index]);
                 match render_measure(measure, &events, Some(&extras), None, None) {
                     Ok(rendered) => append(&mut derived, rendered),
                     Err(error) => errors.push(error),
@@ -1555,7 +1552,7 @@ pub fn split_score_with_options(
     }
     check_errors(errors)?;
     Ok(SplitResult {
-        root: build_score(score, &replacements),
+        root: build_arranged_score(score, &replacements)?,
         warnings,
     })
 }

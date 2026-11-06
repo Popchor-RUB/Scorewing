@@ -239,7 +239,13 @@ pub(crate) fn scorewide_marks(score: &Score) -> Result<Vec<Vec<TimedElement>>> {
     for marks in &mut result {
         let mut tempos = BTreeSet::new();
         for extra in marks.iter_mut() {
-            let (position, _) = mark_identity(extra)?;
+            let sound = if extra.element.name == "sound" {
+                Some(&extra.element)
+            } else {
+                child(&extra.element, "sound")
+            };
+            let Some(sound) = sound else { continue };
+            let position = sound_position(extra, sound)?;
             let mut deduplicate = |sound: &mut Element| -> Result<()> {
                 if let Some(tempo) = sound.attributes.get("tempo") {
                     if !tempos.insert((position.clone(), parse_fraction(tempo)?)) {
@@ -286,16 +292,20 @@ fn mark_identity(extra: &TimedElement) -> Result<(Fraction, Element)> {
     Ok((&extra.position + offset / &extra.divisions, element))
 }
 
-pub(crate) fn with_scorewide_marks(
-    extras: &[TimedElement],
-    marks: &[TimedElement],
-) -> Vec<TimedElement> {
-    extras
-        .iter()
-        .filter(|extra| !scorewide_mark(&extra.element))
-        .cloned()
-        .chain(marks.iter().cloned())
-        .collect()
+fn sound_position(extra: &TimedElement, sound: &Element) -> Result<Fraction> {
+    let offset = child(sound, "offset").or_else(|| {
+        child(&extra.element, "offset").filter(|offset| {
+            offset
+                .attributes
+                .get("sound")
+                .is_some_and(|value| value == "yes")
+        })
+    });
+    let offset = offset
+        .map(|offset| parse_fraction(&text(offset)))
+        .transpose()?
+        .unwrap_or_else(|| frac(0));
+    Ok(&extra.position + offset / &extra.divisions)
 }
 
 pub(crate) fn make_visible(definition: &mut Element, source: &mut Element) {
@@ -912,6 +922,132 @@ pub fn render_measure(
     }
     Ok(result)
 }
+pub(crate) fn build_arranged_score(
+    score: &Score,
+    replacements: &HashMap<String, Vec<(Element, Element)>>,
+) -> Result<Element> {
+    let marks = scorewide_marks(score)?;
+    let measures = score
+        .parts
+        .first()
+        .map_or(0, |part| children(&part.source, "measure").count());
+    if marks.iter().skip(measures).any(|marks| !marks.is_empty()) {
+        return Err(ScoreError::new("Cannot place tempo/rehearsal marks on the first staff: it has fewer measures than the mark carrier"));
+    }
+    let mut root = build_score(score, replacements);
+    for (part_index, part) in children_mut(&mut root, "part").enumerate() {
+        let multistaff = staff_count(part) > 1;
+        let mut divisions = "1".to_owned();
+        for (index, measure) in children_mut(part, "measure").enumerate() {
+            measure
+                .children
+                .retain(|node| !node.as_element().is_some_and(scorewide_mark));
+            if part_index != 0 {
+                continue;
+            }
+            let insertion = measure
+                .children
+                .iter()
+                .position(|node| {
+                    node.as_element()
+                        .is_some_and(|node| !matches!(node.name.as_str(), "print" | "attributes"))
+                })
+                .unwrap_or(measure.children.len());
+            let mut opening_divisions = divisions.clone();
+            for (index, node) in measure.children.iter().enumerate() {
+                if let Some(value) = node
+                    .as_element()
+                    .filter(|node| node.name == "attributes")
+                    .and_then(|node| child_text(node, "divisions"))
+                {
+                    divisions = value;
+                    if index < insertion {
+                        opening_divisions = divisions.clone();
+                    }
+                }
+            }
+            let Some(marks) = marks.get(index).filter(|marks| !marks.is_empty()) else {
+                continue;
+            };
+            let opening = parse_fraction(&opening_divisions)?;
+            let mut units = opening.numer().clone();
+            let positions = marks
+                .iter()
+                .map(mark_identity)
+                .collect::<Result<Vec<_>>>()?;
+            for (position, _) in &positions {
+                units = units.lcm(position.denom());
+            }
+            for mark in marks {
+                for sound in children(&mark.element, "sound") {
+                    units = units.lcm(sound_position(mark, sound)?.denom());
+                }
+            }
+            let units = Fraction::from_integer(units);
+            let mut prefix = Vec::new();
+            let attributes = |value: String| {
+                let mut attributes = Element::new("attributes");
+                append(&mut attributes, text_element("divisions", value));
+                XMLNode::Element(attributes)
+            };
+            if units != opening {
+                prefix.push(attributes(units.to_integer().to_string()));
+            }
+            for (mark, (position, _)) in marks.iter().zip(positions) {
+                let mut direction = mark.element.clone();
+                let mut offset = child(&direction, "offset")
+                    .cloned()
+                    .unwrap_or_else(|| Element::new("offset"));
+                set_text(&mut offset, (position * &units).to_integer().to_string());
+                remove_children(&mut direction, "offset");
+                for sound in children_mut(&mut direction, "sound") {
+                    let position = sound_position(mark, sound)?;
+                    set_child(
+                        sound,
+                        "offset",
+                        (position * &units).to_integer().to_string(),
+                    );
+                }
+                // Directions precede the source music; offsets preserve their exact beats.
+                let before = if direction.name == "direction" {
+                    direction
+                        .children
+                        .iter()
+                        .position(|node| {
+                            node.as_element()
+                                .is_some_and(|node| node.name != "direction-type")
+                        })
+                        .unwrap_or(direction.children.len())
+                } else {
+                    direction.children.len()
+                };
+                direction.children.insert(before, XMLNode::Element(offset));
+                if multistaff && direction.name == "direction" {
+                    let before_sound = direction
+                        .children
+                        .iter()
+                        .position(|node| {
+                            node.as_element().is_some_and(|node| {
+                                matches!(node.name.as_str(), "sound" | "listening")
+                            })
+                        })
+                        .unwrap_or(direction.children.len());
+                    direction
+                        .children
+                        .insert(before_sound, XMLNode::Element(text_element("staff", "1")));
+                }
+                prefix.push(XMLNode::Element(direction));
+            }
+            if units != opening {
+                // Restore source units without rescaling or rewriting any notes.
+                prefix.push(attributes(opening_divisions));
+            }
+            measure.children.splice(insertion..insertion, prefix);
+        }
+    }
+    Ok(root)
+}
+
 pub fn build_score(
     score: &Score,
     replacements: &HashMap<String, Vec<(Element, Element)>>,

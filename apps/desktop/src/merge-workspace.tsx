@@ -1,6 +1,7 @@
 import { Button } from "./components/ui/button.tsx";
 import { Checkbox } from "./components/ui/checkbox.tsx";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select.tsx";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select.tsx";
+import { Field, FieldGroup } from "./components/ui/field.tsx";
 import { isTransformable, movePart, stemDirection } from "./model.ts";
 import type { SplitWorkspaceProps } from "./split-workspace.tsx";
 
@@ -56,11 +57,11 @@ export function MergeWorkspace({ parts, state, busy, exporting, onChange, onExpo
               </div></th></tr>
               {group.map((id, index) => <tr className="merge-part" key={id}>
                 <th scope="row" className="group-part"><span>{name(id)}</span></th>
-                <td><Select value={stemDirection(state, id, index)} disabled={busy}
+                <td><FieldGroup><Field data-disabled={busy}><Select value={stemDirection(state, id, index)} disabled={busy}
                   onValueChange={(value) => { if (value === "up" || value === "down") onChange((next) => { next.stems.set(id, value); }); }}>
-                  <SelectTrigger id={`stem-${id}`} className="score-select" aria-label={`Stem direction for ${name(id)} ${id}, group ${groupIndex + 1}`}><SelectValue>{stemDirection(state, id, index) === "up" ? "Up" : "Down"}</SelectValue></SelectTrigger>
-                  <SelectContent><SelectItem value="up">Up</SelectItem><SelectItem value="down">Down</SelectItem></SelectContent>
-                </Select></td>
+                  <SelectTrigger id={`stem-${id}`} className="score-select w-full min-w-0" aria-label={`Stem direction for ${name(id)} ${id}, group ${groupIndex + 1}`}><SelectValue>{stemDirection(state, id, index) === "up" ? "Up" : "Down"}</SelectValue></SelectTrigger>
+                  <SelectContent><SelectGroup><SelectItem value="up">Up</SelectItem><SelectItem value="down">Down</SelectItem></SelectGroup></SelectContent>
+                </Select></Field></FieldGroup></td>
               </tr>)}
             </tbody>)}
           </table> : <div className="merge-empty workspace-empty"><strong>No merge groups yet</strong><p className="muted">Select two or more instruments, then choose “Create merge group”.</p></div>}

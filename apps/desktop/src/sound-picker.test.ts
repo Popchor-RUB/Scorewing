@@ -65,8 +65,9 @@ test("instrument picker supports search, keyboard selection, recents, and persis
 
     await render();
     assert.equal(input().value, "Grand Piano");
-    assert.equal(input().getAttribute("data-slot"), "combobox-input");
-    assert.ok(container.querySelector('[data-slot="combobox-input-group"] > [data-slot="combobox-trigger"] svg'), "standard combobox has an editable input and trailing chevron");
+    assert.equal(input().getAttribute("data-slot"), "input-group-control");
+    assert.ok(container.querySelector('[data-slot="input-group"] > [data-slot="input-group-addon"] button svg'), "standard combobox composes an editable input and trailing chevron with InputGroup");
+    assert.ok(container.querySelector('button[aria-label="Show suggestions"]'), "the suggestion trigger has an accessible name");
     assert.equal(defaults.length, 0, "choosing a sound does not implicitly change its default");
     await act(async () => { (container.querySelector('[aria-label="Set default foreground sound"]') as unknown as HTMLElement).click(); });
     assert.deepEqual(defaults, [{ bank: 0, program: 0 }], "Set Default explicitly saves the selected sound");
@@ -152,13 +153,16 @@ test("instrument picker supports search, keyboard selection, recents, and persis
     assert.equal(input().value, "Grand Piano");
     await render({ disabled: true });
     assert.equal(input().disabled, true);
-    assert.ok(container.querySelector('[data-slot="combobox-trigger"]')!.hasAttribute("disabled"), "disabled picker also disables its trigger");
+    assert.ok(container.querySelector('button[aria-label="Show suggestions"]')!.hasAttribute("disabled"), "disabled picker also disables its trigger");
     assert.ok(container.querySelector('[aria-label="Set default foreground sound"]')!.hasAttribute("disabled"), "disabled picker cannot set a default");
     const defaultsBeforeDisabledClick = defaults.length;
     await act(async () => { (container.querySelector('[aria-label="Set default foreground sound"]') as unknown as HTMLElement).click(); });
     assert.equal(defaults.length, defaultsBeforeDisabledClick);
     await render({ catalog: [] });
     assert.match(container.textContent!, /This sound is unavailable in the current catalog. Choose another instrument\./);
+    assert.equal(input().getAttribute("aria-invalid"), "true");
+    assert.equal(input().closest('[data-slot="field"]')!.getAttribute("data-invalid"), "true");
+    assert.equal(browser.document.getElementById(input().getAttribute("aria-describedby")!)!.getAttribute("role"), "alert");
     await focus();
     assert.equal(options().length, 0);
     assert.ok(browser.document.body.textContent.includes("No instruments found"));

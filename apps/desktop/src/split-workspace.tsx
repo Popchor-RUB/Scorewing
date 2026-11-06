@@ -1,6 +1,7 @@
 import { Button } from "./components/ui/button.tsx";
 import { Checkbox } from "./components/ui/checkbox.tsx";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select.tsx";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select.tsx";
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "./components/ui/field.tsx";
 import { fallbackVoice, isTransformable, setFallbackVoice, type Arrangement, type Part } from "./model.ts";
 
 export interface SplitWorkspaceProps {
@@ -71,16 +72,16 @@ export function SplitWorkspace({ parts, state, busy, exporting, onChange, onExpo
                     <span className="muted staff-source-compact">{source}</span>
                   </th>
                   <td className="muted source-column">{source}</td>
-                  <td><Select value={fallback === null ? "none" : `voice:${fallback}`} disabled={busy}
+                  <td><FieldGroup><Field data-disabled={busy}><Select value={fallback === null ? "none" : `voice:${fallback}`} disabled={busy}
                     onValueChange={(value) => { if (value !== null) onChange((next) => setFallbackVoice(next, part.id, lane, value === "none" ? null : value.slice(6))); }}>
-                    <SelectTrigger id={`fallback-${part.id}-${lane.voice}-${lane.tone}`} className="score-select"
+                    <SelectTrigger id={`fallback-${part.id}-${lane.voice}-${lane.tone}`} className="score-select w-full min-w-0"
                       aria-label={`Fallback voice for ${part.name || part.id} ${part.id}, additional staff ${index + 1}, ${source}`}>
                       <SelectValue>{fallback === null ? "None (silent)" : `Voice ${fallback}`}</SelectValue>
                     </SelectTrigger>
-                    <SelectContent><SelectItem value="none">None (silent)</SelectItem>
+                    <SelectContent><SelectGroup><SelectItem value="none">None (silent)</SelectItem>
                       {voices.filter((voice) => voice !== lane.voice).map((voice) => <SelectItem value={`voice:${voice}`} key={voice}>Voice {voice}</SelectItem>)}
-                    </SelectContent>
-                  </Select></td>
+                    </SelectGroup></SelectContent>
+                  </Select></Field></FieldGroup></td>
                 </tr>;
               })}
             </tbody>;
@@ -91,13 +92,13 @@ export function SplitWorkspace({ parts, state, busy, exporting, onChange, onExpo
       <section className="pane options-pane options-card" aria-label="Global split options">
         <div className="pane-header"><h2>Global options</h2></div>
         <div className="pane-body options-body">
-          <div className="field"><label id="split-mode-label" className="muted" htmlFor="split-mode">Split by</label>
+          <FieldGroup><Field data-disabled={busy}><FieldLabel id="split-mode-label" htmlFor="split-mode">Split by</FieldLabel>
             <Select value={state.mode} disabled={busy} onValueChange={(value) => { if (value === "chords" || value === "voices") onChange((next) => { next.mode = value; }); }}>
-              <SelectTrigger id="split-mode" aria-labelledby="split-mode-label"><SelectValue>{state.mode === "chords" ? "Chord tones" : "Explicit voices"}</SelectValue></SelectTrigger>
-              <SelectContent><SelectItem value="chords">Chord tones</SelectItem><SelectItem value="voices">Explicit voices</SelectItem></SelectContent>
+              <SelectTrigger id="split-mode" className="w-full min-w-0" aria-labelledby="split-mode-label" aria-describedby="split-mode-description"><SelectValue>{state.mode === "chords" ? "Chord tones" : "Explicit voices"}</SelectValue></SelectTrigger>
+              <SelectContent><SelectGroup><SelectItem value="chords">Chord tones</SelectItem><SelectItem value="voices">Explicit voices</SelectItem></SelectGroup></SelectContent>
             </Select>
-            <p className="muted">{state.mode === "chords" ? "Separate simultaneous notes by pitch." : "Separate the voices already written into the score."}</p>
-          </div>
+            <FieldDescription id="split-mode-description">{state.mode === "chords" ? "Separate simultaneous notes by pitch." : "Separate the voices already written into the score."}</FieldDescription>
+          </Field></FieldGroup>
           <div className="option-section"><div className="checkbox-field">
             <Checkbox id="insert-fallback-slurs" checked={state.insertFallbackSlurs} disabled={busy}
               onCheckedChange={(checked) => onChange((next) => { next.insertFallbackSlurs = checked; })} />

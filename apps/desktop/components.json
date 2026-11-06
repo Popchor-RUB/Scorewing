@@ -3,6 +3,18 @@
   "style": "base-nova",
   "rsc": false,
   "tsx": true,
-  "tailwind": { "config": "", "css": "src/style.css", "baseColor": "neutral", "cssVariables": true },
-  "aliases": { "components": "./src/components", "ui": "./src/components/ui", "utils": "./src/lib/utils", "lib": "./src/lib", "hooks": "./src/hooks" }
+  "tailwind": {
+    "config": "",
+    "css": "src/style.css",
+    "baseColor": "neutral",
+    "cssVariables": true
+  },
+  "aliases": {
+    "components": "@/components",
+    "ui": "@/components/ui",
+    "utils": "@/lib/utils",
+    "lib": "@/lib",
+    "hooks": "@/hooks"
+  },
+  "iconLibrary": "lucide"
 }

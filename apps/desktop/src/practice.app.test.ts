@@ -347,6 +347,23 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     assert.match(app.find('[role="alert"]').textContent!, /background sound for instrument 2/);
     await app.choose("#background_sound-1", "Violin");
     await app.click("#practice-metronome");
+    for (const [id, invalidValues, validValues] of [
+      ["background-reduction", ["", "-1", "61"], ["0", "60"]],
+      ["metronome-level", ["", "-61", "1"], ["-60", "0"]],
+    ] as const) {
+      for (const value of invalidValues) {
+        await app.input(`#${id}`, value);
+        const input = app.find<HTMLInputElement>(`#${id}`);
+        assert.equal(input.getAttribute("aria-invalid"), "true", `${id} exposes an invalid value`);
+        assert.equal(input.closest('[data-slot="field"]')!.getAttribute("data-invalid"), "true");
+        assert.equal(app.find(`#${input.getAttribute("aria-describedby")}`).getAttribute("role"), "alert");
+      }
+      for (const value of validValues) {
+        await app.input(`#${id}`, value);
+        assert.equal(app.find(`#${id}`).getAttribute("aria-invalid"), "false", `${id} accepts its range boundary`);
+        assert.equal(app.document.querySelector(`#${id}-error`), null);
+      }
+    }
     await app.input("#metronome-level", "-12");
     await app.input("#background-reduction", "9");
     await app.click('[data-action="back-to-modes"]');
@@ -364,6 +381,7 @@ test("practice UI configures sounds, validates exports, reports progress and ret
       ], background_reduction_db: 9, metronome_enabled: true, metronome_db: -12,
     });
     assert.ok(app.find<HTMLInputElement>("#foreground_sound-0").disabled);
+    assert.equal(app.find("#foreground_sound-0").closest('[data-slot="field"]')!.getAttribute("data-disabled"), "true");
     assert.ok(!app.fileMenu.openEnabled);
     assert.ok(!app.fileMenu.closeEnabled);
     assert.ok(app.find<HTMLButtonElement>('[data-action="back-to-modes"]').disabled);

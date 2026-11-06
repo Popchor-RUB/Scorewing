@@ -50,6 +50,7 @@ test("Split updates planned-staff counts globally and isolates first-staff None 
     assert.match(app.find(".workspace-footer").textContent!, /2 source staves selected · 6 new staves/);
     assert.equal(app.find<HTMLButtonElement>("#fallback-P1-1-0").disabled, false, "first generated staff is configurable");
     await app.click("#fallback-P1-1-0");
+    assert.ok([...app.document.querySelectorAll('[data-slot="select-item"]')].every((item) => item.closest('[data-slot="select-group"]')), "Select options belong to a group");
     assert.deepEqual(Array.from(app.document.querySelectorAll('[role="option"]'), (option) => option.textContent?.replace("✓", "").trim()), ["None (silent)", "Voice 2"], "exclude the generated lane's own voice");
     await app.click('[role="option"]');
     await app.click('[data-action="export"]');

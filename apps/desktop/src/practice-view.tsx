@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button } from "./components/ui/button.tsx";
 import { Checkbox } from "./components/ui/checkbox.tsx";
 import { Input } from "./components/ui/input.tsx";
+import { Field, FieldError, FieldGroup, FieldLabel } from "./components/ui/field.tsx";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./components/ui/dialog.tsx";
 import type {
   PracticeConfig, PracticeDefaults, PracticeEnvironment, PracticeOptions, PracticePart,
@@ -42,10 +43,11 @@ function RendererPath({ kind, value, placeholder, disabled, onChange, onBrowse }
   const label = kind === "executable" ? "MuseScore executable" : "MS Basic SoundFont";
   useEffect(() => { setDraft(value ?? ""); }, [value]);
   return <div className="path-row flex items-end gap-3">
-    <label className="practice-path min-w-0 flex-1"><span className="muted">{label}</span>
-      <Input value={draft} disabled={disabled} placeholder={placeholder} onChange={(event) => setDraft(event.target.value)}
+    <Field className="practice-path min-w-0 flex-1" data-disabled={disabled}>
+      <FieldLabel htmlFor={`renderer-${kind}`}>{label}</FieldLabel>
+      <Input id={`renderer-${kind}`} value={draft} disabled={disabled} placeholder={placeholder} onChange={(event) => setDraft(event.target.value)}
         onBlur={() => { if (draft !== (value ?? "")) onChange(kind, draft); }} />
-    </label>
+    </Field>
     <Button variant="outline" disabled={disabled} aria-label={`Browse ${label}`} data-action="practice-browse" data-kind={kind} onClick={() => onBrowse(kind)}>Browse</Button>
   </div>;
 }
@@ -91,28 +93,32 @@ export function PracticeView({
   const instrumentsDisabled = disabled || !rendererReady;
   const trackCount = options.parts.filter((part) => part.create_track).length;
   const rangeCount = Number(options.include_whole_song) + options.section_keys.length;
+  const backgroundInvalid = !Number.isFinite(options.background_reduction_db) || options.background_reduction_db < 0 || options.background_reduction_db > 60;
+  const metronomeInvalid = !Number.isFinite(options.metronome_db) || options.metronome_db < -60 || options.metronome_db > 0;
   const mix = <div className="practice-mix-controls flex flex-col gap-5">
     <div><h3>Practice mix</h3><p className="flex justify-between muted"><span>Foreground</span><span>0 dB</span></p></div>
-    <div className="practice-levels flex flex-col gap-5">
-      <div>
-        <label id="background-reduction-label" htmlFor="background-reduction" className="muted">Background reduction (dB)</label>
-        <Input id="background-reduction" aria-labelledby="background-reduction-label" type="number" min={0} max={60} step={1} disabled={busy}
+    <FieldGroup>
+      <Field data-disabled={busy} data-invalid={backgroundInvalid}>
+        <FieldLabel id="background-reduction-label" htmlFor="background-reduction">Background reduction (dB)</FieldLabel>
+        <Input id="background-reduction" aria-labelledby="background-reduction-label" aria-invalid={backgroundInvalid} aria-describedby={backgroundInvalid ? "background-reduction-error" : undefined} type="number" min={0} max={60} step={1} disabled={busy}
           value={Number.isFinite(options.background_reduction_db) ? options.background_reduction_db : ""}
           onChange={(event) => { options.background_reduction_db = event.target.valueAsNumber; onOptionsChange(); }} />
         {Number.isFinite(options.background_reduction_db) && options.background_reduction_db !== (defaults.background_reduction_db ?? 6) &&
           <Button variant="ghost" size="sm" disabled={busy} aria-label="Set default background reduction" onClick={() => onSetLevelDefault("background_reduction_db")}>Set Default</Button>}
-      </div>
-      <label className="checkbox-row"><Checkbox id="practice-metronome" checked={options.metronome_enabled} disabled={busy}
-        onCheckedChange={(value) => { options.metronome_enabled = value; onOptionsChange(); }} />Enable metronome</label>
-      <div>
-        <label id="metronome-level-label" htmlFor="metronome-level" className="muted">Metronome level (dB)</label>
-        <Input id="metronome-level" aria-labelledby="metronome-level-label" type="number" min={-60} max={0} step={1} disabled={busy || !options.metronome_enabled}
+        {backgroundInvalid && <FieldError id="background-reduction-error">Background reduction must be between 0 and 60 dB.</FieldError>}
+      </Field>
+      <Field orientation="horizontal" data-disabled={busy}><Checkbox id="practice-metronome" checked={options.metronome_enabled} disabled={busy}
+        onCheckedChange={(value) => { options.metronome_enabled = value; onOptionsChange(); }} /><FieldLabel htmlFor="practice-metronome">Enable metronome</FieldLabel></Field>
+      <Field data-disabled={busy || !options.metronome_enabled} data-invalid={metronomeInvalid}>
+        <FieldLabel id="metronome-level-label" htmlFor="metronome-level">Metronome level (dB)</FieldLabel>
+        <Input id="metronome-level" aria-labelledby="metronome-level-label" aria-invalid={metronomeInvalid} aria-describedby={metronomeInvalid ? "metronome-level-error" : undefined} type="number" min={-60} max={0} step={1} disabled={busy || !options.metronome_enabled}
           value={Number.isFinite(options.metronome_db) ? options.metronome_db : ""}
           onChange={(event) => { options.metronome_db = event.target.valueAsNumber; onOptionsChange(); }} />
         {Number.isFinite(options.metronome_db) && options.metronome_db !== (defaults.metronome_db ?? -6) &&
           <Button variant="ghost" size="sm" disabled={busy || !options.metronome_enabled} aria-label="Set default metronome level" onClick={() => onSetLevelDefault("metronome_db")}>Set Default</Button>}
-      </div>
-    </div>
+        {metronomeInvalid && <FieldError id="metronome-level-error">Metronome level must be between −60 and 0 dB.</FieldError>}
+      </Field>
+    </FieldGroup>
     <p className="muted">Foreground stays at 0 dB. Background instruments are reduced by this amount. Uses MuseScore’s built-in metronome. No count-in is added.</p>
     <section className="practice-environment" aria-label="MuseScore renderer">
       <h3>MuseScore settings</h3>
@@ -212,7 +218,7 @@ export function PracticeView({
       <div className="dialog-header"><DialogTitle>MuseScore settings</DialogTitle>
         <DialogClose render={<Button variant="ghost" size="icon" />} aria-label="Close MuseScore settings">×</DialogClose></div>
       <DialogDescription>MuseScore 4.7.x and its matching MS Basic SoundFont are required for MP3 export.</DialogDescription>
-      <div className="dialog-body flex flex-col gap-5">
+      <FieldGroup>
         {(["executable", "soundfont"] as const).map((kind) => <RendererPath key={kind} kind={kind} value={config[kind]}
           placeholder={environment?.[kind] ?? "Detect automatically"} disabled={disabled} onChange={onConfigChange} onBrowse={onBrowse} />)}
         <Button className="self-start" variant="outline" disabled={disabled} data-action="practice-detect" onClick={onDetect}>{checking ? "Checking renderer…" : "Check renderer and sounds"}</Button>
@@ -220,7 +226,7 @@ export function PracticeView({
         {environment?.version && <p className="text-success">Detected MuseScore {environment.version}</p>}
         {environment?.error && <p className="text-danger" role="alert">{environment.error}</p>}
         <p className="muted">Keep MuseScore closed during rendering. Scorewing temporarily controls the built-in metronome preference and restores it when rendering ends.</p>
-      </div>
+      </FieldGroup>
       <div className="dialog-footer"><DialogClose render={<Button />}>Done</DialogClose></div>
     </DialogContent>
   </Dialog>;

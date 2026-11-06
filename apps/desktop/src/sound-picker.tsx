@@ -1,5 +1,6 @@
 import { Fragment, useId, useRef, useState } from "react";
 import { Button } from "./components/ui/button.tsx";
+import { Field, FieldError, FieldGroup, FieldLabel } from "./components/ui/field.tsx";
 import { Combobox, ComboboxCollection, ComboboxContent, ComboboxEmpty, ComboboxGroup, ComboboxInput, ComboboxItem, ComboboxLabel, ComboboxList, ComboboxSeparator } from "./components/ui/combobox.tsx";
 import type { PresetId, SoundPreset } from "./model";
 import { soundKey, useRecentSounds } from "./recent-sounds";
@@ -27,6 +28,7 @@ export function SoundPicker({ id, label, "aria-label": accessibleLabel, presets,
   const focused = useRef(false);
   const key = value ? soundKey(value) : null;
   const selected = presets.find((preset) => soundKey(preset) === key);
+  const invalid = !!value && !selected;
   const selectedLabel = selected?.name ?? (value ? `Unavailable sound (${value.bank}:${value.program})` : "");
   const searching = query !== null && query.length > 0;
   const recentPresets = searching ? [] : recent.flatMap((sound) => {
@@ -47,9 +49,9 @@ export function SoundPicker({ id, label, "aria-label": accessibleLabel, presets,
     setQuery(null);
     setOpen(false);
   }
-  return <div className="sound-picker min-w-0 max-w-full">
+  return <FieldGroup className="sound-picker min-w-0 max-w-full">
     <div className="flex flex-wrap items-end gap-2">
-      <div className="combo-box min-w-0 flex-1">
+      <Field className="min-w-0 flex-1" data-disabled={isDisabled} data-invalid={invalid}>
         <Combobox items={groups} value={key} disabled={isDisabled}
           itemToStringLabel={(itemKey) => presets.find((preset) => soundKey(preset) === itemKey)?.name ?? selectedLabel}
           filter={null} inputValue={query ?? selectedLabel} onInputValueChange={(next, details) => {
@@ -57,8 +59,8 @@ export function SoundPicker({ id, label, "aria-label": accessibleLabel, presets,
           }}
           open={open} onOpenChange={(next) => { setOpen(next); if (!next) setQuery(null); }}
           onValueChange={(next, details) => { if (next === null) details.cancel(); else commit(next); }}>
-          <label id={`${inputId}-label`} htmlFor={inputId} className="sound-label muted">{label}{accessibleLabel && <span className="sr-only"> · {accessibleLabel}</span>}</label>
-          <ComboboxInput id={inputId} aria-labelledby={`${inputId}-label`} placeholder="Choose an instrument" disabled={isDisabled}
+          <FieldLabel id={`${inputId}-label`} htmlFor={inputId} className="sr-only">{label}{accessibleLabel && <span> · {accessibleLabel}</span>}</FieldLabel>
+          <ComboboxInput id={inputId} aria-labelledby={`${inputId}-label`} aria-invalid={invalid} aria-describedby={invalid ? `${inputId}-error` : undefined} placeholder="Choose an instrument" disabled={isDisabled}
             onFocus={(event) => {
               if (focused.current) return;
               focused.current = true;
@@ -77,11 +79,11 @@ export function SoundPicker({ id, label, "aria-label": accessibleLabel, presets,
             </Fragment>}</ComboboxList>
           </ComboboxContent>
         </Combobox>
-      </div>
+      </Field>
       {onSetDefault && selected && (!defaultValue || key !== soundKey(defaultValue)) &&
         <Button variant="ghost" size="sm" disabled={isDisabled} aria-label={`Set default ${label.toLocaleLowerCase()}`}
           onClick={() => onSetDefault({ bank: selected.bank, program: selected.program })}>Set Default</Button>}
     </div>
-    {value && !selected && <p className="text-danger">This sound is unavailable in the current catalog. Choose another instrument.</p>}
-  </div>;
+    {invalid && <FieldError id={`${inputId}-error`}>This sound is unavailable in the current catalog. Choose another instrument.</FieldError>}
+  </FieldGroup>;
 }

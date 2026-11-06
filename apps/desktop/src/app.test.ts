@@ -180,6 +180,7 @@ test("Split and merge controls retain choices, validate, and send unchanged expo
   try {
     await app.menu("open-score");
     await app.click('[data-mode="split"]');
+    await app.click('[data-action="select-all"]');
     await app.click('[data-action="export"]');
     assert.equal(app.find<HTMLButtonElement>('[data-action="export"]').disabled, true, "export needs a source selection");
     assert.equal(exported.length, 0);

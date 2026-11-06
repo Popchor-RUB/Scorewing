@@ -31,19 +31,22 @@ test("instrument picker supports search, keyboard selection, recents, and persis
   browser.document.body.append(container);
   const root = createRoot(container as unknown as HTMLElement);
   const commits: Array<PresetId | null> = [];
+  const defaults: PresetId[] = [];
   try {
     const { SoundPicker, RecentSoundsProvider } = await server.ssrLoadModule("/src/sound-picker.tsx");
     const { RECENT_SOUNDS_KEY } = await server.ssrLoadModule("/src/recent-sounds.ts");
     function Harness({ disabled = false, catalog = presets }: { disabled?: boolean; catalog?: SoundPreset[] }) {
       const [value, setValue] = useState<PresetId | null>(presets[0]);
       return createElement(RecentSoundsProvider, null,
-        createElement(SoundPicker, { label: "Foreground sound", presets: catalog, value, isDisabled: disabled, onChange: (next: PresetId | null) => { commits.push(next); setValue(next); } }),
+        createElement(SoundPicker, { label: "Foreground sound", presets: catalog, value, isDisabled: disabled,
+          onChange: (next: PresetId | null) => { commits.push(next); setValue(next); },
+          onSetDefault: (next: PresetId) => defaults.push(next) }),
         createElement(SoundPicker, { label: "Background sound", presets: catalog, value: null, onChange: () => {} }));
     }
     const render = async (props = {}) => act(async () => root.render(createElement(Harness, props)));
     const input = (index = 0) => container.querySelectorAll<TestInput>('input[role="combobox"]')[index]!;
     const options = () => [...browser.document.querySelectorAll('[role="option"][data-key]')];
-    const separators = () => [...browser.document.querySelectorAll('[data-slot="separator"]')];
+    const separators = () => [...browser.document.querySelectorAll('[data-slot="combobox-separator"]')];
     const focus = async (index = 0) => act(async () => { input(index).focus(); });
     const key = async (name: string) => act(async () => { input().dispatchEvent(new browser.KeyboardEvent("keydown", { key: name, code: name, bubbles: true, cancelable: true })); });
     const type = async (text: string) => act(async () => {
@@ -62,6 +65,11 @@ test("instrument picker supports search, keyboard selection, recents, and persis
 
     await render();
     assert.equal(input().value, "Grand Piano");
+    assert.equal(input().getAttribute("data-slot"), "combobox-input");
+    assert.ok(container.querySelector('[data-slot="combobox-input-group"] > [data-slot="combobox-trigger"] svg'), "standard combobox has an editable input and trailing chevron");
+    assert.equal(defaults.length, 0, "choosing a sound does not implicitly change its default");
+    await act(async () => { (container.querySelector('[aria-label="Set default foreground sound"]') as unknown as HTMLElement).click(); });
+    assert.deepEqual(defaults, [{ bank: 0, program: 0 }], "Set Default explicitly saves the selected sound");
     assert.equal(container.querySelector('[aria-label="Clear foreground sound"]'), null);
     await focus();
     assert.equal(options().length, presets.length, "focus shows the full catalog with an existing selection");
@@ -69,6 +77,8 @@ test("instrument picker supports search, keyboard selection, recents, and persis
     assert.equal(input().selectionEnd, "Grand Piano".length);
     assert.equal(options().filter((option) => option.textContent.includes("Grand Piano")).length, 2);
     assert.deepEqual(options().map((option) => option.textContent), presets.map((preset) => preset.name), "options show only instrument names");
+    assert.equal(options().filter((option) => option.getAttribute("aria-selected") === "true").length, 1, "selected preset is identified independently of duplicate labels");
+    assert.ok(options().find((option) => option.getAttribute("aria-selected") === "true")!.querySelector("svg"), "selected option has a checkmark");
     assert.equal(separators().length, 0, "a single section needs no separator");
     await type("vIo");
     assert.equal(options().length, 1);
@@ -105,6 +115,14 @@ test("instrument picker supports search, keyboard selection, recents, and persis
     assert.equal(input().value, "Violin", "blur abandons an uncommitted query");
     assert.equal(commits.length, beforeAbandoning, "abandoning a query does not commit a sound");
     assert.equal(browser.localStorage.getItem(RECENT_SOUNDS_KEY), historyBeforeAbandoning, "abandoning a query does not change recents");
+    await focus();
+    await type("Organ");
+    await key("ArrowDown");
+    await key("Tab");
+    await act(async () => input(1).focus());
+    assert.equal(input().value, "Violin", "tabbing away abandons a highlighted query");
+    assert.equal(commits.length, beforeAbandoning, "Tab does not select the highlighted sound");
+    await act(async () => input(1).blur());
     for (const name of ["Bright Piano", "Organ", "Cello", "Flute", "Violin"]) { await select(name); await blur(); }
     const history = JSON.parse(browser.localStorage.getItem(RECENT_SOUNDS_KEY)!);
     assert.equal(history.length, 5);
@@ -134,11 +152,24 @@ test("instrument picker supports search, keyboard selection, recents, and persis
     assert.equal(input().value, "Grand Piano");
     await render({ disabled: true });
     assert.equal(input().disabled, true);
+    assert.ok(container.querySelector('[data-slot="combobox-trigger"]')!.hasAttribute("disabled"), "disabled picker also disables its trigger");
+    assert.ok(container.querySelector('[aria-label="Set default foreground sound"]')!.hasAttribute("disabled"), "disabled picker cannot set a default");
+    const defaultsBeforeDisabledClick = defaults.length;
+    await act(async () => { (container.querySelector('[aria-label="Set default foreground sound"]') as unknown as HTMLElement).click(); });
+    assert.equal(defaults.length, defaultsBeforeDisabledClick);
     await render({ catalog: [] });
     assert.match(container.textContent!, /This sound is unavailable in the current catalog. Choose another instrument\./);
     await focus();
     assert.equal(options().length, 0);
     assert.ok(browser.document.body.textContent.includes("No instruments found"));
+
+    await act(async () => root.render(createElement(Harness, { key: "duplicate-labels" })));
+    await focus();
+    await type("Grand Piano");
+    const secondPiano = options().find((option) => option.getAttribute("data-key") === "1:0")!;
+    await act(async () => { (secondPiano as unknown as HTMLElement).click(); });
+    assert.deepEqual(commits.at(-1), { bank: 1, program: 0 }, "duplicate names preserve bank and program identity");
+    await blur();
 
     browser.localStorage.setItem(RECENT_SOUNDS_KEY, JSON.stringify([null, { bank: -1, program: 0 }, { bank: 0, program: 256 }, { bank: 0, program: 2 }, { bank: 0, program: 2 }, { bank: 10, program: 10 }]));
     await act(async () => root.render(createElement(Harness, { key: "invalid-history" })));

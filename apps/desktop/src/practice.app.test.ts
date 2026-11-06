@@ -112,6 +112,7 @@ test("practice ranges support section-only exports, preserve choices, and count 
     for (const input of app.document.querySelectorAll<TestInputElement>('[aria-label="Practice ranges"] input')) assert.equal(input.checked, true);
     assert.equal(app.find('[data-action="practice-select-all"]').textContent, "Select all");
     assert.equal(app.find('[data-action="practice-clear-all"]').textContent, "Clear");
+    assert.equal(app.document.querySelector("#practice-hidden-instruments"), null, "empty visibility groups are omitted");
     assert.match(app.find('.workspace-footer').textContent!, /1 instruments · 4 ranges/);
     assert.match(app.find('[data-section-key="measure-3"]').textContent!, /A.*Measures 3–5/s);
     assert.match(app.find('[aria-label="Practice ranges"]').textContent!, /first playback arrival.*follow repeats and jumps.*up to two played measures after leaving the displayed range/s);
@@ -146,6 +147,82 @@ test("practice ranges support section-only exports, preserve choices, and count 
     await app.click('[data-mode="practice"]');
     assert.equal(app.find<HTMLInputElement>('[data-action="practice-whole-song"] input').checked, true);
     for (const input of app.document.querySelectorAll<TestInputElement>('[aria-label="Practice ranges"] input')) assert.equal(input.checked, true, "reopened scores start with every range selected");
+  } finally { await app.close(); }
+});
+
+test("practice visibility groups preserve source indices and independent sound roles", async () => {
+  const requests: PracticeOptions[] = [];
+  const app = await mountTestApp(async (command, args) => {
+    if (command === "open_files") return ["/scores/grouped.mscz"];
+    if (command === "release_document") return;
+    if (command === "inspect_file") return {
+      id: "grouped", name: "grouped.mscz", path: args.path, format: "musescore", parts: [], error: null,
+      practice_parts: [false, true, false, true].map((visible, index) => ({
+        key: `part-${index}`, name: `Source ${index}`, visible, original_instruments: [], existing_preset: { bank: 0, program: 40 },
+      })),
+    };
+    if (command === "practice_environment") return {
+      executable: "/bin/mscore", soundfont: "/sounds/MS Basic.sf3", version: "4.7.5", error: null,
+      presets: [{ bank: 0, program: 40, name: "Violin" }, { bank: 0, program: 0, name: "Piano" }],
+    };
+    if (command === "export_practice_tracks") { requests.push(args.options as PracticeOptions); return null; }
+    throw new Error(`Unexpected command ${command}`);
+  });
+  const picker = (role: "foreground" | "background", index: number) => app.find<HTMLInputElement>(`#${role}_sound-${index}`);
+  const choice = (field: "create_track" | "include_in_background", index: number) => `[data-practice-index="${index}"][data-practice-field="${field}"]`;
+  const defaultButton = (role: "foreground" | "background", index: number) => app.find<HTMLButtonElement>(
+    `[aria-labelledby="practice-part-${index}"] [aria-label="Set default ${role} instrument"]`);
+  try {
+    await app.menu("open-score");
+    await app.click('[data-mode="practice"]');
+    assert.deepEqual([...app.document.querySelectorAll(".practice-visibility-group > h3")].map((heading) => heading.textContent), ["Visible instruments", "Hidden instruments"]);
+    assert.deepEqual([...app.document.querySelectorAll(".practice-part > h4")].map((heading) => heading.id), ["practice-part-1", "practice-part-3", "practice-part-0", "practice-part-2"]);
+    assert.doesNotMatch(app.find(".practice-parts").textContent!, /Hidden in score/);
+    assert.match(app.find(".practice-instruments-explanation").textContent!, /one MP3 per selected range.*Background instruments accompany/s);
+    for (const index of [0, 1, 2, 3]) {
+      const visible = index % 2 === 1;
+      assert.equal(app.find(`#practice-part-${index}`).textContent, `Source ${index}`);
+      for (const [role, field, label] of [
+        ["foreground", "create_track", "Create practice track"],
+        ["background", "include_in_background", "Include in background"],
+      ] as const) {
+        assert.equal(app.find<HTMLInputElement>(`${choice(field, index)} input`).checked, visible);
+        assert.match(app.find(choice(field, index)).textContent!, new RegExp(`${label}.*Source ${index}`));
+        assert.equal(picker(role, index).disabled, !visible);
+        assert.equal(picker(role, index).value, "Violin", "saved sounds stay visible for unchecked roles");
+        assert.equal(defaultButton(role, index).disabled, !visible);
+        assert.equal(picker(role, index).closest(".practice-sound-row"), app.find(choice(field, index)).parentElement, "checkbox and corresponding sound share a row");
+      }
+    }
+    await app.choose("#foreground_sound-3", "Piano");
+    await app.click(choice("create_track", 3));
+    assert.ok(picker("foreground", 3).disabled);
+    assert.ok(defaultButton("foreground", 3).disabled);
+    assert.equal(picker("foreground", 3).value, "Piano");
+    assert.equal(picker("background", 3).disabled, false, "foreground membership does not disable background");
+    await app.click(choice("create_track", 3));
+    await app.choose("#background_sound-3", "Piano");
+    await app.click(choice("include_in_background", 3));
+    assert.ok(picker("background", 3).disabled);
+    assert.ok(defaultButton("background", 3).disabled);
+    assert.equal(picker("background", 3).value, "Piano");
+    assert.equal(picker("foreground", 3).disabled, false, "background membership does not disable foreground");
+    await app.click(choice("create_track", 2));
+    await app.click('[data-action="back-to-modes"]');
+    await app.click('[data-mode="practice"]');
+    assert.equal(picker("foreground", 3).value, "Piano");
+    assert.equal(picker("background", 3).value, "Piano");
+    assert.ok(picker("background", 3).disabled, "manual role choices survive tool navigation");
+    assert.equal(picker("foreground", 2).disabled, false);
+    assert.ok(picker("background", 2).disabled);
+    await app.click('[data-action="practice-export"]');
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].parts.map((part) => [part.key, part.create_track, part.include_in_background]), [
+      ["part-0", false, false], ["part-1", true, true], ["part-2", true, false], ["part-3", true, false],
+    ], "grouping never reorders source options or applies edits to a neighboring source");
+    assert.deepEqual(requests[0].parts[3].foreground_sound, { bank: 0, program: 0 });
+    assert.deepEqual(requests[0].parts[3].background_sound, { bank: 0, program: 0 });
+    assert.deepEqual(requests[0].parts[1].foreground_sound, { bank: 0, program: 40 });
   } finally { await app.close(); }
 });
 
@@ -220,15 +297,17 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     assert.equal(requests.length, 0);
     await app.click('[data-action="practice-settings"]');
     assert.match(app.find('[role="dialog"]').textContent!, /MuseScore settings/);
-    assert.match(app.find(".practice-parts").textContent!, /Hidden in score/);
+    assert.doesNotMatch(app.find(".practice-parts").textContent!, /Hidden in score/);
+    assert.equal(app.find("#practice-visible-instruments").textContent, "Visible instruments");
+    assert.equal(app.find("#practice-hidden-instruments").textContent, "Hidden instruments");
     assert.equal(app.find<HTMLInputElement>('[data-practice-index="0"][data-practice-field="create_track"] input, input[data-practice-index="0"][data-practice-field="create_track"]').checked, true);
     assert.match(app.find('[role="dialog"]').textContent!, /was not found/);
     assert.match(app.find('[role="dialog"]').textContent!, /Keep MuseScore closed/);
-    assert.equal(app.document.querySelector("#foreground_sound-1"), null);
-    assert.equal(app.document.querySelector("#background_sound-1"), null);
-    assert.equal(app.document.querySelectorAll(".sound-picker").length, 2, "inactive instruments have no pickers");
+    assert.ok(app.find<HTMLInputElement>("#foreground_sound-1").disabled);
+    assert.ok(app.find<HTMLInputElement>("#background_sound-1").disabled);
+    assert.equal(app.document.querySelectorAll(".sound-picker").length, 4, "inactive instruments retain disabled sound pickers");
     assert.deepEqual([...app.document.querySelectorAll('.practice-part .sound-picker input[role="combobox"]')].map((input) => input.id),
-      ["foreground_sound-0", "background_sound-0"], "foreground and background sounds remain separate controls");
+      ["foreground_sound-0", "background_sound-0", "foreground_sound-1", "background_sound-1"], "foreground and background sounds remain separate controls");
     for (const [id, label] of [["background_sound-0", "Background Instrument"], ["foreground_sound-0", "Foreground Instrument"]]) {
       const labels = app.find(`#${id}`).getAttribute("aria-labelledby")!.split(" ");
       assert.equal(labels.map((id) => app.document.getElementById(id)!.textContent).join(" "), `${label} · Alt 2, instrument 1`);
@@ -249,20 +328,21 @@ test("practice UI configures sounds, validates exports, reports progress and ret
     assert.equal(app.find<HTMLInputElement>("#foreground_sound-0").disabled, false);
     await app.choose("#foreground_sound-0", "Piano");
     await app.click('[data-practice-index="0"][data-practice-field="include_in_background"]');
-    assert.equal(app.document.querySelector("#background_sound-0"), null);
+    assert.ok(app.find<HTMLInputElement>("#background_sound-0").disabled);
     assert.equal(app.find<HTMLInputElement>("#foreground_sound-0").value, "Piano");
     await app.click('[data-practice-index="0"][data-practice-field="create_track"]');
-    assert.equal(app.document.querySelector("#foreground_sound-0"), null);
-    assert.equal(app.document.querySelector(".sound-picker"), null);
+    assert.ok(app.find<HTMLInputElement>("#foreground_sound-0").disabled);
+    assert.equal(app.document.querySelectorAll(".sound-picker").length, 4);
     await app.click('[data-practice-index="0"][data-practice-field="include_in_background"]');
-    assert.equal(app.document.querySelector("#foreground_sound-0"), null);
-    assert.equal(app.find<HTMLInputElement>("#background_sound-0").value, "Violin", "hiding preserves the background choice");
+    assert.ok(app.find<HTMLInputElement>("#foreground_sound-0").disabled);
+    assert.equal(app.find<HTMLInputElement>("#background_sound-0").disabled, false);
+    assert.equal(app.find<HTMLInputElement>("#background_sound-0").value, "Violin", "disabling preserves the background choice");
     await app.click('[data-practice-index="0"][data-practice-field="create_track"]');
-    assert.equal(app.find<HTMLInputElement>("#foreground_sound-0").value, "Piano", "hiding preserves the foreground choice");
+    assert.equal(app.find<HTMLInputElement>("#foreground_sound-0").value, "Piano", "disabling preserves the foreground choice");
     await app.click('[data-practice-index="0"][data-practice-field="include_in_background"]');
     await app.click('[data-practice-index="1"][data-practice-field="include_in_background"]');
-    assert.equal(app.document.querySelector("#foreground_sound-1"), null);
-    assert.ok(app.find("#background_sound-1"));
+    assert.ok(app.find<HTMLInputElement>("#foreground_sound-1").disabled);
+    assert.equal(app.find<HTMLInputElement>("#background_sound-1").disabled, false);
     await app.click('[data-action="practice-export"]');
     assert.match(app.find('[role="alert"]').textContent!, /background sound for instrument 2/);
     await app.choose("#background_sound-1", "Violin");
@@ -637,7 +717,7 @@ test("explicit practice defaults update each mode independently and survive scor
       assert.equal(value("background-reduction"), "9");
       assert.equal(value("metronome-level"), "-12");
       assert.equal(app.find<HTMLInputElement>("#practice-metronome").checked, true);
-      assert.equal(app.document.querySelector("#foreground_sound-2"), null, "membership choices remain per score");
+      assert.ok(app.find<HTMLInputElement>("#foreground_sound-2").disabled, "membership choices remain per score");
     };
     await app.menu("open-score");
     await app.click('[data-mode="practice"]');

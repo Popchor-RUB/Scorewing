@@ -45,6 +45,21 @@ These references use web UI components in desktop hosts. This design retains Sco
 
 Score names, paths, voices, rehearsal ranges, and export counts are illustrative.
 
+## Instrument visibility groups — November 5 revision
+
+Status: updated in the existing Figcraft source and affected exports; approved for implementation on November 6, 2026. This revision supersedes earlier visibility/default statements where they differ.
+
+- Split and Merge group their left source lists, and Practice groups its middle instrument table, under Visible instruments followed by Hidden instruments. Both sections are always expanded, empty sections are omitted, and source-score order is preserved within each group. Grouping must preserve original metadata indices and instrument identity.
+- Remove the per-entry Hidden in score and Hidden in source labels. Group headings convey source visibility. Retain multi-staff eligibility explanations and disabled, unchecked Split/Merge controls.
+- On a newly opened score, Split checks every eligible visible instrument for every supported source format; hidden instruments start unchecked. Merge starts with every instrument unchecked. Practice checks both foreground track creation and background inclusion for visible instruments; both start unchecked for hidden instruments.
+- These are new-score defaults. Remember each tool's manual choices when navigating between tools. Select all retains its existing scope, including eligible hidden sources; grouped and unsupported Merge sources remain ineligible.
+- Each Merge source occupies one compact single-line row: checkbox, instrument name, and a smaller Grouped indicator immediately next to the name when assigned. Do not add voice-count or separate status sublines. Unsupported multi-staff instruments retain a smaller inline 2 staves · Not supported explanation, disabled checkbox, and accessible description.
+- Merge's selected count and Create merge group button form a fixed footer below the scrolling source list. They remain visible while a long instrument list scrolls. Export commands retain their existing fixed placement.
+- Practice keeps the instrument name as a separate heading, followed by two labeled rows. Create practice track controls foreground track creation and its foreground sound; Include in background controls accompaniment and its background sound. Each checkbox is on the left of its label, with the associated sound input and Set Default action aligned to the right.
+- Both Practice sound pickers remain visible when their checkbox is unchecked. Disable the corresponding input and Set Default action, preserving and displaying the saved sound; do not hide the input or clear the choice. Enable each role independently. Near Instruments, explain that checking Create practice track creates one MP3 per selected range and background instruments accompany the other tracks.
+- Use the standard shadcn Base UI base-nova editable ComboboxInput appearance with a trailing chevron, ComboboxContent, searchable List/Item results, selected checkmarks, and normal recent/all sound groups. Show each preset once, excluding recent preset IDs from the all-sounds list. The input itself is editable; do not substitute a button-triggered popover with a separate search box. Keep filtering, no-results feedback, recent sounds, arrow-key navigation, Enter selection, Escape dismissal, and focus behavior. Frame 13 shows the focused input and open results; unchecked hidden rows illustrate visible disabled inputs.
+- Frame 04 intentionally illustrates an already-created merge group; frame 18 illustrates the empty initial Merge state. Main Practice examples use Soprano and Alto as visible instruments and Tenor and Bass as hidden instruments. Compact views illustrate clipping inside the scrolling list rather than expanding the window.
+
 ## Implementation invariants
 
 - Keep native OS title bars and existing native menus. The illustrated title bar is a reference, not a custom-chrome requirement. Show platform-appropriate shortcut labels.

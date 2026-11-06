@@ -155,37 +155,43 @@ export function PracticeView({
         </section>
 
         <section className="workspace-pane instruments-pane" aria-label="Practice instruments" aria-disabled={instrumentsDisabled}>
-          <header className="pane-header"><h2>Instruments</h2><span className="muted">{trackCount} tracks enabled</span>
+          <header className="pane-header practice-instruments-header"><h2>Instruments</h2><span className="muted">{trackCount} tracks enabled</span>
             {compact && <Button ref={mixButton} className="practice-compact-settings" variant="outline" disabled={busy} onClick={() => setMixOpen(true)}>Mix &amp; renderer</Button>}
+            <p className="muted practice-instruments-explanation">Check Create practice track for one MP3 per selected range.<br />Background instruments accompany the other tracks.</p>
           </header>
           <div className="pane-body practice-parts">
-            {parts.map((part, index) => {
-              const setting = options.parts[index];
-              const label = part.name || "Unnamed instrument";
-              return <section className="practice-part" key={part.key} role="group" aria-labelledby={`practice-part-${index}`}>
-                <label className="checkbox-row practice-track-choice" data-practice-index={index} data-practice-field="create_track">
-                  <Checkbox checked={setting.create_track} disabled={instrumentsDisabled} onCheckedChange={(value) => { setting.create_track = value; onOptionsChange(); }} />
-                  <span id={`practice-part-${index}`}>{label}</span><span className="sr-only"> · Create practice track</span>
-                </label>
-                {!part.visible && <p className="muted">Hidden in score</p>}
-                <div className="practice-memberships flex flex-col gap-2">
-                  <div className="practice-foreground-row flex items-end gap-3">
-                    {setting.create_track && <SoundPicker id={`foreground_sound-${index}`} label="Foreground Instrument"
-                      aria-label={`${label}, instrument ${index + 1}`}
-                      presets={environment?.presets ?? []} value={setting.foreground_sound} isDisabled={instrumentsDisabled}
-                      defaultValue={defaults.foreground_sound} onSetDefault={(sound) => onSetDefault("foreground_sound", sound)}
-                      onChange={(value) => { setting.foreground_sound = value; onOptionsChange(); }} />}
-                    <label className="checkbox-row" data-practice-index={index} data-practice-field="include_in_background"><Checkbox checked={setting.include_in_background} disabled={instrumentsDisabled}
-                      onCheckedChange={(value) => { setting.include_in_background = value; onOptionsChange(); }} />Include in background<span className="sr-only"> · {label}</span></label>
-                  </div>
-                  <div className="practice-membership grid gap-2">
-                    {setting.include_in_background && <SoundPicker id={`background_sound-${index}`} label="Background Instrument"
-                      aria-label={`${label}, instrument ${index + 1}`}
-                      presets={environment?.presets ?? []} value={setting.background_sound} isDisabled={instrumentsDisabled}
-                      defaultValue={defaults.background_sound} onSetDefault={(sound) => onSetDefault("background_sound", sound)}
-                      onChange={(value) => { setting.background_sound = value; onOptionsChange(); }} />}
-                  </div>
-                </div>
+            {[true, false].map((visible) => {
+              const group = parts.map((part, index) => ({ part, index })).filter(({ part }) => part.visible === visible);
+              const groupId = `practice-${visible ? "visible" : "hidden"}-instruments`;
+              return group.length > 0 && <section className="practice-visibility-group" key={groupId} aria-labelledby={groupId}>
+                <h3 className="instrument-visibility-heading" id={groupId}>{visible ? "Visible instruments" : "Hidden instruments"}</h3>
+                {group.map(({ part, index }) => {
+                  const setting = options.parts[index];
+                  const label = part.name || "Unnamed instrument";
+                  return <section className="practice-part" key={part.key} role="group" aria-labelledby={`practice-part-${index}`}>
+                    <h4 className="practice-part-heading" id={`practice-part-${index}`}>{label}</h4>
+                    <div className="practice-sound-row">
+                      <label className="checkbox-row practice-track-choice" data-practice-index={index} data-practice-field="create_track">
+                        <Checkbox checked={setting.create_track} disabled={instrumentsDisabled} onCheckedChange={(value) => { setting.create_track = value; onOptionsChange(); }} />
+                        Create practice track<span className="sr-only"> · {label}</span>
+                      </label>
+                      <SoundPicker id={`foreground_sound-${index}`} label="Foreground Instrument"
+                          aria-label={`${label}, instrument ${index + 1}`}
+                          presets={environment?.presets ?? []} value={setting.foreground_sound} isDisabled={instrumentsDisabled || !setting.create_track}
+                          defaultValue={defaults.foreground_sound} onSetDefault={(sound) => onSetDefault("foreground_sound", sound)}
+                          onChange={(value) => { setting.foreground_sound = value; onOptionsChange(); }} />
+                    </div>
+                    <div className="practice-sound-row">
+                      <label className="checkbox-row" data-practice-index={index} data-practice-field="include_in_background"><Checkbox checked={setting.include_in_background} disabled={instrumentsDisabled}
+                        onCheckedChange={(value) => { setting.include_in_background = value; onOptionsChange(); }} />Include in background<span className="sr-only"> · {label}</span></label>
+                      <SoundPicker id={`background_sound-${index}`} label="Background Instrument"
+                          aria-label={`${label}, instrument ${index + 1}`}
+                          presets={environment?.presets ?? []} value={setting.background_sound} isDisabled={instrumentsDisabled || !setting.include_in_background}
+                          defaultValue={defaults.background_sound} onSetDefault={(sound) => onSetDefault("background_sound", sound)}
+                          onChange={(value) => { setting.background_sound = value; onOptionsChange(); }} />
+                    </div>
+                  </section>;
+                })}
               </section>;
             })}
             {result && <PracticeResults key={result.directory} result={result} />}

@@ -195,7 +195,7 @@ export function newArrangement(): Arrangement {
   };
 }
 
-export function chooseArrangementTool(arrangement: Arrangement, kind: Arrangement["kind"], parts: Part[], useVisibilityDefaults: boolean): void {
+export function chooseArrangementTool(arrangement: Arrangement, kind: Arrangement["kind"], parts: Part[]): void {
   const previous = arrangement.kind;
   if (previous === "split" || previous === "merge") {
     if (arrangement.selections[previous]) arrangement.selections[previous] = arrangement.selected;
@@ -203,7 +203,7 @@ export function chooseArrangementTool(arrangement: Arrangement, kind: Arrangemen
   arrangement.kind = kind;
   if (kind === "split" || kind === "merge") {
     arrangement.selected = arrangement.selections[kind] ?? new Set(parts
-      .filter((part) => useVisibilityDefaults && part.visible !== false && isTransformable(part))
+      .filter((part) => kind === "split" && part.visible !== false && isTransformable(part))
       .map((part) => part.id));
     arrangement.selections[kind] = arrangement.selected;
   }

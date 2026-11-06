@@ -20,21 +20,29 @@ export function MergeWorkspace({ parts, state, busy, exporting, onChange, onExpo
           </Button>
         </div>
         <div className="pane-body instruments" role="group" aria-label="Instruments">
-          {parts.map((part) => <div className="source-row" key={part.id}>
-            <Checkbox id={`merge-source-${part.id}`} data-part={part.id} checked={isTransformable(part) && !assigned.has(part.id) && state.selected.has(part.id)} disabled={busy || assigned.has(part.id) || !isTransformable(part)}
-              aria-describedby={!isTransformable(part) ? `merge-reason-${part.id}` : undefined}
-              onCheckedChange={(checked) => onChange((next) => { if (checked) next.selected.add(part.id); else next.selected.delete(part.id); })} />
-            <label className="source-copy" htmlFor={`merge-source-${part.id}`}><span className="part-name">{part.name || part.id}</span>
-              {part.visible === false && <span className="muted source-visibility">Hidden in source</span>}
-              {isTransformable(part) ? <span className="muted source-count">{assigned.has(part.id) ? "Grouped" : `${part.voice_count} ${part.voice_count === 1 ? "voice" : "voices"}`}</span>
-                : <span className="muted source-count" id={`merge-reason-${part.id}`}>{(part.staff_count ?? 1) > 1 ? `${part.staff_count} source staves · Multi-staff transformation is unsupported.` : "Transformation is unsupported."} Retained in export.</span>}
-            </label>
-          </div>)}
-          <div className="merge-create"><p className="muted">{selected.length ? `${selected.length} instruments selected` : "No instruments selected"}</p>
-            <Button data-action="add-group" variant="outline" disabled={busy || selected.length < 2} onClick={onCreateGroup}>Create merge group</Button>
-          </div>
+          {[true, false].map((visible) => {
+            const group = parts.filter((part) => (part.visible !== false) === visible);
+            if (!group.length) return null;
+            const heading = visible ? "Visible instruments" : "Hidden instruments";
+            return <section className="instrument-visibility-group" aria-label={heading} key={heading}>
+              <h3 className="instrument-visibility-heading">{heading}</h3>
+              {group.map((part) => <div className="source-row merge-source-row" key={part.id}>
+                <Checkbox id={`merge-source-${part.id}`} data-part={part.id} checked={isTransformable(part) && !assigned.has(part.id) && state.selected.has(part.id)} disabled={busy || assigned.has(part.id) || !isTransformable(part)}
+                  aria-describedby={!isTransformable(part) ? `merge-reason-${part.id}` : undefined}
+                  onCheckedChange={(checked) => onChange((next) => { if (checked) next.selected.add(part.id); else next.selected.delete(part.id); })} />
+                <label className="source-copy" htmlFor={`merge-source-${part.id}`}><span className="part-name">{part.name || part.id}</span>
+                  {assigned.has(part.id) && <span className="muted source-status">Grouped</span>}
+                  {!isTransformable(part) && <><span className="muted source-status" aria-hidden="true">{(part.staff_count ?? 1) > 1 ? `${part.staff_count} staves · ` : ""}Not supported</span>
+                    <span className="sr-only" id={`merge-reason-${part.id}`}>{(part.staff_count ?? 1) > 1 ? `${part.staff_count} source staves · Multi-staff transformation is unsupported.` : "Transformation is unsupported."} Retained in export.</span></>}
+                </label>
+              </div>)}
+            </section>;
+          })}
           <p className="pane-note muted">All original instruments stay in the export with their source visibility. Merged instruments are visible, including results from hidden sources.</p>
         </div>
+        <footer className="merge-create"><p className="muted">{selected.length ? `${selected.length} instruments selected` : "No instruments selected"}</p>
+          <Button data-action="add-group" variant="outline" disabled={busy || selected.length < 2} onClick={onCreateGroup}>Create merge group</Button>
+        </footer>
       </section>
       <section className="pane configuration-pane" aria-label="Merge configuration">
         <div className="pane-header"><h2>Merge configuration</h2><p className="muted">Set the stem direction for each source staff.</p></div>

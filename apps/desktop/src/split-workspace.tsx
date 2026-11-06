@@ -27,19 +27,26 @@ export function SplitWorkspace({ parts, state, busy, exporting, onChange, onExpo
           </Button>
         </div>
         <div className="pane-body instruments" role="group" aria-label="Instruments">
-          {parts.map((part) => {
-            const lanes = part.split_plans[state.mode].length;
-            const supported = isTransformable(part);
-            return <div className="source-row" key={part.id}>
-              <Checkbox id={`split-source-${part.id}`} data-part={part.id} checked={supported && state.selected.has(part.id)} disabled={busy || !supported}
-                aria-describedby={!supported ? `split-reason-${part.id}` : undefined}
-                onCheckedChange={(checked) => onChange((next) => { if (checked) next.selected.add(part.id); else next.selected.delete(part.id); })} />
-              <label className="source-copy" htmlFor={`split-source-${part.id}`}><span className="part-name">{part.name || part.id}</span>
-                {part.visible === false && <span className="muted source-visibility">Hidden in source</span>}
-                {supported ? <span className="muted source-count">{lanes} new {lanes === 1 ? "staff" : "staves"}</span>
-                  : <span className="muted source-count" id={`split-reason-${part.id}`}>{(part.staff_count ?? 1) > 1 ? `${part.staff_count} source staves · Multi-staff transformation is unsupported.` : "Transformation is unsupported."} Retained in export.</span>}
-              </label>
-            </div>;
+          {[true, false].map((visible) => {
+            const group = parts.filter((part) => (part.visible !== false) === visible);
+            if (!group.length) return null;
+            const heading = visible ? "Visible instruments" : "Hidden instruments";
+            return <section className="instrument-visibility-group" aria-label={heading} key={heading}>
+              <h3 className="instrument-visibility-heading">{heading}</h3>
+              {group.map((part) => {
+                const lanes = part.split_plans[state.mode].length;
+                const supported = isTransformable(part);
+                return <div className="source-row" key={part.id}>
+                  <Checkbox id={`split-source-${part.id}`} data-part={part.id} checked={supported && state.selected.has(part.id)} disabled={busy || !supported}
+                    aria-describedby={!supported ? `split-reason-${part.id}` : undefined}
+                    onCheckedChange={(checked) => onChange((next) => { if (checked) next.selected.add(part.id); else next.selected.delete(part.id); })} />
+                  <label className="source-copy" htmlFor={`split-source-${part.id}`}><span className="part-name">{part.name || part.id}</span>
+                    {supported ? <span className="muted source-count">{lanes} new {lanes === 1 ? "staff" : "staves"}</span>
+                      : <span className="muted source-count" id={`split-reason-${part.id}`}>{(part.staff_count ?? 1) > 1 ? `${part.staff_count} source staves · Multi-staff transformation is unsupported.` : "Transformation is unsupported."} Retained in export.</span>}
+                  </label>
+                </div>;
+              })}
+            </section>;
           })}
           <p className="pane-note muted">All original instruments stay in the export with their source visibility. Generated staves are visible, including those from hidden sources.</p>
         </div>

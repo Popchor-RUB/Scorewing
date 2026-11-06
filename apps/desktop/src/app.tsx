@@ -362,7 +362,7 @@ export function mountApp(container: HTMLElement): () => void {
     try {
       if (kind !== "practice" && kind !== "diff") session.document = await prepare(session.document);
       if (disposed) return;
-      chooseArrangementTool(session.arrangement, kind, session.document.parts, session.document.format === "musescore");
+      chooseArrangementTool(session.arrangement, kind, session.document.parts);
       session.stage = "configuration";
       focusTarget = "configuration";
       message = ""; messageError = false;

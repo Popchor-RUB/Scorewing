@@ -131,26 +131,28 @@ test("export catches invalid or overlapping merge groups", () => {
   assert.throws(() => operation(state, parts), /distinct/);
 });
 
-test("MuseScore visibility initializes each tool once and remembers an explicit clear", () => {
+test("Split defaults to eligible visible sources, Merge starts empty, and each tool remembers choices", () => {
   const sources = parts.map((part, index) => ({ ...part, visible: index !== 1, staff_count: index === 3 ? 2 : 1 }));
   const state = newArrangement();
-  chooseArrangementTool(state, "split", sources, true);
+  chooseArrangementTool(state, "split", sources);
   assert.deepEqual([...state.selected], ["P1", "P3"]);
   state.selected = new Set();
-  chooseArrangementTool(state, "merge", sources, true);
-  assert.deepEqual([...state.selected], ["P1", "P3"]);
-  state.selected.add("P2");
-  chooseArrangementTool(state, "practice", sources, true);
-  chooseArrangementTool(state, "split", sources, true);
+  chooseArrangementTool(state, "merge", sources);
   assert.deepEqual([...state.selected], []);
-  chooseArrangementTool(state, "merge", sources, true);
-  assert.deepEqual([...state.selected], ["P1", "P3", "P2"]);
+  state.selected.add("P2");
+  chooseArrangementTool(state, "practice", sources);
+  chooseArrangementTool(state, "split", sources);
+  assert.deepEqual([...state.selected], []);
+  chooseArrangementTool(state, "merge", sources);
+  assert.deepEqual([...state.selected], ["P2"]);
   const next = newArrangement();
-  chooseArrangementTool(next, "split", sources, true);
+  chooseArrangementTool(next, "split", sources);
   assert.deepEqual([...next.selected], ["P1", "P3"]);
   const musicxml = newArrangement();
-  chooseArrangementTool(musicxml, "split", sources, false);
-  assert.deepEqual([...musicxml.selected], [], "plain MusicXML retains its existing defaults");
+  chooseArrangementTool(musicxml, "split", parts);
+  assert.deepEqual([...musicxml.selected], ["P1", "P2", "P3", "P4"], "missing visibility is visible in MusicXML");
+  chooseArrangementTool(musicxml, "merge", parts);
+  assert.deepEqual([...musicxml.selected], [], "MusicXML Merge also starts empty");
 });
 
 test("unsupported sources cannot enter split requests or merge groups", () => {

@@ -6,6 +6,9 @@ on:
       release:
         type: boolean
         default: false
+      nightly:
+        type: boolean
+        default: false
 
 jobs:
   platform:
@@ -33,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-          fetch-depth: ${{ inputs.release && '0' || '1' }}
+          fetch-depth: ${{ (inputs.release || inputs.nightly) && '0' || '1' }}
       - uses: dtolnay/rust-toolchain@1.90.0
         with:
           components: rustfmt, clippy
@@ -42,6 +45,15 @@ jobs:
           node-version: 22.22.0
           cache: npm
           cache-dependency-path: apps/desktop/package-lock.json
+      - name: Stamp nightly version and bundle configuration
+        if: inputs.nightly
+        run: node tools/nightly-version.mjs
+      - name: Validate nightly signing setup
+        if: inputs.nightly
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: node -e "require('node:assert/strict').ok(process.env.TAURI_SIGNING_PRIVATE_KEY, 'Set the TAURI_SIGNING_PRIVATE_KEY Actions secret')"
       - name: Validate stable version tag and signing setup
         if: inputs.release
         shell: bash
@@ -67,26 +79,9 @@ jobs:
         with:
           result-encoding: string
           script: |
-            const { execFileSync } = require('node:child_process');
-            const repo = { owner: 'Popchor-RUB', repo: 'Scorewing' };
-            const tag = context.ref.replace('refs/tags/', '');
-            // Draft releases must be found through the list endpoint.
-            const releases = await github.paginate(github.rest.repos.listReleases, { ...repo, per_page: 100 });
-            const existing = releases.find(release => release.tag_name === tag);
-            if (existing) {
-              if (!existing.draft) throw new Error('This release is already published; use a new version tag.');
-              return existing.body || '';
-            }
-            let range = 'HEAD';
-            try {
-              const { data: previous } = await github.rest.repos.getLatestRelease(repo);
-              range = `refs/tags/${previous.tag_name}..HEAD`;
-            } catch (error) {
-              if (error.status !== 404) throw error;
-            }
-            const commits = execFileSync('git', ['log', '--reverse', '--no-merges', '--format=- %s', range, '--'],
-              { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trimEnd();
-            return `Review all platform installers and latest.json before publishing this release.\n\n## Commits\n\n${commits || 'No new non-merge commits.'}\n`;
+            const { pathToFileURL } = require('node:url');
+            const { releaseNotes } = await import(pathToFileURL(`${process.env.GITHUB_WORKSPACE}/tools/release-notes.mjs`).href);
+            return releaseNotes({ github, repo: context.repo, tag: context.ref.replace('refs/tags/', '') });
       - name: Prepare Apple signing and notarization
         if: runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true'
         env:
@@ -159,8 +154,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.release && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.release && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ (inputs.release || inputs.nightly) && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ (inputs.release || inputs.nightly) && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
           APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true' && secrets.APPLE_CERTIFICATE || '' }}
           APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && env.APPLE_SIGNING_ENABLED == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
@@ -185,6 +180,7 @@ jobs:
             ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
             --bundles ${{ matrix.bundle }}
             ${{ inputs.release && '--config ''{"bundle":{"createUpdaterArtifacts":true}}''' || '' }}
+            ${{ inputs.nightly && '--config nightly.tauri.json' || '' }}
             -- --locked
       - name: Remove standalone updater signatures
         if: inputs.release
@@ -238,6 +234,7 @@ jobs:
         shell: bash
         env:
           IS_RELEASE: ${{ inputs.release }}
+          IS_NIGHTLY: ${{ inputs.nightly }}
         run: |
           shopt -s nullglob
           case "$RUNNER_OS" in
@@ -260,12 +257,22 @@ jobs:
             exit 1
           fi
           version="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
-          if [[ "$IS_RELEASE" != true ]]; then
+          if [[ "$IS_RELEASE" != true && "$IS_NIGHTLY" != true ]]; then
             commit="$(git rev-parse HEAD)"
             version+="-${commit:0:7}"
           fi
           mkdir -p dist
           cp "${packages[0]}" "dist/Scorewing_${version}_${suffix}"
+      - name: Stage signed nightly package
+        if: inputs.nightly
+        shell: bash
+        run: node tools/stage-nightly.mjs
+      - uses: actions/upload-artifact@v4
+        if: inputs.nightly
+        with:
+          name: nightly-${{ matrix.artifact }}
+          path: nightly-dist/*
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}

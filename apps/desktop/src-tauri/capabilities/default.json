@@ -7,7 +7,6 @@
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:resources:allow-close",
-    "updater:allow-check",
     "updater:allow-download",
     "updater:allow-install",
     "process:allow-restart"

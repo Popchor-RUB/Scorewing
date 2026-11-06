@@ -24,6 +24,7 @@ use tauri_plugin_opener::OpenerExt;
 
 mod menu;
 mod update_prompt;
+mod updates;
 
 #[derive(Default)]
 struct Documents {
@@ -1047,29 +1048,6 @@ fn open_practice_export_folder(app: tauri::AppHandle, directory: String) -> Resu
         .map_err(|error| error.to_string())
 }
 
-#[tauri::command]
-fn updater_supported(app: tauri::AppHandle) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        app.env().appimage.is_some()
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = app;
-        true
-    }
-}
-
-#[tauri::command]
-fn open_update_downloads(app: tauri::AppHandle) -> Result<(), String> {
-    app.opener()
-        .open_url(
-            "https://github.com/Popchor-RUB/Scorewing/releases/latest",
-            None::<&str>,
-        )
-        .map_err(|error| error.to_string())
-}
-
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1093,9 +1071,12 @@ pub fn run() {
             resolve_practice_export,
             cancel_practice_export,
             open_practice_export_folder,
-            updater_supported,
-            open_update_downloads,
-            update_prompt::show_update_prompt,
+            updates::update_environment,
+            updates::check_update,
+            updates::open_update_downloads,
+            update_prompt::sync_update_prompt,
+            update_prompt::hide_update_prompt,
+            update_prompt::update_prompt_action,
             menu::set_file_menu_state,
             menu::set_update_menu_state
         ])

@@ -1,6 +1,6 @@
 # ScoreWing design
 
-[scorewing.figcraft](scorewing.figcraft) is the single editable source of truth for the desktop UI. It contains all 26 existing screen/state frames on six pages, including foundations, dark and compact variants, MuseScore import, export destinations, and the update window. The update-window layers and embedded application icon were merged into the main document using the Figcraft MCP.
+[scorewing.figcraft](scorewing.figcraft) is the single editable source of truth for the desktop UI. It contains all 45 screen/state frames on six pages, including foundations, dark and compact variants, MuseScore import, export destinations, and the update window. The update-window layers and embedded application icon were merged into the main document using the Figcraft MCP.
 
 Open [the gallery](index.html) to browse every frame, or select an individual PNG below. `screens/` contains exports from the consolidated document: desktop frames at 1× and update-window frames at 2×. Frame numbers are unique across the document and prefix export filenames.
 
@@ -57,6 +57,25 @@ These notes preserve decisions and historical verification evidence; the editabl
 | 21 · Practice tracks — direct output | 05 · Export destinations | `2674` | [21-practice-direct-output.png](screens/21-practice-direct-output.png) | 1× | Visibility groups; explicit role rows; editable sound inputs; default shadcn fields · implemented |
 | 22 · Existing tracks — overwrite | 05 · Export destinations | `2818` | [22-overwrite.png](screens/22-overwrite.png) | 1× | Visibility groups; explicit role rows; editable sound inputs; default shadcn fields · implemented |
 | 23 · Existing tracks — clear folder | 05 · Export destinations | `2962` | [23-clear-folder.png](screens/23-clear-folder.png) | 1× | Visibility groups; explicit role rows; editable sound inputs; default shadcn fields · implemented |
-| 24 · Update available · Light | 06 · Update window | `3177` | [24-update-available-light.png](screens/24-update-available-light.png) | 2× | — |
-| 25 · Update available · Dark | 06 · Update window | `3189` | [25-update-available-dark.png](screens/25-update-available-dark.png) | 2× | — |
-| 26 · Installation disabled · Light | 06 · Update window | `3201` | [26-update-installation-disabled.png](screens/26-update-installation-disabled.png) | 2× | — |
+| 24 · Update available · Light | 06 · Update window | `3177` | [24-update-available-light.png](screens/24-update-available-light.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 25 · Update available · Dark | 06 · Update window | `3189` | [25-update-available-dark.png](screens/25-update-available-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 26 · Installation disabled · Light | 06 · Update window | `3201` | [26-update-installation-disabled.png](screens/26-update-installation-disabled.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 27 · Installation disabled · Dark | 06 · Update window | `4345` | [27-update-installation-disabled-dark.png](screens/27-update-installation-disabled-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 28 · Checking for updates · Light | 06 · Update window | `4361` | [28-update-checking.png](screens/28-update-checking.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 29 · Checking for updates · Dark | 06 · Update window | `4377` | [29-update-checking-dark.png](screens/29-update-checking-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 30 · Up to date · Light | 06 · Update window | `4393` | [30-update-up-to-date.png](screens/30-update-up-to-date.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 31 · Up to date · Dark | 06 · Update window | `4409` | [31-update-up-to-date-dark.png](screens/31-update-up-to-date-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 32 · Update check failed · Light | 06 · Update window | `4425` | [32-update-check-error.png](screens/32-update-check-error.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 33 · Update check failed · Dark | 06 · Update window | `4441` | [33-update-check-error-dark.png](screens/33-update-check-error-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 34 · Downloading update · Light | 06 · Update window | `4457` | [34-update-downloading.png](screens/34-update-downloading.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 35 · Downloading update · Dark | 06 · Update window | `4475` | [35-update-downloading-dark.png](screens/35-update-downloading-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 36 · Update ready · Light | 06 · Update window | `4493` | [36-update-ready.png](screens/36-update-ready.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 37 · Update ready · Dark | 06 · Update window | `4509` | [37-update-ready-dark.png](screens/37-update-ready-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 38 · Installing update · Light | 06 · Update window | `4525` | [38-update-installing.png](screens/38-update-installing.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 39 · Installing update · Dark | 06 · Update window | `4541` | [39-update-installing-dark.png](screens/39-update-installing-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 40 · Older channel version · Light | 06 · Update window | `4557` | [40-update-older-version.png](screens/40-update-older-version.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 41 · Older channel version · Dark | 06 · Update window | `4573` | [41-update-older-version-dark.png](screens/41-update-older-version-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 42 · Confirm downgrade · Light | 06 · Update window | `4589` | [42-update-confirm-downgrade.png](screens/42-update-confirm-downgrade.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 43 · Confirm downgrade · Dark | 06 · Update window | `4605` | [43-update-confirm-downgrade-dark.png](screens/43-update-confirm-downgrade-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 44 · Manual download required · Light | 06 · Update window | `4621` | [44-update-unsupported-install.png](screens/44-update-unsupported-install.png) | 2× | Persistent channel-aware updater · approved and implemented |
+| 45 · Manual download required · Dark | 06 · Update window | `4637` | [45-update-unsupported-install-dark.png](screens/45-update-unsupported-install-dark.png) | 2× | Persistent channel-aware updater · approved and implemented |

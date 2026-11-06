@@ -1,28 +1,44 @@
 import { useEffect, useRef, useState } from "react";
-import { Button } from "./components/ui/button.tsx";
 import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog.tsx";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { listen } from "@tauri-apps/api/event";
+import { Update } from "@tauri-apps/plugin-updater";
+import { UpdatePanel, type ReleaseChannel, type UpdateAction, type UpdateWindowState } from "./update-prompt.tsx";
 
-const SKIPPED_VERSION_KEY = "scorewing.skipped-update-version";
-
-type Status = "idle" | "checking" | "available" | "downloading" | "ready" | "installing";
+const CHANNEL_KEY = "scorewing.update-channel";
+const skipKey = (channel: ReleaseChannel) => `scorewing.skipped-update-version${channel === "nightly" ? ".nightly" : ""}`;
+type Metadata = ConstructorParameters<typeof Update>[0] & { downgrade: boolean };
+type Environment = { currentVersion: string; supported: boolean };
 
 export function UpdateControl({ checkRequest, canInstall, onInstall }: {
   checkRequest: number;
   canInstall: boolean;
   onInstall: (update: Update) => Promise<void>;
 }) {
-  const [status, setStatus] = useState<Status>("idle");
-  const [open, setOpen] = useState(false);
-  const [supported, setSupported] = useState(true);
-  const [error, setError] = useState("");
-  const [progress, setProgress] = useState<number | undefined>();
+  const [state, setState] = useState<UpdateWindowState>({ revision: 0, channel: "stable", currentVersion: "", status: "idle", supported: true, canInstall, downgrade: false, error: "" });
+  const stateRef = useRef(state);
+  const [fallback, setFallback] = useState(false);
+  const [windowError, setWindowError] = useState("");
   const update = useRef<Update | null>(null);
   const active = useRef(true);
+  const visible = useRef(false);
   const working = useRef(false);
-  const manualCheck = useRef(false);
-  const prompting = useRef(false);
+  const request = useRef(0);
+  const approvedDowngrade = useRef<number | undefined>(undefined);
+  const environment = useRef<Promise<Environment> | undefined>(undefined);
+  const selectedChannel = useRef<ReleaseChannel | undefined>(undefined);
+  const windowSync = useRef(Promise.resolve());
+  const canInstallRef = useRef(canInstall);
+  const onInstallRef = useRef(onInstall);
+  const view = { ...state, canInstall };
+  canInstallRef.current = canInstall;
+  onInstallRef.current = onInstall;
+
+  function change(patch: Partial<UpdateWindowState>) {
+    if (!active.current) return;
+    stateRef.current = { ...stateRef.current, ...patch };
+    setState(stateRef.current);
+  }
 
   async function closeUpdate() {
     const resource = update.current;
@@ -30,66 +46,89 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
     try { await resource?.close(); } catch (error) { console.error(error); }
   }
 
-  async function checkForUpdates(manual: boolean) {
-    manualCheck.current ||= manual;
-    if (manual) setOpen(true);
-    if (working.current || update.current) return;
-    working.current = true;
-    setStatus("checking");
-    setError("");
+  async function syncWindow(show = false) {
     try {
-      const available = await invoke<boolean>("updater_supported");
-      if (!active.current) return;
-      setSupported(available);
-      if (!available) { setStatus("idle"); return; }
-      const found = await check({ timeout: 15_000 });
-      update.current = found;
-      if (active.current) {
-        setStatus(found ? "available" : "idle");
-        let skipped = false;
-        try { skipped = localStorage.getItem(SKIPPED_VERSION_KEY) === found?.version; }
-        catch { /* Still offer updates when storage is unavailable. */ }
-        if (found && (manualCheck.current || !skipped)) setOpen(true);
-      }
+      const synced = windowSync.current.then(() => invoke("sync_update_prompt", { state: { ...stateRef.current, canInstall: canInstallRef.current }, show }));
+      windowSync.current = synced.then(() => undefined, () => undefined);
+      await synced;
+      if (show && active.current) { setFallback(false); setWindowError(""); }
+      if (show && !visible.current) await invoke("hide_update_prompt");
     } catch (error) {
-      if (active.current) {
-        setStatus("idle");
-        if (manualCheck.current) setError(`Could not check for updates: ${String(error)}`);
+      if (active.current && visible.current) {
+        setWindowError(`Could not open the update window: ${String(error)}`);
+        setFallback(true);
       }
-    } finally {
+    }
+  }
+
+  function showWindow() {
+    visible.current = true;
+    void syncWindow(true);
+  }
+
+  async function checkForUpdates(manual: boolean, channel?: ReleaseChannel) {
+    if (working.current || stateRef.current.status === "installing") {
+      if (manual) showWindow();
+      return;
+    }
+    const revision = ++request.current;
+    approvedDowngrade.current = undefined;
+    change({ revision, status: "checking", version: undefined, downgrade: false, progress: undefined, error: "", ...(channel && { channel }) });
+    if (manual) showWindow();
+    await closeUpdate();
+    try {
+      environment.current ??= invoke<Environment>("update_environment").catch((error) => { environment.current = undefined; throw error; });
+      const env = await environment.current;
+      if (!active.current || revision !== request.current) return;
+      if (!selectedChannel.current) {
+        try {
+          const saved = localStorage.getItem(CHANNEL_KEY);
+          if (saved === "stable" || saved === "nightly") selectedChannel.current = saved;
+        } catch { /* The installed channel still works without storage. */ }
+        selectedChannel.current ??= /-nightly(?:\.|$)/.test(env.currentVersion) ? "nightly" : "stable";
+      }
+      const chosen = channel ?? selectedChannel.current;
+      change({ currentVersion: env.currentVersion, supported: env.supported, channel: chosen });
+      if (!env.supported) { change({ status: "idle" }); return; }
+      const metadata = await invoke<Metadata | null>("check_update", { channel: chosen, manual });
+      const found = metadata ? new Update(metadata) : null;
+      if (!active.current || revision !== request.current) { await found?.close(); return; }
+      update.current = found;
+      change({ status: found ? "available" : "idle", version: found?.version, downgrade: metadata?.downgrade ?? false });
+      let skipped = false;
+      try { skipped = localStorage.getItem(skipKey(chosen)) === found?.version; }
+      catch { /* Still offer updates when storage is unavailable. */ }
+      if (found && !metadata?.downgrade && !manual && !skipped && !visible.current) showWindow();
+    } catch (error) {
+      if (active.current && revision === request.current) {
+        change({ status: "idle", error: manual || visible.current ? `Could not check for updates: ${String(error)}` : "" });
+      }
+    }
+  }
+
+  async function install() {
+    const current = stateRef.current;
+    if (working.current || !canInstallRef.current || !update.current || current.status !== "ready") return;
+    if (current.downgrade && approvedDowngrade.current !== current.revision) return;
+    working.current = true;
+    change({ status: "installing", error: "" });
+    try { await onInstallRef.current(update.current); }
+    catch (error) { change({ status: "ready", error: `Could not install or restart: ${String(error)}` }); }
+    finally {
       working.current = false;
       if (!active.current) await closeUpdate();
     }
   }
 
-  useEffect(() => {
-    active.current = true;
-    if (isTauri()) void checkForUpdates(false);
-    return () => {
-      active.current = false;
-      if (!working.current) void closeUpdate();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (checkRequest > 0 && active.current) void checkForUpdates(true);
-  }, [checkRequest]);
-
-  const found = update.current;
-  const label = status === "ready" ? "Update ready" : status === "downloading" ? "Downloading update…"
-    : status === "installing" ? "Installing update…" : found ? "Update available" : "Check for updates…";
-  useEffect(() => {
-    if (!isTauri()) return;
-    void invoke("set_update_menu_state", { text: label, enabled: status !== "installing" })
-      .catch((error) => { if (active.current) setError(`Could not update the update menu: ${String(error)}`); });
-  }, [label, status]);
-
-  async function download() {
-    if (working.current || !canInstall || !update.current) return;
+  async function download(downgradeConfirmed = false) {
+    const current = stateRef.current;
+    if (working.current || !canInstallRef.current || !update.current) return;
+    if (current.downgrade) {
+      if (!downgradeConfirmed || current.status !== "confirm-downgrade") return;
+      approvedDowngrade.current = current.revision;
+    } else if (current.status !== "available") return;
     working.current = true;
-    setStatus("downloading");
-    setError("");
-    setProgress(undefined);
+    change({ status: "downloading", error: "", progress: undefined });
     let downloaded = 0;
     let total: number | undefined;
     let ready = false;
@@ -98,11 +137,11 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
         if (!active.current) return;
         if (event.event === "Started") total = event.data.contentLength;
         if (event.event === "Progress") downloaded += event.data.chunkLength;
-        setProgress(total ? Math.min(100, downloaded / total * 100) : undefined);
+        change({ progress: total ? Math.min(100, downloaded / total * 100) : undefined });
       }, { timeout: 10 * 60_000 });
-      if (active.current) { setStatus("ready"); ready = true; }
+      if (active.current) { change({ status: "ready" }); ready = true; }
     } catch (error) {
-      if (active.current) { setStatus("available"); setError(`Could not download the update: ${String(error)}`); }
+      change({ status: "available", error: `Could not download the update: ${String(error)}. Check again if this nightly build is no longer available.` });
     } finally {
       working.current = false;
       if (!active.current) await closeUpdate();
@@ -110,85 +149,85 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
     if (ready) await install();
   }
 
-  async function install() {
-    if (working.current || !canInstall || !update.current) return;
-    working.current = true;
-    setStatus("installing");
-    setError("");
-    try { await onInstall(update.current); }
-    catch (error) {
-      if (active.current) { setStatus("ready"); setError(`Could not install or restart: ${String(error)}`); }
-    } finally {
-      working.current = false;
-      if (!active.current) await closeUpdate();
+  async function action(action: UpdateAction) {
+    if (!active.current) return;
+    const current = stateRef.current;
+    if (action.type === "ready") { await syncWindow(); return; }
+    if (action.revision != null && action.revision !== current.revision) return;
+    if (action.type === "cancel") {
+      if (current.status === "installing") return;
+      visible.current = false;
+      setFallback(false);
+      try { await invoke("hide_update_prompt"); } catch (error) { console.error(error); }
+      return;
     }
+    if (action.type === "open-downloads") {
+      try { await invoke("open_update_downloads", { channel: current.channel }); }
+      catch (error) { if (current.revision === stateRef.current.revision) change({ error: `Could not open GitHub Releases: ${String(error)}` }); }
+      return;
+    }
+    if (working.current || current.status === "installing") return;
+    if (action.type === "set-channel") {
+      if (action.channel === current.channel) return;
+      selectedChannel.current = action.channel;
+      let storageError = "";
+      try { localStorage.setItem(CHANNEL_KEY, action.channel); }
+      catch (error) { storageError = `Could not remember the release channel: ${String(error)}`; }
+      const revision = request.current + 1;
+      await checkForUpdates(true, action.channel);
+      if (storageError && request.current === revision) change({ error: storageError });
+    } else if (action.type === "check") await checkForUpdates(true);
+    else if (action.type === "skip" && update.current && current.status === "available") {
+      try {
+        localStorage.setItem(skipKey(current.channel), update.current.version);
+        await actionCancel();
+      } catch (error) { change({ error: `Could not remember the skipped version: ${String(error)}` }); }
+    } else if (action.type === "review-downgrade" && current.downgrade && current.status === "available") change({ status: "confirm-downgrade" });
+    else if (action.type === "back" && current.status === "confirm-downgrade") change({ status: "available" });
+    else if (action.type === "confirm-downgrade") await download(true);
+    else if (action.type === "download") await download();
+    else if (action.type === "install") await install();
   }
 
-  async function openDownloads() {
-    try { await invoke("open_update_downloads"); }
-    catch (error) { if (active.current) setError(`Could not open GitHub Releases: ${String(error)}`); }
-  }
-
-  function skipVersion() {
-    if (!update.current || working.current) return;
-    try {
-      localStorage.setItem(SKIPPED_VERSION_KEY, update.current.version);
-      setOpen(false);
-    } catch (error) {
-      setError(`Could not remember the skipped version: ${String(error)}`);
-    }
-  }
+  async function actionCancel() { await action({ type: "cancel" }); }
+  const actionRef = useRef(action);
+  actionRef.current = action;
 
   useEffect(() => {
-    if (!open || status !== "available" || error || prompting.current) return;
-    const found = update.current;
-    if (!found) return;
-    prompting.current = true;
-    void (async () => {
-      let choice: "cancel" | "skip" | "install" | undefined;
-      try {
-        choice = await invoke("show_update_prompt", { currentVersion: found.currentVersion, version: found.version, canInstall });
-      } catch (error) {
-        if (active.current) setError(`Could not open the update dialog: ${String(error)}`);
-      } finally {
-        prompting.current = false;
-      }
-      if (!active.current) return;
-      if (choice === "cancel") setOpen(false);
-      if (choice === "skip") skipVersion();
-      if (choice === "install") await download();
-    })();
-  }, [open, status, error]);
+    active.current = true;
+    if (!isTauri()) return;
+    let disposed = false;
+    const subscription = listen<UpdateAction>("update-prompt-action", (event) => { void actionRef.current(event.payload); });
+    void subscription.then(() => { if (!disposed) void checkForUpdates(false); })
+      .catch((error) => { if (!disposed) change({ error: `Could not listen for update actions: ${String(error)}` }); });
+    return () => {
+      disposed = true;
+      active.current = false;
+      ++request.current;
+      void subscription.then((unlisten) => unlisten()).catch(console.error);
+      if (!working.current) void closeUpdate();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (checkRequest > 0 && active.current) {
+      if (stateRef.current.status === "ready") showWindow();
+      else void checkForUpdates(true);
+    }
+  }, [checkRequest]);
+
+  useEffect(() => { if (isTauri()) void syncWindow(); }, [state, canInstall]);
+  const label = state.status === "ready" ? "Update ready" : state.status === "downloading" ? "Downloading update…"
+    : state.status === "installing" ? "Installing update…" : state.version ? "Update available" : "Check for updates…";
+  useEffect(() => {
+    if (isTauri()) void invoke("set_update_menu_state", { text: label, enabled: state.status !== "installing" })
+      .catch((error) => { if (active.current) change({ error: `Could not update the update menu: ${String(error)}` }); });
+  }, [label, state.status]);
 
   if (!isTauri()) return null;
-  return <Dialog open={open && (status !== "available" || !!error)}
-      onOpenChange={(value) => { if (status !== "installing") setOpen(value); }}>
-      <DialogContent>
-        <header className="dialog-header"><DialogTitle>Scorewing updates</DialogTitle></header>
-        <div className="dialog-body space-y-3">
-          <p role="status">{status === "checking" ? "Checking GitHub for updates…"
-            : status === "downloading" ? `Downloading Scorewing ${found?.version}…`
-            : status === "installing" ? "Installing the update and restarting Scorewing…"
-            : status === "ready" ? `Scorewing ${found?.version} is ready to install.`
-            : found ? `Scorewing ${found.version} is available. You have ${found.currentVersion}.`
-            : !supported ? "In-app updates on Linux require the AppImage version. Download DEB/RPM updates from GitHub Releases."
-            : !error ? "Scorewing is up to date." : "Update check failed."}</p>
-          {found?.body && <p className="max-h-48 overflow-auto whitespace-pre-wrap text-sm">{found.body}</p>}
-          {status === "downloading" && <progress className="update-download-progress" role="progressbar" aria-label="Update download" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress} max={100} value={progress} />}
-          {(status === "available" || status === "ready") && <p className="muted">{canInstall ? "Installation will restart Scorewing."
-            : "Close any open score or score selection and wait for current work to finish before installing. Closing a score discards its editing choices."}</p>}
-          {error && <p role="alert" className="text-danger wrap-anywhere">{error}</p>}
-        </div>
-        <footer className="dialog-footer">
-          <Button variant="outline" data-action="update-later" disabled={status === "installing"} onClick={() => setOpen(false)}>{status === "downloading" ? "Hide" : "Cancel"}</Button>
-          {status === "available" && <>
-            <Button variant="outline" data-action="skip-update" onClick={skipVersion}>Skip this version</Button>
-            <Button data-action="download-update" disabled={!canInstall} onClick={() => void download()}>Download &amp; Install</Button>
-          </>}
-          {status === "ready" && <Button data-action="install-update" disabled={!canInstall} onClick={() => void install()}>Install and restart</Button>}
-          {!supported && <Button data-action="update-downloads" onClick={() => void openDownloads()}>Open GitHub Releases</Button>}
-          {status === "idle" && supported && error && <Button data-action="retry-update-check" onClick={() => void checkForUpdates(true)}>Try again</Button>}
-        </footer>
-      </DialogContent>
-    </Dialog>;
+  return <Dialog open={fallback} onOpenChange={(open) => { if (!open) void actionCancel(); }}>
+    <DialogContent className="update-fallback"><DialogTitle className="sr-only">Scorewing updates</DialogTitle>
+      <UpdatePanel dialogTitle state={{ ...view, error: [windowError, state.error].filter(Boolean).join(" ") }} onAction={(value) => { void action(value); }} />
+    </DialogContent>
+  </Dialog>;
 }

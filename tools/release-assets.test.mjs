@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
+import { releaseNotes } from './release-notes.mjs';
 
 const workflow = readFileSync(new URL('../.github/workflows/build-platforms.yml', import.meta.url), 'utf8');
 const source = workflow.match(/- name: Remove standalone updater signatures[\s\S]*?script: \|\n((?: {12}.*\n)+)/)[1];
@@ -87,8 +88,6 @@ test('refuses to change a published release', async () => {
   assert.deepEqual(f.deleted, []);
 });
 
-const notesSource = workflow.match(/- name: Prepare release notes[\s\S]*?script: \|\n((?: {12}.*\n)+)/)[1];
-const prepareNotes = new AsyncFunction('require', 'github', 'context', notesSource);
 const collectSource = workflow.match(/- name: Collect app packages[\s\S]*?run: \|\n((?: {10}.*\n)+)/)[1];
 const shellOnly = { skip: process.platform === 'win32' };
 
@@ -139,10 +138,8 @@ function notesFixture(t) {
   return { ...f, releases,
     setLatest: value => { latest = value; },
     failLatest: error => { latestError = error; },
-    run: () => prepareNotes(name => {
-      assert.equal(name, 'node:child_process');
-      return { execFileSync: (command, args, options) => execFileSync(command, args, { ...options, cwd: f.root }) };
-    }, github, { ref: 'refs/tags/v0.2.3' }),
+    run: (nightly = false) => releaseNotes({ github, repo: { owner: 'Popchor-RUB', repo: 'Scorewing' },
+      tag: 'v0.2.3', nightly, cwd: f.root }),
   };
 }
 
@@ -156,6 +153,16 @@ test('first release notes include all non-merge history', async (t) => {
   const f = notesFixture(t);
   f.failLatest({ status: 404 });
   assert.ok((await f.run()).endsWith('- initial\n- feat: duet\n- fix: tempo\n- chore: release v0.2.3\n'));
+});
+
+test('nightly notes use the same chronological subjects and regenerate after stable drafts', async (t) => {
+  const f = notesFixture(t);
+  f.releases.push({ tag_name: 'v0.2.3', draft: true, body: 'Manual stable draft' });
+  const first = await f.run(true);
+  assert.ok(first.startsWith('Latest successful default-branch build.'));
+  assert.ok(first.endsWith('## Commits\n\n- feat: duet\n- fix: tempo\n- chore: release v0.2.3\n'));
+  f.git('commit', '--allow-empty', '-m', 'fix: nightly followup', '-m', 'Do not show this body');
+  assert.ok((await f.run(true)).endsWith('- fix: nightly followup\n'));
 });
 
 test('draft retries preserve manual text and published releases are refused', async (t) => {
@@ -215,6 +222,6 @@ for (const [os, directory, filename, suffix] of [
 
 test('all runs select the release bundle types and tag builds fetch history for the draft body', () => {
   assert.match(workflow, /--bundles \$\{\{ matrix.bundle \}\}/);
-  assert.match(workflow, /fetch-depth: \$\{\{ inputs.release && '0' \|\| '1' \}\}/);
+  assert.match(workflow, /fetch-depth: \$\{\{ \(inputs.release \|\| inputs.nightly\) && '0' \|\| '1' \}\}/);
   assert.match(workflow, /releaseBody: \$\{\{ steps.release-notes.outputs.result \}\}/);
 });

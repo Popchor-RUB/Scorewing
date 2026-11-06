@@ -1,78 +1,91 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 || ! $1 =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-  printf 'Usage: %s MAJOR.MINOR.PATCH\n' "$0" >&2
+if [[ $# -gt 1 ]]; then
+  printf 'Usage: %s [MAJOR.MINOR.PATCH]\n' "$0" >&2
   exit 2
 fi
-
-version=$1
-tag="v$version"
 cd "$(dirname "$0")/.."
 
 branch=$(git symbolic-ref --quiet --short HEAD) || {
   printf 'A checked-out branch is required.\n' >&2
   exit 1
 }
-status=$(git status --porcelain --untracked-files=no)
-if [[ -n $status ]]; then
+if [[ -n $(git status --porcelain --untracked-files=no) ]]; then
   printf 'Commit or discard existing changes before setting a release version.\n' >&2
   exit 1
 fi
-if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
-  printf 'Tag %s already exists.\n' "$tag" >&2
+current=$(node tools/update-version.mjs --current)
+stable_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+if [[ ! $current =~ $stable_pattern ]]; then
+  printf 'Repository version must be plain MAJOR.MINOR.PATCH; nightly suffixes belong in CI.\n' >&2
   exit 1
 fi
 
-
-node - "$version" <<'NODE'
-const fs = require('node:fs');
-const next = process.argv[2];
-const files = [
-  ['Cargo.toml', /(\[workspace\.package\]\r?\nversion = ")([^"]+)(")/g, 1],
-  ['Cargo.lock', /(\[\[package\]\]\r?\nname = "(?:practice-tracks|scorewing-cli|scorewing-core|scorewing-desktop)"\r?\nversion = ")([^"]+)(")/g, 4],
-  ['apps/desktop/package.json', /("name": "scorewing-desktop",\r?\n\s*"version": ")([^"]+)(")/g, 1],
-  ['apps/desktop/package-lock.json', /("name": "scorewing-desktop",\r?\n\s*"version": ")([^"]+)(")/g, 2],
-  ['apps/desktop/src-tauri/Cargo.toml', /(\[package\]\r?\nname = "scorewing-desktop"\r?\nversion = ")([^"]+)(")/g, 1],
-  ['apps/desktop/src-tauri/tauri.conf.json', /(^  "version": ")([^"]+)(")/gm, 1],
-];
-
-let current;
-const changes = files.map(([path, pattern, expected]) => {
-  let count = 0;
-  const updated = fs.readFileSync(path, 'utf8').replace(pattern, (_, before, old, after) => {
-    if (current === undefined) current = old;
-    if (old !== current) throw new Error(`${path}: version ${old} differs from ${current}`);
-    count++;
-    return `${before}${next}${after}`;
-  });
-  if (count !== expected) throw new Error(`${path}: expected ${expected} version entries, found ${count}`);
-  return [path, updated];
-});
-const oldParts = current.split('.').map(BigInt);
-const newParts = next.split('.').map(BigInt);
-const changed = newParts.findIndex((part, index) => part !== oldParts[index]);
-if (changed < 0 || newParts[changed] < oldParts[changed]) {
-  throw new Error(`${next} must be higher than ${current}`);
+if [[ $# -eq 1 ]]; then
+  release=$1
+else
+  printf 'Release version [%s]: ' "$current"
+  read -r release || { printf '\nCancelled; nothing changed.\n'; exit 1; }
+  release=${release:-$current}
+fi
+if [[ ! $release =~ $stable_pattern ]]; then
+  printf 'Release version must be plain MAJOR.MINOR.PATCH.\n' >&2
+  exit 2
+fi
+default_next=$(node -e 'const p = process.argv[1].split("."); p[2] = String(BigInt(p[2]) + 1n); console.log(p.join("."))' "$release")
+printf 'Next development version [%s]: ' "$default_next"
+read -r next || { printf '\nCancelled; nothing changed.\n'; exit 1; }
+next=${next:-$default_next}
+if [[ ! $next =~ $stable_pattern ]]; then
+  printf 'Next development version must be plain MAJOR.MINOR.PATCH.\n' >&2
+  exit 2
+fi
+node - "$current" "$release" "$next" <<'NODE'
+const [current, release, next] = process.argv.slice(2);
+function compare(a, b) {
+  const left = a.split('.').map(BigInt), right = b.split('.').map(BigInt);
+  for (let i = 0; i < 3; i++) {
+    if (left[i] !== right[i]) return left[i] > right[i] ? 1 : -1;
+  }
+  return 0;
 }
-for (const [path, updated] of changes) fs.writeFileSync(path, updated);
-
-const pkg = JSON.parse(fs.readFileSync('apps/desktop/package.json', 'utf8'));
-const lock = JSON.parse(fs.readFileSync('apps/desktop/package-lock.json', 'utf8'));
-const tauri = JSON.parse(fs.readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
-if ([pkg.version, lock.version, lock.packages[''].version, tauri.version].some(value => value !== next)) {
-  throw new Error('Version verification failed');
+if (compare(release, current) < 0 || compare(next, release) <= 0) {
+  console.error(`Release ${release} must not be below ${current}; next version ${next} must be higher than the release.`);
+  process.exit(1);
 }
 NODE
 
-git add -- Cargo.toml Cargo.lock apps/desktop/package.json apps/desktop/package-lock.json \
-  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/tauri.conf.json
-git commit -m "chore: release $tag"
+tag="v$release"
+tag_exists() {
+  printf 'Tag %s already exists; tags are never replaced. Choose an unused release version (for example, the next patch for an already-tagged checkout).\n' "$tag" >&2
+  exit 1
+}
+if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then tag_exists; fi
+if git remote get-url origin >/dev/null 2>&1; then
+  remote_tag=$(git ls-remote --tags origin "refs/tags/$tag") || {
+    printf 'Could not check origin for tag %s; nothing changed.\n' "$tag" >&2
+    exit 1
+  }
+  if [[ -n $remote_tag ]]; then tag_exists; fi
+fi
+
+version_files=(Cargo.toml Cargo.lock apps/desktop/package.json apps/desktop/package-lock.json
+  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/tauri.conf.json)
+if [[ $release != "$current" ]]; then
+  node tools/update-version.mjs "$release"
+  git add -- "${version_files[@]}"
+  git commit -m "chore: release $tag"
+fi
 git tag -a "$tag" -m "Release $tag"
 
-printf 'Push %s and tag %s? [y/N] ' "$branch" "$tag" 
+node tools/update-version.mjs "$next"
+git add -- "${version_files[@]}"
+git commit -m "chore: start development of $next"
+
+printf 'Push %s and tag %s? [y/N] ' "$branch" "$tag"
 read -r answer || answer=
 case "$answer" in
   y|Y|yes|YES) git push --atomic origin "$branch" "$tag" ;;
-  *) printf 'Commit and tag remain local.\n' ;;
+  *) printf 'Release tag and next development commit remain local.\n' ;;
 esac

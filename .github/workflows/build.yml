@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.ref }}-${{ github.event_name }}
+  group: build-${{ github.ref }}-${{ github.event_name }}-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -21,7 +21,38 @@ jobs:
   build:
     if: github.event_name != 'pull_request' && (github.event_name != 'push' || github.ref_type != 'tag')
     uses: ./.github/workflows/build-platforms.yml
+    with:
+      nightly: ${{ github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch && github.repository == 'Popchor-RUB/Scorewing' }}
     secrets: inherit
+  publish-nightly:
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == github.event.repository.default_branch && github.repository == 'Popchor-RUB/Scorewing'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-nightly
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-*
+          path: nightly-artifacts
+          merge-multiple: true
+      - name: Publish complete nightly snapshot
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { publishNightly } = await import(`${process.env.GITHUB_WORKSPACE}/tools/publish-nightly.mjs`);
+            await publishNightly({ github, context, directory: 'nightly-artifacts' });
   release:
     if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository == 'Popchor-RUB/Scorewing'
     permissions:

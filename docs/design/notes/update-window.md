@@ -1,40 +1,56 @@
 # Scorewing update window
 
-Status: design approved and implemented on November 4, 2026. The native update window uses the revised compact height.
+Status: channel-aware design approved by the user and implemented on November 6, 2026.
 
-Open [the unified gallery](../index.html). Edit page **06 · Update window** in [the single Figcraft source](../scorewing.figcraft). Frames 24–26 are exported to `../screens/` at 2× and listed in [the screen inventory](../README.md).
+Open [the unified gallery](../index.html). Edit page **06 · Update window** in [the single Figcraft source](../scorewing.figcraft). Frames 24–45 are exported at 2× and listed in [the screen inventory](../README.md). Each frame is 620 × 328 logical pixels; native title bars are excluded.
+
+## Layout and controls
+
+Retain 24 px outer padding, the 80 px application icon, content beginning at x=128, and bottom-right actions. The title is “Scorewing updates”. Add a labeled application-owned shadcn Select for **Release channel**, with Stable and Nightly choices, beneath the title. Retain semantic light/dark colors and shared Button styling. Inter substitutes for the runtime system font.
+
+Changing the channel remembers the choice across restarts and starts a fresh check immediately. The first selection follows the installed build's channel. A manual Check for updates always opens this separate, nonblocking window, including while checking, when current, offline, or unsupported. Startup checks stay quiet unless a newer, unskipped version is available.
 
 ## Captured states
 
-| Frame | Export | State |
-| --- | --- | --- |
-| 24 | [`24-update-available-light.png`](../screens/24-update-available-light.png) | Update available, light appearance |
-| 25 | [`25-update-available-dark.png`](../screens/25-update-available-dark.png) | Update available, dark appearance |
-| 26 | [`26-update-installation-disabled.png`](../screens/26-update-installation-disabled.png) | Open score, pending selection, or work prevents installation |
+- 24: [Update available · Light](../screens/24-update-available-light.png).
+- 25: [Update available · Dark](../screens/25-update-available-dark.png).
+- 26: [Installation disabled · Light](../screens/26-update-installation-disabled.png).
+- 27: [Installation disabled · Dark](../screens/27-update-installation-disabled-dark.png).
+- 28: [Checking for updates · Light](../screens/28-update-checking.png).
+- 29: [Checking for updates · Dark](../screens/29-update-checking-dark.png).
+- 30: [Up to date · Light](../screens/30-update-up-to-date.png).
+- 31: [Up to date · Dark](../screens/31-update-up-to-date-dark.png).
+- 32: [Update check failed · Light](../screens/32-update-check-error.png).
+- 33: [Update check failed · Dark](../screens/33-update-check-error-dark.png).
+- 34: [Downloading update · Light](../screens/34-update-downloading.png).
+- 35: [Downloading update · Dark](../screens/35-update-downloading-dark.png).
+- 36: [Update ready · Light](../screens/36-update-ready.png).
+- 37: [Update ready · Dark](../screens/37-update-ready-dark.png).
+- 38: [Installing update · Light](../screens/38-update-installing.png).
+- 39: [Installing update · Dark](../screens/39-update-installing-dark.png).
+- 40: [Older channel version · Light](../screens/40-update-older-version.png).
+- 41: [Older channel version · Dark](../screens/41-update-older-version-dark.png).
+- 42: [Confirm downgrade · Light](../screens/42-update-confirm-downgrade.png).
+- 43: [Confirm downgrade · Dark](../screens/43-update-confirm-downgrade-dark.png).
+- 44: [Manual download required · Light](../screens/44-update-unsupported-install.png).
+- 45: [Manual download required · Dark](../screens/45-update-unsupported-install-dark.png).
 
-Each frame uses a 620 × 248 logical-pixel content area, reduced from the previous 620 × 340 non-resizable Tauri update window. The operating system supplies its title bar, titled “Scorewing update available”; window decorations are excluded because they vary by platform.
+The window remains the same surface through checking, available/current results, errors, download progress, readiness, installation, manual downloads, and downgrade confirmation. The selected channel's release-notes link opens the corresponding stable or nightly GitHub release. Versions shown are illustrative.
 
-Layout: 24px outer padding, 80px application icon, 24px content gap, text beginning at x=128, and actions aligned to the bottom right with 8px gaps. The button row moves from y=285 to y=193, removing 92px of blank space. This leaves 40px between the normal guidance and buttons, or 21px with the longer disabled-state guidance. Colors follow the application’s light and dark semantic tokens. Inter is an available design-font substitute for the runtime’s platform-dependent system font. Text wrapping and button widths can therefore differ slightly by platform.
+## Behavior and invariants
 
-The illustrated versions, 0.1.8 and 0.1.9, are sample data and do not assert that an update has been published.
-
-## Existing behavior and component ownership
-
-- Cancel dismisses this prompt; Escape also cancels.
-- Skip this version remembers the offered version and suppresses its automatic prompt. A manual check can still offer it.
-- Download & Install downloads, installs, and restarts the app. It is disabled while a score or selection is open or work is running.
-- View changelog on GitHub opens the latest release page.
-- The disabled state explains that closing a score discards its editing choices.
-- Actions use the application-owned shadcn-style Button built on Base UI. The window content is a custom section with dialog semantics inside a separate Tauri window; it does not currently use the shared Dialog component.
-
-This captures the update-available window only. Checking, download progress, installation, and error dialogs remain in the existing main-window update flow.
+- Closing/Cancel dismisses the window; downloading may continue after Hide. Installation cannot be interrupted by a window action.
+- Skip this version remembers the version per channel; manual checks override skipping.
+- The release-channel control is disabled during download/installation. On a channel change, discard the previous resource, progress, errors, and confirmation; late responses cannot replace the newly selected result.
+- Close scores and score selections and finish active work before installing. Closing a score discards its editing choices. Existing frontend and backend installation guards remain authoritative.
+- A manually requested older channel version first offers **Review downgrade**, then a separate confirmation state with **Back** and **Downgrade & restart**. Startup never offers an automatic downgrade.
+- Errors keep the window open and offer a suitable retry. A pruned nightly asset requires a fresh check. Unsupported Linux installations offer GitHub downloads.
+- Main-window updater orchestration retains ownership of updater resources and install safety. The auxiliary window displays state and sends actions; it does not gain independent installation authority.
 
 ## Source and verification
 
-Sources: `apps/desktop/src/update-prompt.tsx`, `apps/desktop/src/update-control.tsx`, `apps/desktop/src/style.css`, `apps/desktop/src/components/ui/button.tsx`, `apps/desktop/src/app.tsx`, and `apps/desktop/src-tauri/src/update_prompt.rs`.
+Design source and all exports were updated through Figcraft MCP and inspected before review. Gallery and screen inventory match all 45 frames. Source: `apps/desktop/src/update-prompt.tsx`, `apps/desktop/src/update-control.tsx`, `apps/desktop/src/style.css`, `apps/desktop/src-tauri/src/update_prompt.rs`, and backend updater commands.
 
-Created editable text, image, and button layers through Figcraft MCP; inspected layer geometry and the rendered three-state preview; confirmed the design font is available. Export dimensions and gallery references were checked during the initial design capture.
+The previous November 4 design captured only the available-update prompt at 620 × 248. The approved design consolidates all existing update states into this window and adds channel selection and explicit downgrades. The frontend and backend now implement the approved flow.
 
-Implementation changes only the native window height from 340 to 248 logical pixels. The existing viewport-filling flex layout moves the buttons upward without CSS or component changes and retains scrolling for longer messages. All 10 focused tests in `update-prompt.test.ts` and `updater.app.test.ts` passed, as did `git diff --check`. The test harness logged non-fatal Vite HMR port conflicts. Rust formatting could not run because `rustfmt` is not installed. Native GUI appearance and a live update were not exercised.
-
-The inline review was rendered from the Figcraft exports. T3's HTML browser preview could not run because the host lacks required browser libraries; the Figcraft screenshot and artifact checks succeeded.
+Validation ran in Podman: all 63 frontend tests passed, TypeScript checking and the production frontend build passed, and both focused Rust updater tests and desktop Clippy passed. Release tooling passed 63 tests, with the existing PowerShell-only test skipped on Linux. The source, 45-frame gallery/inventory, and PNG dimensions were cross-checked. Live GitHub publication, native installer upgrades/downgrades, and macOS signing/notarization were not exercised locally.

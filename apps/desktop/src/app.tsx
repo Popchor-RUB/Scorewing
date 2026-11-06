@@ -51,7 +51,7 @@ export function mountApp(container: HTMLElement): () => void {
   let fileBusy = false;
   let exporting = false;
   let installing = false;
-  let updateInstalled = false;
+  let installedUpdate: Update | undefined;
   let cancelling = false;
   let dropping = false;
   let disposed = false;
@@ -79,7 +79,7 @@ export function mountApp(container: HTMLElement): () => void {
     installing = true;
     render();
     try {
-      if (!updateInstalled) { await update.install(); updateInstalled = true; }
+      if (installedUpdate !== update) { await update.install(); installedUpdate = update; }
       await relaunch();
     } catch (error) { installing = false; render(); throw error; }
   }

@@ -3,273 +3,319 @@ import test from "node:test";
 import { act } from "react";
 import { mountTestApp, type Invoke } from "./test-support.ts";
 import type { Inspection } from "./model.ts";
+import type { UpdateAction, UpdateWindowState } from "./update-prompt.tsx";
 
-const metadata = { rid: 10, currentVersion: "0.1.0", version: "0.2.0", body: "A better Scorewing.", rawJson: {} };
+const metadata = { rid: 10, currentVersion: "0.2.3", version: "0.2.4", body: "A better Scorewing.", rawJson: {}, downgrade: false };
 const inspection: Inspection = { id: "score", path: "/scores/test.xml", name: "Test score", format: "musicxml", error: null, parts: [] };
 
-function native(handler: Invoke = () => undefined, prompt: (args: Record<string, unknown>) => unknown = () => "cancel"): Invoke {
-  return (command, args) => {
-    if (command === "updater_supported") return true;
-    if (command === "show_update_prompt") return prompt(args);
-    if (command === "plugin:resources|close") return;
+async function mountUpdater(handler: Invoke = () => undefined, options: {
+  currentVersion?: string; supported?: boolean; failWindow?: boolean; savedChannel?: string;
+} = {}) {
+  let state: UpdateWindowState | undefined;
+  let shown = 0;
+  let hidden = 0;
+  const closed: number[] = [];
+  const checks: Record<string, unknown>[] = [];
+  const app = await mountTestApp((command, args) => {
+    if (command === "update_environment") return { currentVersion: options.currentVersion ?? metadata.currentVersion, supported: options.supported ?? true };
+    if (command === "sync_update_prompt") {
+      if (options.failWindow) throw new Error("Window unavailable");
+      state = args.state as UpdateWindowState;
+      if (args.show) shown++;
+      return true;
+    }
+    if (command === "hide_update_prompt") { hidden++; return; }
+    if (command === "plugin:resources|close") { closed.push(Number(args.rid)); return; }
     if (command === "open_files") return [inspection.path];
     if (command === "inspect_file") return inspection;
+    if (command === "existing_score_paths") return [];
     if (command === "release_document") return;
+    if (command === "check_update") checks.push(args);
     return handler(command, args);
-  };
+  }, { initialize(browser) { if (options.savedChannel) browser.localStorage.setItem("scorewing.update-channel", options.savedChannel); } });
+  await app.settle();
+  return { ...app, checks, closed, state: () => { assert.ok(state); return state; }, shown: () => shown, hidden: () => hidden,
+    action: (action: UpdateAction) => app.event("update-prompt-action", action) };
 }
 
-test("startup checks quietly; manual failures are visible and retryable", async () => {
+test("startup checks quietly; every manual check opens a persistent nonblocking window, including errors and current versions", async () => {
   let checks = 0;
-  const app = await mountTestApp(native((command, args) => {
-    if (command === "plugin:updater|check") {
-      checks++;
-      assert.equal(args.timeout, 15_000);
-      if (checks < 3) throw new Error("Offline");
-      return null;
-    }
-    throw new Error(`Unexpected command ${command}`);
-  }));
+  const app = await mountUpdater((command) => {
+    if (command === "check_update") { if (++checks < 3) throw new Error("Offline"); return null; }
+  });
   try {
     assert.equal(checks, 1);
+    assert.equal(app.shown(), 0);
     assert.equal(app.document.querySelector('[role="dialog"]'), null);
-    assert.equal(app.document.querySelector('[role="alert"]'), null);
-    assert.equal(app.document.querySelector('[data-action="check-updates"]'), null, "updates are opened from the native menu");
+    assert.deepEqual(app.checks[0], { channel: "stable", manual: false });
     await app.menu("check-updates");
-    assert.match(app.find('[role="alert"]').textContent!, /Could not check.*Offline/);
+    assert.ok(app.shown() > 0);
+    assert.match(app.state().error, /Could not check.*Offline/);
+    assert.equal(app.document.querySelector('[role="dialog"]'), null);
     assert.equal(app.fileMenu.openEnabled, true);
-    await app.click('[data-action="retry-update-check"]');
+    await app.action({ type: "check" });
     assert.equal(checks, 3);
-    assert.match(app.find('[role="dialog"]').textContent!, /up to date/);
-    assert.equal(app.document.querySelector('[role="alert"]'), null);
+    assert.equal(app.state().status, "idle");
+    assert.equal(app.state().error, "");
+    assert.deepEqual(app.checks.at(-1), { channel: "stable", manual: true });
   } finally { await app.close(); }
 });
 
-test("a manual check during the startup check reports its failure", async () => {
-  let fail: ((error: Error) => void) | undefined;
-  const app = await mountTestApp(native((command) => {
-    if (command === "plugin:updater|check") return new Promise((_resolve, reject) => { fail = reject; });
-    throw new Error(`Unexpected command ${command}`);
-  }));
+test("manual checks supersede an in-flight startup check and report only the latest result", async () => {
+  const completions: ((value: typeof metadata | null) => void)[] = [];
+  const app = await mountUpdater((command) => {
+    if (command === "check_update") return new Promise((resolve) => completions.push(resolve));
+  });
   try {
     await app.menu("check-updates");
-    await act(async () => { fail!(new Error("Timed out")); });
-    assert.match(app.find('[role="alert"]').textContent!, /Timed out/);
+    assert.equal(app.state().status, "checking");
+    assert.equal(completions.length, 2);
+    await act(async () => completions[1](null));
+    assert.equal(app.state().status, "idle");
+    await act(async () => completions[0](metadata));
+    assert.equal(app.state().version, undefined);
+    assert.deepEqual(app.closed, [metadata.rid]);
   } finally { await app.close(); }
 });
 
-test("skip persists across launches, manual checks override it, and newer releases prompt again", async () => {
+test("channel follows installed build initially, is saved, and changing it checks immediately and discards stale resources", async () => {
+  let finishStable: ((value: typeof metadata) => void) | undefined;
+  const app = await mountUpdater((command, args) => {
+    if (command === "check_update") {
+      if (args.channel === "stable") return new Promise((resolve) => { finishStable = resolve; });
+      return { ...metadata, rid: 12, version: "0.2.4-nightly.17" };
+    }
+  }, { currentVersion: "0.2.4-nightly.16", savedChannel: "stable" });
+  try {
+    assert.equal(app.checks[0].channel, "stable");
+    await app.action({ type: "set-channel", channel: "nightly" });
+    assert.equal(app.state().version, "0.2.4-nightly.17");
+    assert.equal(app.browser.localStorage.getItem("scorewing.update-channel"), "nightly");
+    await act(async () => finishStable!(metadata));
+    assert.equal(app.state().channel, "nightly");
+    assert.equal(app.state().version, "0.2.4-nightly.17");
+    assert.ok(app.closed.includes(metadata.rid));
+    await app.remount();
+    assert.equal(app.checks.at(-1)!.channel, "nightly");
+  } finally { await app.close(); }
+  const nightly = await mountUpdater((command) => command === "check_update" ? null : undefined, { currentVersion: "0.2.4-nightly.16" });
+  try { assert.equal(nightly.checks[0].channel, "nightly"); }
+  finally { await nightly.close(); }
+});
+
+test("skip persists per channel, manual checks override it, and newer versions prompt automatically", async () => {
   let version = metadata.version;
-  let prompts = 0;
-  let choice = "skip";
-  const app = await mountTestApp(native((command) => {
-    if (command === "plugin:updater|check") return { ...metadata, version };
-    throw new Error(`Unexpected command ${command}`);
-  }, () => { prompts++; return choice; }));
+  const app = await mountUpdater((command) => command === "check_update" ? { ...metadata, version } : undefined);
   try {
-    assert.equal(prompts, 1);
+    assert.equal(app.shown(), 1);
+    await app.action({ type: "skip" });
+    assert.equal(app.hidden(), 1);
     await app.remount();
-    assert.equal(prompts, 1, "skipped release stays quiet after restarting");
-    choice = "cancel";
+    assert.equal(app.shown(), 1);
     await app.menu("check-updates");
-    assert.equal(prompts, 2, "manual checks still offer skipped releases");
+    assert.ok(app.shown() > 1);
+    await app.action({ type: "set-channel", channel: "nightly" });
+    await app.action({ type: "skip" });
+    assert.equal(app.browser.localStorage.getItem("scorewing.skipped-update-version.nightly"), version);
+    assert.equal(app.browser.localStorage.getItem("scorewing.skipped-update-version"), version);
+    const before = app.shown();
+    version = "0.2.5-nightly.1";
     await app.remount();
-    assert.equal(prompts, 2, "cancel leaves the saved skip unchanged");
-    version = "0.3.0";
-    await app.remount();
-    assert.equal(prompts, 3, "the next release is offered automatically");
-    await app.remount();
-    assert.equal(prompts, 4, "cancel allows the reminder on the next launch");
+    assert.equal(app.shown(), before + 1);
   } finally { await app.close(); }
 });
 
-test("the native prompt leaves score operations usable and failures offer a usable fallback", async () => {
-  let answer: ((choice: string) => void) | undefined;
-  let fail = false;
-  const app = await mountTestApp(native((command) => {
-    if (command === "plugin:updater|check") return metadata;
-    throw new Error(`Unexpected command ${command}`);
-  }, () => {
-    if (fail) throw new Error("Window unavailable");
-    return new Promise<string>((resolve) => { answer = resolve; });
-  }));
+test("native window failures retain a usable shadcn fallback with channel selection and retry", async () => {
+  const app = await mountUpdater((command) => command === "check_update" ? metadata : undefined, { failWindow: true });
   try {
-    assert.equal(app.fileMenu.openEnabled, true);
-    assert.equal(app.find<HTMLButtonElement>('[data-action="open"]').disabled, false);
-    await app.event("tauri://drag-drop", { paths: [inspection.path], position: { x: 0, y: 0 } });
-    assert.equal(app.fileMenu.closeEnabled, true);
-    await app.click('[data-mode="split"]');
-    assert.ok(app.find('[data-action="back-to-modes"]'));
-    await app.menu("close-score");
-    await app.click('[data-action="open"]');
-    assert.equal(app.fileMenu.closeEnabled, true);
-    await act(async () => { answer!("cancel"); });
-    assert.equal(app.fileMenu.openEnabled, true);
-    fail = true;
-    await app.menu("check-updates");
     assert.match(app.find('[role="dialog"] [role="alert"]').textContent!, /Window unavailable/);
-    assert.equal(app.fileMenu.openEnabled, true);
-    assert.ok(app.find('[data-action="skip-update"]'));
+    assert.ok(app.find('[data-action="download-update"]'));
+    await app.choose('[data-action="update-channel"]', "Nightly");
+    assert.deepEqual(app.checks.at(-1), { channel: "nightly", manual: true });
   } finally { await app.close(); }
 });
 
-test("opening a score while the native prompt is open prevents installation", async () => {
-  let answer: ((choice: string) => void) | undefined;
-  let installs = 0;
-  let restarts = 0;
-  const app = await mountTestApp(native((command) => {
-    if (command === "plugin:updater|check") return metadata;
-    if (command === "plugin:updater|download") return 11;
-    if (command === "plugin:updater|install") { installs++; return; }
-    if (command === "plugin:process|restart") { restarts++; return; }
-    throw new Error(`Unexpected command ${command}`);
-  }, () => new Promise<string>((resolve) => { answer = resolve; })));
-  try {
-    await app.menu("open-score");
-    await act(async () => { answer!("install"); });
-    assert.equal(installs, 0);
-    assert.equal(restarts, 0);
-    assert.equal(app.fileMenu.closeEnabled, true);
-    assert.ok(app.find<HTMLButtonElement>('[data-action="install-update"]').disabled);
-    assert.match(app.find('[role="dialog"]').textContent!, /Close.*score/);
-  } finally { await app.close(); }
-});
-
-test("startup prompts natively; download and install require consent and lock file operations", async () => {
+test("download consent, progress and installation lock are retained; channel changes cannot race a download or install", async () => {
   let downloads = 0;
   let installs = 0;
   let restarts = 0;
   let finishDownload: ((rid: number) => void) | undefined;
   let finishInstall: (() => void) | undefined;
-  let choice = "cancel";
-  const prompts: Record<string, unknown>[] = [];
-  const app = await mountTestApp(native((command, args) => {
-    if (command === "plugin:updater|check") return metadata;
+  const app = await mountUpdater((command, args) => {
+    if (command === "check_update") return metadata;
     if (command === "plugin:updater|download") {
       downloads++;
-      assert.equal(args.rid, metadata.rid);
       const channel = args.onEvent as { onmessage: (event: unknown) => void };
       channel.onmessage({ event: "Started", data: { contentLength: 100 } });
       channel.onmessage({ event: "Progress", data: { chunkLength: 30 } });
       return new Promise<number>((resolve) => { finishDownload = resolve; });
     }
-    if (command === "plugin:updater|install") {
-      installs++;
-      assert.equal(args.updateRid, metadata.rid);
-      assert.equal(args.bytesRid, 11);
-      return new Promise<void>((resolve) => { finishInstall = resolve; });
-    }
+    if (command === "plugin:updater|install") { installs++; return new Promise<void>((resolve) => { finishInstall = resolve; }); }
     if (command === "plugin:process|restart") { restarts++; return; }
-    throw new Error(`Unexpected command ${command}`);
-  }, (args) => { prompts.push(args); return choice; }));
+  });
   try {
-    assert.match(app.updateMenu.text, /Update available/);
-    assert.deepEqual(prompts, [{ currentVersion: "0.1.0", version: "0.2.0", canInstall: true }]);
-    assert.equal(app.document.querySelector('[role="dialog"]'), null);
     assert.equal(downloads, 0);
-    await app.menu("open-score");
-    await app.menu("check-updates");
-    assert.equal(prompts.at(-1)!.canInstall, false);
-    await app.menu("close-score");
-    choice = "install";
-    await app.menu("check-updates");
-    assert.equal(downloads, 1);
-    assert.equal(app.find('[role="progressbar"]').getAttribute("aria-valuenow"), "30");
-    await act(async () => { finishDownload!(11); });
+    await app.action({ type: "download" });
+    assert.equal(app.state().status, "downloading");
+    assert.equal(app.state().progress, 30);
+    await app.action({ type: "set-channel", channel: "nightly" });
+    assert.equal(app.state().channel, "stable");
+    await app.action({ type: "cancel" });
+    assert.equal(app.hidden(), 1);
+    await act(async () => finishDownload!(11));
     assert.equal(installs, 1);
+    assert.equal(app.state().status, "installing");
     assert.equal(app.updateMenu.enabled, false);
-    assert.match(app.updateMenu.text, /Installing/);
-    assert.ok(!app.fileMenu.openEnabled);
-    assert.ok(app.find<HTMLButtonElement>('[data-action="update-later"]').disabled);
+    assert.equal(app.fileMenu.openEnabled, false);
+    await app.action({ type: "cancel" });
+    assert.equal(app.hidden(), 1);
     await app.event("tauri://drag-drop", { paths: [inspection.path], position: { x: 0, y: 0 } });
     assert.equal(app.document.querySelector('[data-action="close"]'), null);
-    await act(async () => { finishInstall!(); });
+    await act(async () => finishInstall!());
     assert.equal(restarts, 1);
-    assert.ok(!app.fileMenu.openEnabled, "stay locked until the process exits");
   } finally { await app.close(); }
 });
 
-test("download and install failures can be retried; a restart failure never reinstalls", async () => {
+test("opening a score before or during download blocks installation, and changing a ready channel disposes bytes", async () => {
+  let downloads = 0;
+  let installs = 0;
+  let finish: ((rid: number) => void) | undefined;
+  const app = await mountUpdater((command) => {
+    if (command === "check_update") return metadata;
+    if (command === "plugin:updater|download") { downloads++; return new Promise<number>((resolve) => { finish = resolve; }); }
+    if (command === "plugin:updater|install") { installs++; return; }
+  });
+  try {
+    await app.menu("open-score");
+    await app.action({ type: "download" });
+    assert.equal(downloads, 0);
+    assert.equal(app.state().canInstall, false);
+    await app.menu("close-score");
+    await app.action({ type: "download" });
+    await app.menu("open-score");
+    await act(async () => finish!(11));
+    assert.equal(installs, 0);
+    assert.equal(app.state().status, "ready");
+    await app.action({ type: "install" });
+    assert.equal(installs, 0);
+    await app.action({ type: "set-channel", channel: "nightly" });
+    assert.ok(app.closed.includes(11));
+    assert.ok(app.closed.includes(metadata.rid));
+  } finally { await app.close(); }
+});
+
+test("download/install failures retry, and a restart retry never reinstalls consumed bytes", async () => {
   let downloads = 0;
   let installs = 0;
   let restarts = 0;
-  const app = await mountTestApp(native((command) => {
-    if (command === "plugin:updater|check") return metadata;
-    if (command === "plugin:updater|download") {
-      if (++downloads === 1) throw new Error("Network interrupted");
-      return 11;
-    }
-    if (command === "plugin:updater|install") {
-      if (++installs === 1) throw new Error("Disk is full");
-      return;
-    }
-    if (command === "plugin:process|restart") {
-      if (++restarts === 1) throw new Error("Restart unavailable");
-      return;
-    }
-    throw new Error(`Unexpected command ${command}`);
-  }, () => "install"));
+  const app = await mountUpdater((command) => {
+    if (command === "check_update") return metadata;
+    if (command === "plugin:updater|download") { if (++downloads === 1) throw new Error("Network interrupted"); return 11; }
+    if (command === "plugin:updater|install") { if (++installs === 1) throw new Error("Disk full"); return; }
+    if (command === "plugin:process|restart") { if (++restarts === 1) throw new Error("Restart unavailable"); return; }
+  });
   try {
-    assert.match(app.find('[role="alert"]').textContent!, /Network interrupted/);
-    await app.click('[data-action="download-update"]');
-    assert.match(app.find('[role="alert"]').textContent!, /Disk is full/);
-    assert.equal(app.fileMenu.openEnabled, true);
-    await app.click('[data-action="install-update"]');
-    assert.match(app.find('[role="alert"]').textContent!, /Restart unavailable/);
-    await app.click('[data-action="install-update"]');
+    await app.action({ type: "download" });
+    assert.match(app.state().error, /Network interrupted/);
+    await app.action({ type: "download" });
+    assert.match(app.state().error, /Disk full/);
+    await app.action({ type: "install" });
+    assert.match(app.state().error, /Restart unavailable/);
+    await app.action({ type: "install" });
     assert.equal(downloads, 2);
-    assert.equal(installs, 2, "retrying restart must not reuse consumed updater bytes");
+    assert.equal(installs, 2);
     assert.equal(restarts, 2);
   } finally { await app.close(); }
 });
 
-test("opening a score during download prevents automatic installation", async () => {
-  let finishDownload: ((rid: number) => void) | undefined;
-  let installs = 0;
-  const app = await mountTestApp(native((command) => {
-    if (command === "plugin:updater|check") return metadata;
-    if (command === "plugin:updater|download") return new Promise<number>((resolve) => { finishDownload = resolve; });
-    if (command === "plugin:updater|install") { installs++; return; }
-    throw new Error(`Unexpected command ${command}`);
-  }, () => "install"));
+test("older manual channel versions require two explicit steps, and stale downgrade confirmation cannot install another result", async () => {
+  let downloads = 0;
+  let restarts = 0;
+  const app = await mountUpdater((command, args) => {
+    if (command === "check_update") return args.manual ? { ...metadata, version: "0.2.2", downgrade: true } : null;
+    if (command === "plugin:updater|download") { downloads++; return 11; }
+    if (command === "plugin:process|restart") { restarts++; return; }
+  });
   try {
-    await app.click('[data-action="update-later"]');
-    await app.menu("open-score");
-    await act(async () => { finishDownload!(11); });
-    assert.equal(installs, 0);
+    assert.equal(app.shown(), 0);
     await app.menu("check-updates");
-    assert.ok(app.find<HTMLButtonElement>('[data-action="install-update"]').disabled);
-    assert.match(app.find('[role="dialog"]').textContent!, /Close.*score/);
+    assert.equal(app.state().downgrade, true);
+    await app.action({ type: "download" });
+    await app.action({ type: "confirm-downgrade" });
+    assert.equal(downloads, 0);
+    await app.action({ type: "review-downgrade" });
+    assert.equal(app.state().status, "confirm-downgrade");
+    const revision = app.state().revision;
+    await app.action({ type: "set-channel", channel: "nightly" });
+    await app.action({ type: "confirm-downgrade", revision });
+    assert.equal(downloads, 0);
+    await app.action({ type: "review-downgrade" });
+    await app.action({ type: "back" });
+    assert.equal(app.state().status, "available");
+    await app.action({ type: "review-downgrade" });
+    await app.action({ type: "confirm-downgrade" });
+    assert.equal(downloads, 1);
+    assert.equal(restarts, 1);
   } finally { await app.close(); }
 });
 
-test("DEB/RPM users get manual downloads without contacting the updater feed", async () => {
-  let opened = 0;
-  const app = await mountTestApp((command) => {
-    if (command === "updater_supported") return false;
-    if (command === "open_update_downloads") { opened++; return; }
-    throw new Error(`Unexpected command ${command}`);
-  });
+test("unsupported installs open the chosen channel's manual downloads without contacting the feed", async () => {
+  const opened: unknown[] = [];
+  const app = await mountUpdater((command, args) => { if (command === "open_update_downloads") opened.push(args.channel); }, { supported: false });
   try {
+    assert.equal(app.checks.length, 0);
+    assert.equal(app.shown(), 0);
     await app.menu("check-updates");
-    assert.match(app.find('[role="dialog"]').textContent!, /AppImage.*DEB\/RPM/);
-    await app.click('[data-action="update-downloads"]');
-    assert.equal(opened, 1);
-    assert.equal(app.document.querySelector('[role="alert"]'), null);
+    assert.equal(app.state().supported, false);
+    await app.action({ type: "set-channel", channel: "nightly" });
+    await app.action({ type: "open-downloads" });
+    assert.deepEqual(opened, ["nightly"]);
+    assert.equal(app.checks.length, 0);
   } finally { await app.close(); }
 });
 
-test("unmount releases a late update resource without opening a dialog", async () => {
-  let finish: ((result: typeof metadata) => void) | undefined;
-  const released: number[] = [];
-  const app = await mountTestApp((command, args) => {
-    if (command === "updater_supported") return true;
-    if (command === "plugin:updater|check") return new Promise((resolve) => { finish = resolve; });
-    if (command === "plugin:resources|close") { released.push(Number(args.rid)); return; }
-    throw new Error(`Unexpected command ${command}`);
-  });
+test("unmount releases late resources without opening a window", async () => {
+  let finish: ((value: typeof metadata) => void) | undefined;
+  const app = await mountUpdater((command) => command === "check_update" ? new Promise((resolve) => { finish = resolve; }) : undefined);
   await app.close();
   finish!(metadata);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.deepEqual(released, [metadata.rid]);
+  assert.deepEqual(app.closed, [metadata.rid]);
+  assert.equal(app.shown(), 0);
+});
+
+test("cancel during a manual check remains dismissed when its result arrives", async () => {
+  let complete: ((value: typeof metadata) => void) | undefined;
+  const app = await mountUpdater((command, args) => {
+    if (command === "check_update") return args.manual ? new Promise((resolve) => { complete = resolve; }) : null;
+  });
+  try {
+    await app.menu("check-updates");
+    const shown = app.shown();
+    await app.action({ type: "cancel" });
+    await act(async () => complete!(metadata));
+    assert.equal(app.state().status, "available");
+    assert.equal(app.shown(), shown);
+    assert.equal(app.hidden(), 1);
+  } finally { await app.close(); }
+});
+
+test("a recovered native window replaces its fallback and late link errors cannot contaminate another channel", async () => {
+  const options = { failWindow: true };
+  let failLink: ((error: Error) => void) | undefined;
+  const app = await mountUpdater((command) => {
+    if (command === "check_update") return metadata;
+    if (command === "open_update_downloads") return new Promise((_resolve, reject) => { failLink = reject; });
+  }, options);
+  try {
+    assert.ok(app.find('[role="dialog"]'));
+    options.failWindow = false;
+    await app.menu("check-updates");
+    assert.equal(app.document.querySelector('[role="dialog"]'), null);
+    await app.action({ type: "open-downloads" });
+    await app.action({ type: "set-channel", channel: "nightly" });
+    await act(async () => failLink!(new Error("Late stable failure")));
+    assert.equal(app.state().channel, "nightly");
+    assert.equal(app.state().error, "");
+  } finally { await app.close(); }
 });

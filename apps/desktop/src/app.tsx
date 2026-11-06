@@ -1,5 +1,6 @@
 import { createRoot } from "react-dom/client";
 import { Button } from "./components/ui/button.tsx";
+import { DownloadIcon } from "lucide-react";
 import { SplitWorkspace } from "./split-workspace.tsx";
 import { MergeWorkspace } from "./merge-workspace.tsx";
 import { DiffWorkspace } from "./diff-workspace.tsx";
@@ -490,7 +491,7 @@ export function mountApp(container: HTMLElement): () => void {
           <span className="toolbar-separator" aria-hidden="true" />
           <h2 id="mode-config-heading" tabIndex={-1}
             ref={(node) => { if (node && focusTarget === "configuration") { focusTarget = null; node.focus(); } }}>{tool!.title}</h2>
-        </div> : session ? <h1>Choose a tool</h1> : <RecentScoreButton paths={recentScores} disabled={busy()} reading={fileBusy} onOpen={(paths) => void openScore(paths)} />}
+        </div> : session ? <h1>Choose a tool</h1> : <RecentScoreButton disabled={busy()} reading={fileBusy} onOpen={() => void openScore()} />}
         {session ? <Button variant="outline" data-action="open" disabled={!openEnabled} onClick={() => void openScore()}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M3 6h6l2 3h10v12H3Z M3 6V3h6l2 3h10v3" /></svg> Open score</Button>
           : <span className="shortcut muted">{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl"} + O</span>}
       </header>
@@ -502,8 +503,8 @@ export function mountApp(container: HTMLElement): () => void {
       </div>}
       <main className="workspace"><section className="editor" aria-label="Score arrangement">
         {!session ? <div className="empty">
+          <div className="drop-hint"><DownloadIcon className="drop-icon" aria-hidden="true" /><div><strong>Drop a score here to open it</strong><p className="muted">Drop two versions to compare them.</p></div></div>
           <RecentScores paths={recentScores} disabled={busy()} onOpen={(paths) => void openScore(paths)} />
-          <div className="drop-hint"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="drop-icon" aria-hidden="true"><path d="M3 6h6l2 3h10v12H3Z M3 6V3h6l2 3h10v3" /></svg><div><strong>Drop a score here to open it</strong><p className="muted">Drop two versions to compare them.</p></div></div>
         </div> : <div className="score-workspace" key={score!.id}>
           {session.stage === "selection" ? <section className="mode-selection" aria-labelledby="mode-selection-heading">
             <div className="mode-intro"><h2 id="mode-selection-heading">What would you like to do?</h2><p className="muted">Choose a tool for the open score.</p></div>

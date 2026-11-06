@@ -12,7 +12,9 @@ The approved and implemented [export destination design](export-destinations.md)
 
 - Cross-platform desktop utility with balanced density and a quiet, neutral visual tone.
 - Follow the system light/dark preference.
-- Start with Open, recent scores, and a file-drop hint.
+- Start with Open and a 96 px dashed file dropzone with a centered downward arrow into a tray above centered text. Rename the score list heading to Last opened scores and remove its subtitle. Keep the dropzone outside the score section's scroll container so it remains visible with long lists, including at compact window sizes. Preserve one-file opening and two-file comparison. This November 6 revision is approved and implemented. Use one primary shadcn Open score button with the configured Lucide FolderClosedIcon and Lucide DownloadIcon for the dropzone; previous files remain available through the Last opened scores list.
+
+Start-page verification (November 6): all 58 frontend tests and the production build pass in Podman. Chromium checks pass at 1100×760 and 760×560 in light and dark appearance with ten saved scores: the 96 px dropzone stays fixed while the score section scrolls; its icon and text remain centered; the single folder-icon Open button, keyboard reopening, file picker, and native drop event handling work. Native commands are mocked for browser verification; the desktop shell was not launched.
 - After opening a score, show a compact 2×2 tool chooser.
 - Give Split, Merge, Practice Tracks, and Diff equal design attention.
 - Use lists, inspectors, compact command bars, pane separators, and fixed export commands.

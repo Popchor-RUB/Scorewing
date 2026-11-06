@@ -144,7 +144,7 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
     assert.equal(app.document.querySelector("#insert-fallback-slurs"), null, "replacement returns to mode selection");
     await app.click('[data-mode="split"]');
     assert.ok(app.find<HTMLInputElement>("#insert-fallback-slurs").checked, "new score resets choices");
-    assert.equal(app.document.querySelector(".split-preview"), null, "new score starts without selected parts");
+    assert.equal(app.document.querySelectorAll(".split-preview").length, 4, "new score selects all visible parts by default");
     await app.menu("close-score");
     assert.ok(released.includes("/scores/second.xml"));
     assert.equal(app.find(".status").textContent, "", "returning to the landing page clears the slogan");

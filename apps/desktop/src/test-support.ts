@@ -47,7 +47,7 @@ export async function mountTestApp(invoke: Invoke, options: { entry?: string; in
     unregisterListener() {},
   };
   const server = await createServer({
-    server: { middlewareMode: true, hmr: false }, appType: "custom",
+    server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom",
     optimizeDeps: { noDiscovery: true, include: [] },
   });
   let mountApp: (container: HTMLElement) => () => void;

@@ -26,7 +26,7 @@ test("instrument picker supports search, keyboard selection, recents, and persis
   Object.defineProperty(console, "timeStamp", { configurable: true, value: undefined });
   const { createRoot } = await import("react-dom/client");
   Object.defineProperty(console, "timeStamp", { configurable: true, value: timeStamp });
-  const server = await createServer({ server: { middlewareMode: true, hmr: false }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
+  const server = await createServer({ server: { middlewareMode: true, hmr: false, ws: false }, appType: "custom", optimizeDeps: { noDiscovery: true, include: [] } });
   const container = browser.document.createElement("div");
   browser.document.body.append(container);
   const root = createRoot(container as unknown as HTMLElement);

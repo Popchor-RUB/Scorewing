@@ -35,7 +35,10 @@ test("start page matches the design and preserves picker, busy, drop, and histor
     assert.ok(start.firstElementChild!.classList.contains("drop-hint"));
     assert.equal(app.find("#recent-scores-heading").textContent, "Last opened scores");
     assert.equal(app.document.querySelector(".recent-scores > header p"), null);
-    assert.equal(app.find(".app-header").querySelectorAll("button").length, 1);
+    assert.equal(app.document.querySelector(".app-header"), null, "start page has no empty toolbar");
+    assert.equal(app.document.querySelector(".shortcut"), null);
+    assert.equal(app.find(".drop-actions strong").textContent, "Drop a score here, or");
+    assert.equal(app.find(".drop-hint").querySelectorAll(choose).length, 1, "Open score belongs to the dropzone");
     assert.ok(app.find(`${choose} .lucide-folder-closed[data-icon="inline-start"]`));
     assert.equal(app.find(choose).getAttribute("data-variant"), "default");
     assert.match(app.find(".recent-scores").textContent!, /No recent scores/);
@@ -43,6 +46,7 @@ test("start page matches the design and preserves picker, busy, drop, and histor
     await app.click(choose);
     assert.equal(pickerCalls, 1);
     assert.deepEqual(history(), [picked]);
+    assert.ok(app.find(`.app-header ${choose}`), "loaded scores retain the toolbar Open command");
     await app.menu("close-score");
     const saved = history();
     picked = null;

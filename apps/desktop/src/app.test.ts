@@ -68,7 +68,7 @@ test("single-score lifecycle preserves a score on cancellation or failure and re
   });
   try {
     assert.equal(app.document.querySelector('[data-action="close"]'), null);
-    assert.ok(app.find('header [data-action="open"]'), "the command bar exposes native Open");
+    assert.ok(app.find('.drop-hint [data-action="open"]'), "the dropzone exposes native Open");
     assert.equal(app.fileMenu.openEnabled, true);
     assert.equal(app.fileMenu.closeEnabled, false);
     assert.equal(app.find(".status").textContent, "", "landing page has no device slogan");

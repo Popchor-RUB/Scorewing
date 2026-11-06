@@ -485,16 +485,15 @@ export function mountApp(container: HTMLElement): () => void {
     const count = museScore && (!configured || session.arrangement.kind === "practice") ? (score!.practice_parts?.length ?? score!.parts.length) : (score?.parts.length ?? 0);
     const warnings = [...new Set([...(score?.warnings ?? []), ...(session?.warnings ?? [])])];
     root.render(<RecentSoundsProvider><div className="app-shell">
-      <header className="app-header">
+      {session && <header className="app-header">
         {configured ? <div className="tool-heading">
           <Button variant="ghost" data-action="back-to-modes" disabled={busy()} onClick={backToModes}><span aria-hidden="true">←</span> All tools</Button>
           <span className="toolbar-separator" aria-hidden="true" />
           <h2 id="mode-config-heading" tabIndex={-1}
             ref={(node) => { if (node && focusTarget === "configuration") { focusTarget = null; node.focus(); } }}>{tool!.title}</h2>
-        </div> : session ? <h1>Choose a tool</h1> : <RecentScoreButton disabled={busy()} reading={fileBusy} onOpen={() => void openScore()} />}
-        {session ? <Button variant="outline" data-action="open" disabled={!openEnabled} onClick={() => void openScore()}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M3 6h6l2 3h10v12H3Z M3 6V3h6l2 3h10v3" /></svg> Open score</Button>
-          : <span className="shortcut muted">{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl"} + O</span>}
-      </header>
+        </div> : <h1>Choose a tool</h1>}
+        <Button variant="outline" data-action="open" disabled={!openEnabled} onClick={() => void openScore()}><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M3 6h6l2 3h10v12H3Z M3 6V3h6l2 3h10v3" /></svg> Open score</Button>
+      </header>}
       <UpdateControl checkRequest={updateCheckRequest} canInstall={!session && !pendingPair && !busy() && !checking} onInstall={installUpdate} />
       {session && <div className="score-heading">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true" className="file-icon"><path d="M14 2H5v20h14V7z M14 2v5h5 M8 12h8 M8 16h8" /></svg><strong title={score!.path}>{score!.name}</strong>
@@ -503,7 +502,12 @@ export function mountApp(container: HTMLElement): () => void {
       </div>}
       <main className="workspace"><section className="editor" aria-label="Score arrangement">
         {!session ? <div className="empty">
-          <div className="drop-hint"><DownloadIcon className="drop-icon" aria-hidden="true" /><div><strong>Drop a score here to open it</strong><p className="muted">Drop two versions to compare them.</p></div></div>
+          <div className="drop-hint">
+            <div className="drop-actions"><DownloadIcon className="drop-icon" aria-hidden="true" /><strong>Drop a score here, or</strong>
+              <RecentScoreButton disabled={!openEnabled} reading={fileBusy} onOpen={() => void openScore()} />
+            </div>
+            <p className="muted">Drop two versions to compare them.</p>
+          </div>
           <RecentScores paths={recentScores} disabled={busy()} onOpen={(paths) => void openScore(paths)} />
         </div> : <div className="score-workspace" key={score!.id}>
           {session.stage === "selection" ? <section className="mode-selection" aria-labelledby="mode-selection-heading">

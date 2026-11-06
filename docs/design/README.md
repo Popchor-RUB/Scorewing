@@ -19,7 +19,7 @@ This consolidation preserves the existing screen layouts and behavioral requirem
 
 ## Behavioral notes and history
 
-The November 6 start-page revision places a 96 px dashed dropzone with a centered downward arrow into a tray above centered text, followed by the renamed Last opened scores heading without a subtitle. The dropzone stays outside the score section's scroll container, so long lists scroll beneath it at desktop and compact window sizes. One-file opening and two-file comparison keep their existing behavior. The design was approved and implemented on November 6, 2026. The top-left Open score control is a single primary shadcn Button with the configured Lucide FolderClosedIcon; prior files remain available in the Last opened scores list. The dropzone uses Lucide DownloadIcon. Frame 01 and its export include these library icons.
+The implemented November 6 start-page revision keeps a compact dashed dropzone fixed above Last opened scores, with no score-list subtitle. The current revision moves the primary shadcn Open score button inside the 96 px dropzone, beside the centered prompt “Drop a score here, or”. Omit the shortcut label beside the button while retaining the keyboard command. The button opens the native file picker; dropping one score opens it and dropping two versions compares them. The comparison hint remains underneath. Remove the empty start-page toolbar and keep the score section independently scrollable. Retain the configured Lucide DownloadIcon and FolderClosedIcon. Frame 01, its export, and the gallery show the implementation approved on November 6, 2026.
 
 - [Field audit and default shadcn controls — implemented](notes/shadcn-fields.md)
 - [Desktop design brief and invariants, including visibility groups and selection defaults](notes/desktop.md)
@@ -34,7 +34,7 @@ These notes preserve decisions and historical verification evidence; the editabl
 
 | Frame | Figcraft page | Layer ID | PNG | Scale | Current revision |
 | --- | --- | --- | --- | --- | --- |
-| 01 · Start | 01 · Desktop workspaces | `7` | [01-start.png](screens/01-start.png) | 1× | Centered 96 px dashed dropzone; Last opened scores without subtitle; Lucide icons · implemented |
+| 01 · Start | 01 · Desktop workspaces | `7` | [01-start.png](screens/01-start.png) | 1× | Open score inside 96 px dashed dropzone; explicit drop-or-click choice; no shortcut label · implemented |
 | 02 · Tool chooser | 01 · Desktop workspaces | `47` | [02-tool-chooser.png](screens/02-tool-chooser.png) | 1× | — |
 | 03 · Split instruments | 01 · Desktop workspaces | `99` | [03-split.png](screens/03-split.png) | 1× | Visibility groups; default shadcn fields · implemented |
 | 04 · Merge instruments | 01 · Desktop workspaces | `184` | [04-merge.png](screens/04-merge.png) | 1× | Visibility groups; single-line entries; inline statuses; fixed merge footer; default shadcn fields · implemented |

@@ -204,7 +204,7 @@ function publisherFixture(t) {
   };
 }
 
-test('nightly publisher validates all platforms, publishes immutable updater URLs and fixed aliases, then tags commit', async (t) => {
+test('nightly publisher leaves exactly three versioned packages and their signed updater manifest', async (t) => {
   const f = publisherFixture(t);
   await f.run();
   const manifest = JSON.parse(f.assets.find(asset => asset.name === 'latest.json').data);
@@ -218,13 +218,18 @@ test('nightly publisher validates all platforms, publishes immutable updater URL
     assert.match(entry.signature, /^signature-/);
   }
   for (const [os, type] of Object.entries(NIGHTLY_PACKAGES)) {
-    assert.equal(f.assets.find(asset => asset.name === `Scorewing_${type.suffix}`).data.toString(), `new-${os}`);
+    assert.equal(f.assets.find(asset => asset.name === `Scorewing_${f.version}_${type.suffix}`).data.toString(), `new-${os}`);
   }
+  assert.deepEqual(f.assets.map(asset => asset.name).sort(), ['latest.json',
+    ...Object.values(NIGHTLY_PACKAGES).map(type => `Scorewing_${f.version}_${type.suffix}`)].sort());
+  assert.ok(!f.changes.some(change => change[0] === 'upload'
+    && Object.values(NIGHTLY_PACKAGES).some(type => change[1] === `Scorewing_${type.suffix}`)));
   const manifestUpload = f.changes.findIndex(change => change[0] === 'upload' && change[1] === 'latest.json');
   assert.ok(manifestUpload > f.changes.findIndex(change => change[0] === 'upload' && change[1].includes(f.version)));
   assert.equal(f.changes.find(change => change[0] === 'tag')[1].sha, f.context.sha);
   assert.equal(f.changes.find(change => change[0] === 'publish')[1].make_latest, 'false');
   await f.run();
+  assert.equal(f.assets.length, 4);
   assert.equal(f.changes.filter(change => change[0] === 'upload' && change[1].includes(f.version)).length, 3,
     'Retries reuse matching immutable assets');
 });
@@ -300,6 +305,9 @@ test('publisher never replaces different immutable bytes and restores manifest a
   failed.failUpload('latest.json');
   await assert.rejects(failed.run(), /Upload failed/);
   assert.equal(JSON.parse(failed.assets.find(asset => asset.name === 'latest.json').data).version, 'old');
+  for (const type of Object.values(NIGHTLY_PACKAGES)) {
+    assert.equal(failed.assets.find(asset => asset.name === `Scorewing_${type.suffix}`).data.toString(), 'old-alias');
+  }
   assert.ok(failed.changes.every(change => !['tag', 'publish', 'mark'].includes(change[0])));
 });
 
@@ -312,6 +320,7 @@ test('an advertised newer snapshot prevents regression even if moving its nightl
   f.candidate(newest);
   f.failTag();
   await assert.rejects(f.run(), /Tag update failed/);
+  assert.ok(f.assets.some(asset => asset.name === 'Scorewing_linux_x64.AppImage'), 'No cleanup before publication succeeds');
   assert.equal(JSON.parse(f.assets.find(asset => asset.name === 'latest.json').data).source_sha, newest);
   const previousChanges = f.changes.slice();
   f.candidate(middle);
@@ -319,7 +328,7 @@ test('an advertised newer snapshot prevents regression even if moving its nightl
   assert.deepEqual(f.changes, previousChanges, 'An older build cannot mutate an already advertised descendant');
 });
 
-test('publisher creates the first prerelease and nightly tag and retains twenty successful snapshots after publication', async (t) => {
+test('publisher creates the first prerelease and nightly tag with exactly four assets', async (t) => {
   const first = publisherFixture(t);
   first.releases.length = 0;
   first.assets.length = 0;
@@ -327,7 +336,10 @@ test('publisher creates the first prerelease and nightly tag and retains twenty 
   await first.run();
   assert.equal(first.changes.find(change => change[0] === 'createRelease')[1].draft, true);
   assert.equal(first.changes.find(change => change[0] === 'createTag')[1].sha, first.context.sha);
+  assert.equal(first.assets.length, 4);
+});
 
+test('publisher removes aliases, old snapshots and failed uploads only after publication', async (t) => {
   const retained = publisherFixture(t);
   for (let index = 1; index <= 22; index++) for (const [os, type] of Object.entries(NIGHTLY_PACKAGES)) {
     retained.addAsset(`Scorewing_0.2.3-nightly.${index}_${type.suffix}`, 'old-build', {
@@ -335,13 +347,16 @@ test('publisher creates the first prerelease and nightly tag and retains twenty 
       label: os === 'Linux' ? 'nightly-published' : '',
     });
   }
+  retained.addAsset('Scorewing_0.2.4-nightly.99_linux_x64.AppImage', 'incomplete-upload');
+  retained.addAsset(`Scorewing_${retained.version}_linux_x64.AppImage.sig`, 'standalone-signature');
   await retained.run();
-  assert.equal(retained.assets.filter(asset => /Scorewing_\d/.test(asset.name)).length, 60);
-  assert.ok(!retained.assets.some(asset => asset.name.includes('0.2.3-nightly.1_')));
-  assert.ok(retained.assets.some(asset => asset.name.includes(retained.version)));
+  assert.deepEqual(retained.assets.map(asset => asset.name).sort(), ['latest.json',
+    ...Object.values(NIGHTLY_PACKAGES).map(type => `Scorewing_${retained.version}_${type.suffix}`)].sort());
   const published = retained.changes.findIndex(change => change[0] === 'publish');
-  const firstPrune = retained.changes.findIndex(change => change[0] === 'delete' && change[1].includes('0.2.3-nightly.'));
-  assert.ok(firstPrune > published, 'Never prune before publishing a complete new snapshot');
+  const pruned = retained.changes.map((change, index) => ({ change, index }))
+    .filter(({ change }) => change[0] === 'delete' && change[1] !== 'latest.json');
+  assert.ok(pruned.length > 0);
+  assert.ok(pruned.every(({ index }) => index > published), 'Never prune before publishing a complete new snapshot');
 });
 
 test('workflow grants nightly publishing writes only after the platform matrix succeeds', () => {

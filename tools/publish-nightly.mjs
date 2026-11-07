@@ -70,7 +70,7 @@ export async function publishNightly({ github, context, directory, cwd = process
   })).data;
   const remove = asset => github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: asset.id });
 
-  // Versioned assets are immutable: cached manifests continue to verify after a replacement.
+  // Upload new versioned packages before replacing the manifest that advertises them.
   for (const packageType of packages) {
     const existing = assets.find(asset => asset.name === packageType.name);
     if (existing) assert.equal(existing.digest || digest(await download(existing)), digest(packageType.data),
@@ -90,7 +90,6 @@ export async function publishNightly({ github, context, directory, cwd = process
       throw error;
     }
   };
-  for (const packageType of packages) await replace(`Scorewing_${packageType.suffix}`, packageType.data);
   const base = `https://github.com/${repo.owner}/${repo.repo}/releases/download/nightly/`;
   const manifest = { version, source_sha: context.sha, notes, pub_date: new Date().toISOString(), platforms: {} };
   for (const packageType of packages) for (const platform of packageType.platforms) {
@@ -103,23 +102,9 @@ export async function publishNightly({ github, context, directory, cwd = process
   }
   await github.rest.repos.updateRelease({ ...params, name: 'Nightly builds', body: notes,
     target_commitish: context.sha, draft: false, prerelease: true, make_latest: 'false' });
-  const marker = assets.find(asset => asset.name === packages[0].name);
-  await github.rest.repos.updateReleaseAsset({ ...repo, asset_id: marker.id, label: 'nightly-published' });
-  marker.label = 'nightly-published';
 
-  // Prune only complete snapshots, after the new manifest and release are public.
-  const versions = new Map();
-  for (const asset of assets) {
-    const match = asset.name.match(/^Scorewing_(\d+\.\d+\.\d+-nightly\.[1-9]\d*)_(.+)$/);
-    if (match && Object.values(NIGHTLY_PACKAGES).some(type => type.suffix === match[2])) {
-      const group = versions.get(match[1]) || [];
-      group.push(asset);
-      versions.set(match[1], group);
-    }
-  }
-  const complete = [...versions].filter(([, group]) => group.length === 3 && group.some(asset => asset.label === 'nightly-published'))
-    .sort(([a, aa], [b, bb]) => a === version ? -1 : b === version ? 1
-      : Math.max(...bb.map(asset => Date.parse(asset.created_at))) - Math.max(...aa.map(asset => Date.parse(asset.created_at))));
-  for (const [, group] of complete.slice(20)) for (const asset of group) await remove(asset);
+  // Keep only the current three packages and manifest after publication succeeds.
+  const current = new Set(['latest.json', ...packages.map(packageType => packageType.name)]);
+  for (const asset of assets) if (!current.has(asset.name)) await remove(asset);
   return { version, sha: context.sha };
 }

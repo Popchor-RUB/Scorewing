@@ -17,6 +17,8 @@ enum UpdateActionKind {
     Skip,
     Check,
     Download,
+    DownloadOnNextStart,
+    CancelDownload,
     Install,
     ReviewDowngrade,
     ConfirmDowngrade,

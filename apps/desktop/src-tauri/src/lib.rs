@@ -1054,7 +1054,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(menu::setup)
+        .setup(|app| {
+            match updates::startup(app.handle()) {
+                Ok(true) => app.handle().restart(),
+                Ok(false) => {}
+                Err(error) => {
+                    updates::set_startup_error(&app.state::<updates::UpdateState>(), error)
+                }
+            }
+            menu::setup(app)
+        })
+        .manage(updates::UpdateState::default())
         .manage(SharedDocuments::default())
         .manage(SharedPracticeJob::default())
         .invoke_handler(tauri::generate_handler![
@@ -1073,6 +1083,9 @@ pub fn run() {
             open_practice_export_folder,
             updates::update_environment,
             updates::check_update,
+            updates::download_update,
+            updates::cancel_update_download,
+            updates::install_downloaded_update,
             updates::open_update_downloads,
             update_prompt::sync_update_prompt,
             update_prompt::hide_update_prompt,

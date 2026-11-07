@@ -62,7 +62,7 @@ export async function publishNightly({ github, context, directory, cwd = process
   assert.ok(packages.every(packageType => packageType.version === version), 'All platforms must have the same version');
   const notes = await releaseNotes({ github, repo, nightly: true, sha: context.sha, cwd });
   if (!release) release = (await github.rest.repos.createRelease({ ...repo, tag_name: 'nightly', target_commitish: context.sha,
-    name: 'Nightly builds', body: notes, draft: true, prerelease: true, make_latest: 'false' })).data;
+    name: `Nightly v${version}`, body: notes, draft: true, prerelease: true, make_latest: 'false' })).data;
   const params = { ...repo, release_id: release.id };
   const upload = async (name, data, contentType = 'application/octet-stream') => (await github.rest.repos.uploadReleaseAsset({
     ...repo, url: release.upload_url, name, data,
@@ -100,7 +100,7 @@ export async function publishNightly({ github, context, directory, cwd = process
   else {
     await github.rest.git.createRef({ ...repo, ref: 'refs/tags/nightly', sha: context.sha });
   }
-  await github.rest.repos.updateRelease({ ...params, name: 'Nightly builds', body: notes,
+  await github.rest.repos.updateRelease({ ...params, name: `Nightly v${version}`, body: notes,
     target_commitish: context.sha, draft: false, prerelease: true, make_latest: 'false' });
 
   // Keep only the current three packages and manifest after publication succeeds.

@@ -228,6 +228,7 @@ test('nightly publisher leaves exactly three versioned packages and their signed
   assert.ok(manifestUpload > f.changes.findIndex(change => change[0] === 'upload' && change[1].includes(f.version)));
   assert.equal(f.changes.find(change => change[0] === 'tag')[1].sha, f.context.sha);
   assert.equal(f.changes.find(change => change[0] === 'publish')[1].make_latest, 'false');
+  assert.equal(f.changes.find(change => change[0] === 'publish')[1].name, `Nightly v${f.version}`);
   await f.run();
   assert.equal(f.assets.length, 4);
   assert.equal(f.changes.filter(change => change[0] === 'upload' && change[1].includes(f.version)).length, 3,
@@ -335,6 +336,8 @@ test('publisher creates the first prerelease and nightly tag with exactly four a
   first.missingTag();
   await first.run();
   assert.equal(first.changes.find(change => change[0] === 'createRelease')[1].draft, true);
+  assert.equal(first.changes.find(change => change[0] === 'createRelease')[1].name, `Nightly v${first.version}`);
+  assert.equal(first.changes.find(change => change[0] === 'publish')[1].name, `Nightly v${first.version}`);
   assert.equal(first.changes.find(change => change[0] === 'createTag')[1].sha, first.context.sha);
   assert.equal(first.assets.length, 4);
 });

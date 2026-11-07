@@ -1,19 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogTitle } from "./components/ui/dialog.tsx";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { Channel, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Update } from "@tauri-apps/plugin-updater";
+import { Update, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { UpdatePanel, type ReleaseChannel, type UpdateAction, type UpdateWindowState } from "./update-prompt.tsx";
 
 const CHANNEL_KEY = "scorewing.update-channel";
 const skipKey = (channel: ReleaseChannel) => `scorewing.skipped-update-version${channel === "nightly" ? ".nightly" : ""}`;
 type Metadata = ConstructorParameters<typeof Update>[0] & { downgrade: boolean };
-type Environment = { currentVersion: string; supported: boolean };
+type Environment = { currentVersion: string; supported: boolean; startupError?: string };
 
-export function UpdateControl({ checkRequest, canInstall, onInstall }: {
+export function UpdateControl({ checkRequest, canInstall, onInstall, onDownload }: {
   checkRequest: number;
   canInstall: boolean;
-  onInstall: (update: Update) => Promise<void>;
+  onInstall: () => Promise<void>;
+  onDownload: () => void;
 }) {
   const [state, setState] = useState<UpdateWindowState>({ revision: 0, channel: "stable", currentVersion: "", status: "idle", supported: true, canInstall, downgrade: false, error: "" });
   const stateRef = useRef(state);
@@ -24,9 +25,12 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
   const visible = useRef(false);
   const working = useRef(false);
   const request = useRef(0);
+  const transfer = useRef(0);
+  const cancelling = useRef(false);
   const approvedDowngrade = useRef<number | undefined>(undefined);
   const environment = useRef<Promise<Environment> | undefined>(undefined);
   const selectedChannel = useRef<ReleaseChannel | undefined>(undefined);
+  const startupErrorPending = useRef(false);
   const windowSync = useRef(Promise.resolve());
   const canInstallRef = useRef(canInstall);
   const onInstallRef = useRef(onInstall);
@@ -67,7 +71,8 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
   }
 
   async function checkForUpdates(manual: boolean, channel?: ReleaseChannel) {
-    if (working.current || stateRef.current.status === "installing") {
+    if (manual && startupErrorPending.current) { startupErrorPending.current = false; showWindow(); return; }
+    if (working.current || stateRef.current.status === "installing" || stateRef.current.status === "scheduled") {
       if (manual) showWindow();
       return;
     }
@@ -89,6 +94,7 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
       }
       const chosen = channel ?? selectedChannel.current;
       change({ currentVersion: env.currentVersion, supported: env.supported, channel: chosen });
+      if (!manual && env.startupError) { startupErrorPending.current = true; change({ status: "idle", error: `Could not install the scheduled update: ${env.startupError}` }); return; }
       if (!env.supported) { change({ status: "idle" }); return; }
       const metadata = await invoke<Metadata | null>("check_update", { channel: chosen, manual });
       const found = metadata ? new Update(metadata) : null;
@@ -112,7 +118,7 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
     if (current.downgrade && approvedDowngrade.current !== current.revision) return;
     working.current = true;
     change({ status: "installing", error: "" });
-    try { await onInstallRef.current(update.current); }
+    try { await onInstallRef.current(); }
     catch (error) { change({ status: "ready", error: `Could not install or restart: ${String(error)}` }); }
     finally {
       working.current = false;
@@ -120,33 +126,55 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
     }
   }
 
-  async function download(downgradeConfirmed = false) {
+  async function download(downgradeConfirmed = false, deferred = false) {
     const current = stateRef.current;
-    if (working.current || !canInstallRef.current || !update.current) return;
+    const resource = update.current;
+    if (working.current || (!deferred && !canInstallRef.current) || !resource || !current.supported) return;
     if (current.downgrade) {
-      if (!downgradeConfirmed || current.status !== "confirm-downgrade") return;
+      if (deferred || !downgradeConfirmed || current.status !== "confirm-downgrade") return;
       approvedDowngrade.current = current.revision;
     } else if (current.status !== "available") return;
     working.current = true;
-    change({ status: "downloading", error: "", progress: undefined });
+    onDownload();
+    const attempt = ++transfer.current;
+    change({ status: "downloading", error: "", progress: undefined, deferred });
+    if (deferred) void actionCancel();
     let downloaded = 0;
     let total: number | undefined;
     let ready = false;
+    const onEvent = new Channel<DownloadEvent>();
+    onEvent.onmessage = (event) => {
+      if (!active.current || attempt !== transfer.current) return;
+      if (event.event === "Started") total = event.data.contentLength;
+      if (event.event === "Progress") downloaded += event.data.chunkLength;
+      change({ progress: total ? Math.min(100, downloaded / total * 100) : undefined });
+    };
     try {
-      await update.current.download((event) => {
-        if (!active.current) return;
-        if (event.event === "Started") total = event.data.contentLength;
-        if (event.event === "Progress") downloaded += event.data.chunkLength;
-        change({ progress: total ? Math.min(100, downloaded / total * 100) : undefined });
-      }, { timeout: 10 * 60_000 });
-      if (active.current) { change({ status: "ready" }); ready = true; }
+      await invoke("download_update", { rid: resource.rid, deferred, onEvent });
+      if (active.current && attempt === transfer.current) {
+        change({ status: deferred ? "scheduled" : "ready", progress: undefined });
+        ready = !deferred;
+      }
     } catch (error) {
-      change({ status: "available", error: `Could not download the update: ${String(error)}. Check again if this nightly build is no longer available.` });
+      if (attempt === transfer.current) change({ status: "available", deferred: false, progress: undefined, error: `Could not download the update: ${String(error)}. Check again if this nightly build is no longer available.` });
     } finally {
-      working.current = false;
+      if (attempt === transfer.current) working.current = false;
       if (!active.current) await closeUpdate();
     }
     if (ready) await install();
+  }
+
+  async function cancelDownload() {
+    if (stateRef.current.status !== "downloading" || cancelling.current) return;
+    cancelling.current = true;
+    ++transfer.current;
+    try {
+      await invoke("cancel_update_download");
+      working.current = false;
+      change({ status: "available", deferred: false, progress: undefined, error: "" });
+    } catch (error) {
+      change({ error: `Could not cancel the update download: ${String(error)}. Try cancelling again.` });
+    } finally { cancelling.current = false; }
   }
 
   async function action(action: UpdateAction) {
@@ -166,7 +194,8 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
       catch (error) { if (current.revision === stateRef.current.revision) change({ error: `Could not open GitHub Releases: ${String(error)}` }); }
       return;
     }
-    if (working.current || current.status === "installing") return;
+    if (action.type === "cancel-download") { await cancelDownload(); return; }
+    if (working.current || current.status === "installing" || current.status === "scheduled") return;
     if (action.type === "set-channel") {
       if (action.channel === current.channel) return;
       selectedChannel.current = action.channel;
@@ -186,6 +215,7 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
     else if (action.type === "back" && current.status === "confirm-downgrade") change({ status: "available" });
     else if (action.type === "confirm-downgrade") await download(true);
     else if (action.type === "download") await download();
+    else if (action.type === "download-on-next-start") await download(false, true);
     else if (action.type === "install") await install();
   }
 
@@ -218,7 +248,7 @@ export function UpdateControl({ checkRequest, canInstall, onInstall }: {
 
   useEffect(() => { if (isTauri()) void syncWindow(); }, [state, canInstall]);
   const label = state.status === "ready" ? "Update ready" : state.status === "downloading" ? "Downloading update…"
-    : state.status === "installing" ? "Installing update…" : state.version ? "Update available" : "Check for updates…";
+    : state.status === "scheduled" ? "Update scheduled" : state.status === "installing" ? "Installing update…" : state.version ? "Update available" : "Check for updates…";
   useEffect(() => {
     if (isTauri()) void invoke("set_update_menu_state", { text: label, enabled: state.status !== "installing" })
       .catch((error) => { if (active.current) change({ error: `Could not update the update menu: ${String(error)}` }); });

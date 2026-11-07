@@ -47,6 +47,15 @@ test("one window renders checking/current/error/progress/ready/installing/unsupp
     await state({ status: "downloading", progress: 30 });
     assert.ok(app.find<HTMLButtonElement>('[data-action="update-channel"]').disabled);
     assert.equal(app.find('[role="progressbar"]').getAttribute("aria-valuenow"), "30");
+    assert.equal(app.find('[role="progressbar"]').getAttribute("aria-label"), "Update download");
+    assert.ok(app.find('[data-action="update-changelog"]').compareDocumentPosition(app.find('[role="status"]')) & app.browser.Node.DOCUMENT_POSITION_FOLLOWING);
+    await state({ status: "downloading", deferred: true });
+    assert.equal(app.find('[role="progressbar"]').getAttribute("aria-valuenow"), null);
+    assert.match(app.find('[role="dialog"]').textContent!, /Downloading in the background.*install this update on next start/s);
+    await state({ status: "scheduled" });
+    assert.ok(app.find<HTMLButtonElement>('[data-action="update-channel"]').disabled);
+    assert.match(app.find('[role="status"]').textContent!, /will install on next start/);
+    assert.equal(app.find('footer').textContent!.trim(), "Close");
     await state({ status: "ready", canInstall: false });
     assert.ok(app.find<HTMLButtonElement>('[data-action="install-update"]').disabled);
     assert.match(app.find('[role="dialog"]').textContent!, /Closing a score discards/);
@@ -55,6 +64,34 @@ test("one window renders checking/current/error/progress/ready/installing/unsupp
     await state({ status: "idle", version: undefined, supported: false });
     assert.ok(app.find('[data-action="update-downloads"]'));
     assert.match(app.find('[role="dialog"]').textContent!, /DEB\/RPM/);
+  } finally { await app.close(); }
+});
+
+test("deferred option remains available when immediate install is blocked; cancel and hide differ", async () => {
+  const actions: UpdateAction[] = [];
+  const app = await mountTestApp((command, args) => { if (command === "update_prompt_action") actions.push(args.action as UpdateAction); }, { entry: "/src/update-prompt.tsx", initialize(browser) { Object.assign(browser, { __SCOREWING_UPDATE_STATE__: { ...initial, canInstall: false } }); } });
+  try {
+    await app.settle();
+    assert.ok(app.find<HTMLButtonElement>('[data-action="download-update"]').disabled);
+    assert.equal(app.find('[data-action="more-update-options"]').getAttribute("aria-label"), "More update options");
+    assert.equal(app.find<HTMLButtonElement>('[data-action="more-update-options"]').disabled, false);
+    await app.click('[data-action="more-update-options"]');
+    await act(async () => { app.find('[role="menu"]').dispatchEvent(new app.browser.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }) as unknown as Event); });
+    await app.settle();
+    assert.notEqual(actions.at(-1)?.type, "cancel");
+    assert.equal(app.document.activeElement, app.find('[data-action="more-update-options"]'));
+    await app.click('[data-action="more-update-options"]');
+    await app.click('[data-action="download-on-next-start"]');
+    assert.deepEqual(actions.at(-1), { type: "download-on-next-start", revision: 7 });
+    await app.event("update-prompt-state", { ...initial, status: "downloading", deferred: true });
+    await app.click('[data-action="cancel-download"]');
+    assert.equal(actions.at(-1)!.type, "cancel-download");
+    await app.click('[data-action="update-later"]');
+    assert.equal(actions.at(-1)!.type, "cancel");
+    await app.event("update-prompt-state", { ...initial, downgrade: true });
+    assert.equal(app.document.querySelector('[data-action="more-update-options"]'), null);
+    await app.event("update-prompt-state", { ...initial, supported: false });
+    assert.equal(app.document.querySelector('[data-action="more-update-options"]'), null);
   } finally { await app.close(); }
 });
 

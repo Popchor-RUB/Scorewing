@@ -9,7 +9,7 @@ const metadata = { rid: 10, currentVersion: "0.2.3", version: "0.2.4", body: "A 
 const inspection: Inspection = { id: "score", path: "/scores/test.xml", name: "Test score", format: "musicxml", error: null, parts: [] };
 
 async function mountUpdater(handler: Invoke = () => undefined, options: {
-  currentVersion?: string; supported?: boolean; failWindow?: boolean; savedChannel?: string;
+  currentVersion?: string; supported?: boolean; failWindow?: boolean; savedChannel?: string; startupError?: string;
 } = {}) {
   let state: UpdateWindowState | undefined;
   let shown = 0;
@@ -17,7 +17,7 @@ async function mountUpdater(handler: Invoke = () => undefined, options: {
   const closed: number[] = [];
   const checks: Record<string, unknown>[] = [];
   const app = await mountTestApp((command, args) => {
-    if (command === "update_environment") return { currentVersion: options.currentVersion ?? metadata.currentVersion, supported: options.supported ?? true };
+    if (command === "update_environment") return { currentVersion: options.currentVersion ?? metadata.currentVersion, supported: options.supported ?? true, startupError: options.startupError };
     if (command === "sync_update_prompt") {
       if (options.failWindow) throw new Error("Window unavailable");
       state = args.state as UpdateWindowState;
@@ -139,18 +139,18 @@ test("download consent, progress and installation lock are retained; channel cha
   let downloads = 0;
   let installs = 0;
   let restarts = 0;
-  let finishDownload: ((rid: number) => void) | undefined;
+  let finishDownload: (() => void) | undefined;
   let finishInstall: (() => void) | undefined;
   const app = await mountUpdater((command, args) => {
     if (command === "check_update") return metadata;
-    if (command === "plugin:updater|download") {
+    if (command === "download_update") {
       downloads++;
       const channel = args.onEvent as { onmessage: (event: unknown) => void };
       channel.onmessage({ event: "Started", data: { contentLength: 100 } });
       channel.onmessage({ event: "Progress", data: { chunkLength: 30 } });
-      return new Promise<number>((resolve) => { finishDownload = resolve; });
+      return new Promise<void>((resolve) => { finishDownload = resolve; });
     }
-    if (command === "plugin:updater|install") { installs++; return new Promise<void>((resolve) => { finishInstall = resolve; }); }
+    if (command === "install_downloaded_update") { installs++; return new Promise<void>((resolve) => { finishInstall = resolve; }); }
     if (command === "plugin:process|restart") { restarts++; return; }
   });
   try {
@@ -162,7 +162,7 @@ test("download consent, progress and installation lock are retained; channel cha
     assert.equal(app.state().channel, "stable");
     await app.action({ type: "cancel" });
     assert.equal(app.hidden(), 1);
-    await act(async () => finishDownload!(11));
+    await act(async () => finishDownload!());
     assert.equal(installs, 1);
     assert.equal(app.state().status, "installing");
     assert.equal(app.updateMenu.enabled, false);
@@ -179,11 +179,11 @@ test("download consent, progress and installation lock are retained; channel cha
 test("opening a score before or during download blocks installation, and changing a ready channel disposes bytes", async () => {
   let downloads = 0;
   let installs = 0;
-  let finish: ((rid: number) => void) | undefined;
+  let finish: (() => void) | undefined;
   const app = await mountUpdater((command) => {
     if (command === "check_update") return metadata;
-    if (command === "plugin:updater|download") { downloads++; return new Promise<number>((resolve) => { finish = resolve; }); }
-    if (command === "plugin:updater|install") { installs++; return; }
+    if (command === "download_update") { downloads++; return new Promise<void>((resolve) => { finish = resolve; }); }
+    if (command === "install_downloaded_update") { installs++; return; }
   });
   try {
     await app.menu("open-score");
@@ -193,13 +193,12 @@ test("opening a score before or during download blocks installation, and changin
     await app.menu("close-score");
     await app.action({ type: "download" });
     await app.menu("open-score");
-    await act(async () => finish!(11));
+    await act(async () => finish!());
     assert.equal(installs, 0);
     assert.equal(app.state().status, "ready");
     await app.action({ type: "install" });
     assert.equal(installs, 0);
     await app.action({ type: "set-channel", channel: "nightly" });
-    assert.ok(app.closed.includes(11));
     assert.ok(app.closed.includes(metadata.rid));
   } finally { await app.close(); }
 });
@@ -210,8 +209,8 @@ test("download/install failures retry, and a restart retry never reinstalls cons
   let restarts = 0;
   const app = await mountUpdater((command) => {
     if (command === "check_update") return metadata;
-    if (command === "plugin:updater|download") { if (++downloads === 1) throw new Error("Network interrupted"); return 11; }
-    if (command === "plugin:updater|install") { if (++installs === 1) throw new Error("Disk full"); return; }
+    if (command === "download_update") { if (++downloads === 1) throw new Error("Network interrupted"); return 11; }
+    if (command === "install_downloaded_update") { if (++installs === 1) throw new Error("Disk full"); return; }
     if (command === "plugin:process|restart") { if (++restarts === 1) throw new Error("Restart unavailable"); return; }
   });
   try {
@@ -233,7 +232,7 @@ test("older manual channel versions require two explicit steps, and stale downgr
   let restarts = 0;
   const app = await mountUpdater((command, args) => {
     if (command === "check_update") return args.manual ? { ...metadata, version: "0.2.2", downgrade: true } : null;
-    if (command === "plugin:updater|download") { downloads++; return 11; }
+    if (command === "download_update") { downloads++; return 11; }
     if (command === "plugin:process|restart") { restarts++; return; }
   });
   try {
@@ -317,5 +316,110 @@ test("a recovered native window replaces its fallback and late link errors canno
     await act(async () => failLink!(new Error("Late stable failure")));
     assert.equal(app.state().channel, "nightly");
     assert.equal(app.state().error, "");
+  } finally { await app.close(); }
+});
+
+test("deferred download works with an open score, stays hidden, and manual checks retain the scheduled release", async () => {
+  let finish: (() => void) | undefined;
+  let installs = 0;
+  const app = await mountUpdater((command, args) => {
+    if (command === "check_update") return metadata;
+    if (command === "download_update") {
+      assert.equal(args.deferred, true);
+      return new Promise<void>((resolve) => { finish = resolve; });
+    }
+    if (command === "install_downloaded_update") installs++;
+  });
+  try {
+    await app.menu("open-score");
+    const shown = app.shown();
+    await app.action({ type: "download-on-next-start" });
+    assert.equal(app.state().status, "downloading");
+    assert.equal(app.state().deferred, true);
+    assert.equal(app.hidden(), 1);
+    await app.menu("check-updates");
+    assert.equal(app.checks.length, 1);
+    await app.action({ type: "cancel" });
+    const reopened = app.shown();
+    await act(async () => finish!());
+    assert.equal(app.state().status, "scheduled");
+    assert.equal(app.shown(), reopened);
+    assert.ok(reopened > shown);
+    assert.equal(installs, 0);
+    await app.action({ type: "set-channel", channel: "nightly" });
+    await app.menu("check-updates");
+    assert.equal(app.state().channel, "stable");
+    assert.equal(app.state().status, "scheduled");
+    assert.equal(app.checks.length, 1);
+  } finally { await app.close(); }
+});
+
+test("cancel invalidates late progress and completion; failed cancellation remains retryable", async () => {
+  let finish: (() => void) | undefined;
+  let progress: ((event: unknown) => void) | undefined;
+  let cancellations = 0;
+  let installs = 0;
+  const app = await mountUpdater((command, args) => {
+    if (command === "check_update") return metadata;
+    if (command === "download_update") {
+      progress = (args.onEvent as { onmessage: (event: unknown) => void }).onmessage;
+      return new Promise<void>((resolve) => { finish = resolve; });
+    }
+    if (command === "cancel_update_download" && ++cancellations === 1) throw new Error("Cleanup failed");
+    if (command === "install_downloaded_update") installs++;
+  });
+  try {
+    await app.action({ type: "download-on-next-start" });
+    await app.action({ type: "cancel-download" });
+    assert.match(app.state().error, /Cleanup failed/);
+    assert.equal(app.state().status, "downloading");
+    await act(async () => { progress!({ event: "Progress", data: { chunkLength: 30 } }); finish!(); });
+    assert.equal(app.state().status, "downloading");
+    assert.equal(installs, 0);
+    await app.action({ type: "cancel-download" });
+    assert.equal(app.state().status, "available");
+    assert.equal(app.state().deferred, false);
+    assert.equal(app.state().progress, undefined);
+    assert.equal(app.state().error, "");
+  } finally { await app.close(); }
+});
+
+test("background download failures stay hidden and startup signature errors permit manual retry", async () => {
+  let fail: ((error: Error) => void) | undefined;
+  const app = await mountUpdater((command) => {
+    if (command === "check_update") return metadata;
+    if (command === "download_update") return new Promise<void>((_resolve, reject) => { fail = reject; });
+  }, { startupError: "Invalid signature" });
+  try {
+    assert.match(app.state().error, /Invalid signature/);
+    assert.equal(app.checks.length, 0);
+    assert.equal(app.shown(), 0);
+    await app.menu("check-updates");
+    assert.match(app.state().error, /Invalid signature/);
+    await app.action({ type: "check" });
+    await app.action({ type: "download-on-next-start" });
+    const shown = app.shown();
+    await act(async () => fail!(new Error("Network interrupted")));
+    assert.match(app.state().error, /Network interrupted/);
+    assert.equal(app.state().status, "available");
+    assert.equal(app.shown(), shown);
+  } finally { await app.close(); }
+});
+
+test("successful cancellation suppresses a late immediate download completion", async () => {
+  let finish: (() => void) | undefined;
+  let installs = 0;
+  const app = await mountUpdater((command) => {
+    if (command === "check_update") return metadata;
+    if (command === "download_update") return new Promise<void>((resolve) => { finish = resolve; });
+    if (command === "install_downloaded_update") installs++;
+  });
+  try {
+    await app.action({ type: "download" });
+    await app.action({ type: "cancel-download" });
+    assert.equal(app.state().status, "available");
+    await act(async () => finish!());
+    assert.equal(app.state().status, "available");
+    assert.equal(installs, 0);
   } finally { await app.close(); }
 });

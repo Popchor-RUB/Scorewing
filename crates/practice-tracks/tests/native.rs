@@ -612,6 +612,57 @@ fn native_rehearsal_sections_follow_played_navigation() {
 
 #[test]
 #[ignore = "Requires MuseScore 4.7.x, MS Basic, FFmpeg, and an isolated Linux profile"]
+fn native_rehearsal_sections_with_chord_symbols_and_duplicate_labels() {
+    let mut native = Native::new();
+    let mark = "<RehearsalMark><text>Refrain</text></RehearsalMark>";
+    let harmony = "<Harmony><harmonyInfo><root>12</root><name>m</name></harmonyInfo></Harmony>";
+    let source = section_score(
+        &(1..=4)
+            .map(|bar| {
+                let repeat = if bar == 2 {
+                    "<endRepeat>2</endRepeat>"
+                } else {
+                    ""
+                };
+                let label = if bar == 1 || bar == 3 { mark } else { "" };
+                route_bar(bar, &format!("{repeat}<voice>{label}{harmony}</voice>"))
+            })
+            .collect::<Vec<_>>(),
+        false,
+    );
+    let mut settings = section_settings("measure-1");
+    settings.include_whole_song = true;
+    settings.section_keys.push("measure-3".into());
+    let tracks = native.export(&source, &settings, None);
+    settings.section_keys.clear();
+    for (index, route) in [
+        (0, vec![1, 2, 1, 2, 3, 4]),
+        (1, vec![1, 2, 1, 2, 3, 4]),
+        (2, vec![3, 4]),
+    ] {
+        let reference = section_score(
+            &route
+                .iter()
+                .map(|&bar| route_bar(bar, ""))
+                .collect::<Vec<_>>(),
+            false,
+        );
+        let reference = native.export(&reference, &settings, None).remove(0);
+        assert_audio_duration(
+            "chord symbols and duplicate labels",
+            &tracks[index],
+            &reference,
+        );
+        let similarity = correlation(&tracks[index], &reference);
+        assert!(
+            similarity > 0.98,
+            "Chord symbols changed practice audio: {similarity}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "Requires MuseScore 4.7.x, MS Basic, FFmpeg, and an isolated Linux profile"]
 fn native_rehearsal_sections_restore_inherited_tempo_on_navigation() {
     let mut native = Native::new();
     let tempo_120 = "<Tempo><tempo>2</tempo><text>120</text></Tempo>";

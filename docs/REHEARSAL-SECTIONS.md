@@ -118,6 +118,11 @@ section starts fail with an explanation. Residual navigation is removed after
 expansion so the cropped score cannot execute it again. Source scores and
 whole-song playback remain unchanged.
 
+The temporary playback copy omits chord-symbol (`Harmony`) objects before native
+expansion. MuseScore 4.7 can crash while unrolling scores containing these objects;
+practice mixes already disable their playback. Notes, timing, navigation and
+rehearsal marks remain intact, and the source and whole-song copy retain the symbols.
+
 Each selected range is extracted once and reused for the chosen instrument mixes.
 The existing scheduler, progress, cancellation, and publication behavior account
 for every selected range and mix. Regression tests cover collision-safe output

@@ -73,6 +73,13 @@ repairs both before applying the existing instrument mixes. Native unrolling als
 omits inherited tempo at jump destinations; playback preparation restores its
 normalized numeric rate, including default 120 BPM before any tempo mark. Native
 timing checks confirmed key and meter are already restored by expansion.
+The chord-symbol regression also passed with MuseScore 4.7.0 on Linux, comparing
+whole-song and section audio with explicit playback references and repeated
+section labels. A supplied 116-measure, 13-instrument score reproduced a SIGSEGV
+in native repeat expansion before the fix. With chord symbols removed only from
+the temporary playback copy, its whole song and all 11 sections exported 12 MP3s
+for one instrument without errors; the source bytes remained unchanged. Archive
+unit coverage checks preservation of notes, ties, navigation and timing offsets.
 Skipping the ignored native
 suite does not establish playback correctness. Frontend workflow tests retain the
 written measure labels and verify the explanation of repeats, jumps and transition tails.

@@ -103,6 +103,11 @@ impl ScoreArchive {
                 })
             });
         }
+        // Practice mixes silence chord symbols; MuseScore can crash unrolling scores with them.
+        visit_mut(score.master_mut(), &mut |node| {
+            node.children
+                .retain(|child| child.as_element().is_none_or(|n| n.name != "Harmony"));
+        });
         score
     }
 
@@ -609,6 +614,35 @@ mod tests {
             .prepare_playback(&mut score("<Measure/>"), &native, &sections)
             .is_err());
         assert!(consistent_measure_count(&score("")).is_err());
+    }
+
+    #[test]
+    fn playback_source_removes_chord_symbols_without_changing_music_or_source() {
+        let source = score(
+            r#"<Measure><startRepeat/><voice><RehearsalMark><text>A</text></RehearsalMark><Harmony><harmonyInfo><root>14</root></harmonyInfo></Harmony><Chord><durationType>whole</durationType><Note><pitch>60</pitch><Spanner type="Tie"><Tie/></Spanner></Note></Chord></voice></Measure>
+          <Measure><endRepeat>2</endRepeat><voice><location><fractions>-1/8</fractions></location><FretDiagram><Harmony><root>12</root><name>m</name></Harmony></FretDiagram><location><fractions>1/8</fractions></location><Rest><durationType>measure</durationType><duration>1/1</duration></Rest></voice></Measure>"#,
+        );
+        let playback = source.playback_source();
+        let expected = score(
+            r#"<Measure><startRepeat/><voice><RehearsalMark><text>A</text></RehearsalMark><Chord><durationType>whole</durationType><Note><pitch>60</pitch><Spanner type="Tie"><Tie/></Spanner></Note></Chord></voice></Measure>
+          <Measure><endRepeat>2</endRepeat><voice><location><fractions>-1/8</fractions></location><FretDiagram/><location><fractions>1/8</fractions></location><Rest><durationType>measure</durationType><duration>1/1</duration></Rest></voice></Measure>"#,
+        );
+        assert_eq!(
+            playback.master().get_child("Staff"),
+            expected.master().get_child("Staff")
+        );
+        assert_eq!(
+            playback.rehearsal_sections().unwrap(),
+            source.rehearsal_sections().unwrap()
+        );
+        let mut original_symbols = 0;
+        visit(source.master(), &mut |node| {
+            original_symbols += usize::from(node.name == "Harmony");
+        });
+        assert_eq!(
+            original_symbols, 2,
+            "the original and whole-song copy retain their symbols"
+        );
     }
 
     #[test]

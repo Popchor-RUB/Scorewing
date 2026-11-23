@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "./components/ui/button.tsx";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from "./components/ui/dialog.tsx";
+import { Progress } from "./components/ui/progress.tsx";
 import type { PracticeProgress, PracticeResult } from "./model.ts";
 import { advancePracticeProgress } from "./practice-progress.ts";
 
@@ -34,7 +35,7 @@ function PracticeProgressContent({ progress, total: selectedTotal, cancelling, o
     <div className="practice-progress dialog-body flex flex-col gap-4">
       <p role="status">{cancelling ? "Cancelling…" : progress?.stage ?? "Choose a folder for your practice tracks."} · {completed} / {total} tracks completed</p>
       <p className="muted">{running} {running === 1 ? "export" : "exports"} currently running</p>
-      <progress className="practice-progress-bar" aria-label="Practice track rendering" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={value} max={100} value={value} />
+      <Progress className="w-full" aria-label="Practice track rendering" value={value} />
     </div>
     <div className="dialog-footer">
       <Button variant="outline" disabled={cancelling} data-action="practice-cancel" onClick={onCancel}>{cancelling ? "Cancelling…" : "Cancel rendering"}</Button>
